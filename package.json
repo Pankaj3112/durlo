@@ -1,0 +1,29 @@
+{
+  "name": "@durlo/repo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "vitest run",
+    "format": "prettier --write \"**/*.{js,ts,json,yaml,yml}\"",
+    "format:check": "prettier --check \"**/*.{js,ts,json,yaml,yml}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.20.1",
+    "eslint": "^9.39.4",
+    "prettier": "^3.9.4",
+    "tsup": "^8.5.1",
+    "turbo": "^2.10.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
+  }
+}
