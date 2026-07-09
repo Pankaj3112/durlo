@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "noEmit": true,
+    "paths": {
+      "@durlo/core": ["packages/core/src/index.ts"],
+      "@durlo/postgres": ["packages/postgres/src/index.ts"],
+      "durlo": ["packages/cli/src/index.ts"]
+    }
+  },
+  "include": ["**/*.ts"]
+}

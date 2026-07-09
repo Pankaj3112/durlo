@@ -2,8 +2,10 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const sourceAlias = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+const root = sourceAlias(".");
 
 export default defineConfig({
+  root,
   resolve: {
     alias: {
       "@durlo/core": sourceAlias("./packages/core/src/index.ts"),
@@ -13,6 +15,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["packages/**/*.test.ts"]
+    include: ["test/**/*.test.ts"]
   }
 });

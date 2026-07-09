@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck",
-    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck && tsc --noEmit --project test/tsconfig.json",
+    "lint": "turbo run lint && eslint test",
     "test": "vitest run",
     "format": "prettier --write \"**/*.{js,ts,json,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,json,yaml,yml}\""
