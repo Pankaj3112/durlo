@@ -14,5 +14,6 @@ export {
   RunStateError,
   SerializationError,
   ValidationError,
+  WorkflowSleepError,
 } from "./errors.js";
 export type * from "./types.js";

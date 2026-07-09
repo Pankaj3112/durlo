@@ -13,9 +13,11 @@ import type {
   StepInput,
   StepRecord,
   StepStatus,
+  TimerRecord,
+  TimerStatus,
   TransactionalDurloAdapter,
 } from "@durlo/core";
-import { LostLeaseError } from "@durlo/core";
+import { LostLeaseError, RunStateError } from "@durlo/core";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
@@ -67,6 +69,17 @@ type StepRow = QueryResultRow & {
   completed_at: Date | null;
 };
 
+type TimerRow = QueryResultRow & {
+  id: string;
+  run_id: string;
+  step_id: string;
+  fire_at: Date;
+  status: TimerStatus;
+  created_at: Date;
+  fired_at: Date | null;
+  cancelled_at: Date | null;
+};
+
 type Query = <R extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) => Promise<QueryResult<R>>;
 
 function mapRun(row: RunRow): RunRecord {
@@ -115,6 +128,19 @@ function mapStep(row: StepRow): StepRecord {
   };
 }
 
+function mapTimer(row: TimerRow): TimerRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    fireAt: row.fire_at,
+    status: row.status,
+    createdAt: row.created_at,
+    firedAt: row.fired_at,
+    cancelledAt: row.cancelled_at,
+  };
+}
+
 const RUN_COLUMNS = `
   id, app_id, kind, resource_id, status, input_json, output_json, error_json, options_json,
   idempotency_key, priority, scheduled_at, attempt_count, max_attempts, locked_by,
@@ -125,6 +151,11 @@ const RUN_COLUMNS = `
 const STEP_COLUMNS = `
   id, run_id, step_id, status, result_json, error_json, options_json,
   attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
+`;
+
+const TIMER_COLUMNS = `id, run_id, step_id, fire_at, status, created_at, fired_at, cancelled_at`;
+const QUALIFIED_TIMER_COLUMNS = `
+  t.id, t.run_id, t.step_id, t.fire_at, t.status, t.created_at, t.fired_at, t.cancelled_at
 `;
 
 export class PostgresAdapter implements DurloAdapter {
@@ -243,7 +274,15 @@ export class PostgresAdapter implements DurloAdapter {
               JSON.stringify({ name: "StalledError", message: "worker lease expired" }),
             ],
           );
-          if (candidate.attempt_count >= candidate.max_attempts) {
+          const failureResult = await client.query<{ count: string }>(
+            `
+              select count(*)::text as count from durlo_attempts
+              where run_id = $1 and kind = 'run' and status in ('failed', 'timed_out', 'stalled')
+            `,
+            [candidate.id],
+          );
+          const failureCount = Number(failureResult.rows[0]?.count ?? 0);
+          if (failureCount >= candidate.max_attempts) {
             await client.query(
               `
                 update durlo_runs
@@ -259,6 +298,15 @@ export class PostgresAdapter implements DurloAdapter {
             continue;
           }
         }
+
+        const failureResult = await client.query<{ count: string }>(
+          `
+            select count(*)::text as count from durlo_attempts
+            where run_id = $1 and kind = 'run' and status in ('failed', 'timed_out', 'stalled')
+          `,
+          [candidate.id],
+        );
+        const failureCount = Number(failureResult.rows[0]?.count ?? 0);
 
         const leaseToken = randomUUID();
         const updated = await client.query<RunRow>(
@@ -287,7 +335,7 @@ export class PostgresAdapter implements DurloAdapter {
           `,
           [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken],
         );
-        claimed.push(mapRun(row) as ClaimedRun);
+        claimed.push({ ...mapRun(row), failureCount } as ClaimedRun);
       }
       await client.query("commit");
       return claimed;
@@ -480,14 +528,195 @@ export class PostgresAdapter implements DurloAdapter {
     });
   }
 
+  async getTimer(runId: string, stepId: string): Promise<TimerRecord | null> {
+    const result = await this.query()<TimerRow>(
+      `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2`,
+      [runId, stepId],
+    );
+    return result.rows[0] ? mapTimer(result.rows[0]) : null;
+  }
+
+  async sleepRun(input: StepInput & { fireAt: Date }): Promise<TimerRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await this.assertOwnedRun(client, input);
+      await client.query(
+        `
+          insert into durlo_timers (id, run_id, step_id, fire_at, status)
+          values ($1, $2, $3, $4, 'pending')
+          on conflict (run_id, step_id) do nothing
+        `,
+        [randomUUID(), input.runId, input.stepId, input.fireAt],
+      );
+      const selected = await client.query<TimerRow>(
+        `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2 for update`,
+        [input.runId, input.stepId],
+      );
+      const timer = selected.rows[0];
+      if (!timer) throw new Error(`timer '${input.stepId}' could not be created`);
+      if (timer.status === "fired") {
+        await client.query("commit");
+        return mapTimer(timer);
+      }
+      if (timer.status === "cancelled") {
+        throw new RunStateError(`timer '${input.stepId}' is cancelled`);
+      }
+      const runResult = await client.query(
+        `
+          update durlo_runs
+          set status = 'sleeping', locked_by = null, lease_token = null, locked_until = null,
+              updated_at = now()
+          where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
+        `,
+        [input.runId, input.workerId, input.leaseToken],
+      );
+      if (runResult.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      await client.query(
+        `
+          update durlo_attempts set status = 'succeeded', completed_at = now()
+          where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
+        `,
+        [input.runId, input.leaseToken],
+      );
+      await client.query("commit");
+      return mapTimer(timer);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]> {
+    if (input.limit <= 0) return [];
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const selected = await client.query<TimerRow>(
+        `
+          select ${QUALIFIED_TIMER_COLUMNS}
+          from durlo_timers t
+          join durlo_runs r on r.id = t.run_id
+          where r.app_id = $1 and r.status = 'sleeping'
+            and t.status = 'pending' and t.fire_at <= now()
+          order by t.fire_at, t.created_at
+          for update of t, r skip locked
+          limit $2
+        `,
+        [input.appId, input.limit],
+      );
+      const fired: TimerRecord[] = [];
+      for (const timer of selected.rows) {
+        const updated = await client.query<TimerRow>(
+          `
+            update durlo_timers
+            set status = 'fired', fired_at = now()
+            where id = $1 and status = 'pending'
+            returning ${TIMER_COLUMNS}
+          `,
+          [timer.id],
+        );
+        const row = updated.rows[0];
+        if (!row) continue;
+        const resumed = await client.query(
+          `
+            update durlo_runs set status = 'pending', scheduled_at = now(), updated_at = now()
+            where id = $1 and status = 'sleeping'
+          `,
+          [timer.run_id],
+        );
+        if (resumed.rowCount === 1) fired.push(mapTimer(row));
+      }
+      await client.query("commit");
+      return fired;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async cancelRun(id: string): Promise<RunRecord> {
-    void id;
-    throw new Error("cancelRun is implemented in Slice 6");
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const selected = await client.query<RunRow>(
+        `select ${RUN_COLUMNS} from durlo_runs where id = $1 for update`,
+        [id],
+      );
+      const current = selected.rows[0];
+      if (!current) throw new RunStateError(`run '${id}' was not found`);
+      if (current.status === "cancelled") {
+        await client.query("commit");
+        return mapRun(current);
+      }
+      if (!["pending", "running", "sleeping"].includes(current.status)) {
+        throw new RunStateError(`cannot cancel a ${current.status} run`);
+      }
+      if (current.status === "running") {
+        await client.query(
+          `
+            update durlo_attempts set status = 'cancelled', completed_at = now()
+            where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
+          `,
+          [id, current.lease_token],
+        );
+        await client.query(
+          `
+            update durlo_attempts set status = 'cancelled', completed_at = now()
+            where run_id = $1 and kind = 'step' and lease_token = $2 and status = 'running'
+          `,
+          [id, current.lease_token],
+        );
+      }
+      await client.query(
+        `
+          update durlo_timers set status = 'cancelled', cancelled_at = now()
+          where run_id = $1 and status = 'pending'
+        `,
+        [id],
+      );
+      const updated = await client.query<RunRow>(
+        `
+          update durlo_runs
+          set status = 'cancelled', locked_by = null, lease_token = null, locked_until = null,
+              updated_at = now(), cancelled_at = now()
+          where id = $1
+          returning ${RUN_COLUMNS}
+        `,
+        [id],
+      );
+      await client.query("commit");
+      return mapRun(updated.rows[0]!);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async retryRun(id: string): Promise<RunRecord> {
-    void id;
-    throw new Error("retryRun is implemented in Slice 6");
+    const result = await this.query()<RunRow>(
+      `
+        update durlo_runs
+        set status = 'pending', scheduled_at = now(), error_json = null,
+            locked_by = null, lease_token = null, locked_until = null,
+            updated_at = now(), completed_at = null
+        where id = $1
+          and ((kind = 'task' and status = 'dead_letter') or (kind = 'workflow' and status = 'failed'))
+        returning ${RUN_COLUMNS}
+      `,
+      [id],
+    );
+    const row = result.rows[0];
+    if (row) return mapRun(row);
+    const current = await this.getRun(id);
+    if (!current) throw new RunStateError(`run '${id}' was not found`);
+    throw new RunStateError(`cannot manually retry a ${current.status} ${current.kind} run`);
   }
 
   withTransaction(client: unknown): TransactionalDurloAdapter {

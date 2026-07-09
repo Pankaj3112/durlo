@@ -96,6 +96,7 @@ export type ClaimedRun = RunRecord & {
   lockedBy: string;
   leaseToken: string;
   lockedUntil: Date;
+  failureCount: number;
 };
 
 export type ClaimRunsInput = {
@@ -140,6 +141,19 @@ export type StepRecord = {
 
 export type StepInput = OwnedRunInput & { stepId: string };
 
+export type TimerStatus = "pending" | "fired" | "cancelled";
+
+export type TimerRecord = {
+  id: string;
+  runId: string;
+  stepId: string;
+  fireAt: Date;
+  status: TimerStatus;
+  createdAt: Date;
+  firedAt: Date | null;
+  cancelledAt: Date | null;
+};
+
 export type CreateRunInput = {
   id: string;
   appId: string;
@@ -170,6 +184,9 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord>;
   completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
   failStep(input: StepInput & { error: SerializedError }): Promise<void>;
+  getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
+  sleepRun(input: StepInput & { fireAt: Date }): Promise<TimerRecord>;
+  fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
   withTransaction(client: unknown): TransactionalDurloAdapter;
 }
 

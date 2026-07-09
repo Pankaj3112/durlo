@@ -1,7 +1,7 @@
-import { LostLeaseError, ValidationError } from "./errors.js";
+import { LostLeaseError, ValidationError, WorkflowSleepError } from "./errors.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
 import type { ClaimedRun, DurloAdapter, StepTools } from "./types.js";
-import { validateId } from "./validation.js";
+import { parseDuration, validateId } from "./validation.js";
 
 export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepTools {
   const seen = new Set<string>();
@@ -19,6 +19,9 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
   return {
     async run<T>(stepId: string, fn: () => Promise<T> | T): Promise<T> {
       begin(stepId);
+      if (await adapter.getTimer(run.id, stepId)) {
+        throw new ValidationError(`step '${stepId}' is already used by a sleep`);
+      }
       const existing = await adapter.getStep(run.id, stepId);
       if (existing?.status === "completed") return deserialize(existing.result!) as T;
       const step = await adapter.startStep({ ...ownership, stepId, maxAttempts: run.maxAttempts });
@@ -47,13 +50,22 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
         insideStep = false;
       }
     },
-    async sleep(stepId): Promise<void> {
+    async sleep(stepId, duration): Promise<void> {
       begin(stepId);
-      throw new Error("step.sleep is implemented in Slice 6");
+      await sleepUntil(stepId, new Date(Date.now() + parseDuration(duration, "sleep duration")));
     },
-    async sleepUntil(stepId): Promise<void> {
+    async sleepUntil(stepId, date): Promise<void> {
       begin(stepId);
-      throw new Error("step.sleepUntil is implemented in Slice 6");
+      await sleepUntil(stepId, new Date(date));
     },
   };
+
+  async function sleepUntil(stepId: string, fireAt: Date): Promise<void> {
+    if (!Number.isFinite(fireAt.getTime())) throw new ValidationError("sleepUntil date must be valid");
+    if (await adapter.getStep(run.id, stepId)) {
+      throw new ValidationError(`step '${stepId}' is already used by step.run`);
+    }
+    const timer = await adapter.sleepRun({ ...ownership, stepId, fireAt });
+    if (timer.status === "pending") throw new WorkflowSleepError(`workflow sleeping until ${timer.fireAt.toISOString()}`);
+  }
 }

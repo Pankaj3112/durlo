@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo, LostLeaseError } from "@durlo/core";
+import { Durlo, LostLeaseError, RunStateError } from "@durlo/core";
 import type { StepTools } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
@@ -318,5 +318,207 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     });
     expect(await adapter.getStep(handle.id, "inner")).toBeNull();
     expect(await adapter.getStep(handle.id, "outer")).toMatchObject({ status: "failed" });
+  });
+
+  it("sleeps and resumes workflows without consuming the failure retry budget", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let firstStepExecutions = 0;
+    const workflow = durlo.workflow({
+      id: "sleep-workflow",
+      run: async ({ step }) => {
+        await step.run("first", () => {
+          firstStepExecutions += 1;
+          return "checkpoint";
+        });
+        for (let index = 1; index <= 4; index += 1) {
+          await step.sleep(`sleep-${index}`, 0);
+        }
+        return "awake";
+      },
+    });
+    const handle = await workflow.start({});
+    const worker = durlo.worker({ workflows: [workflow], workerId: "sleep-worker" });
+
+    for (let index = 0; index < 4; index += 1) {
+      expect(await worker.runOnce()).toBe(1);
+      expect(await adapter.getRun(handle.id)).toMatchObject({ status: "sleeping" });
+    }
+    expect(await worker.runOnce()).toBe(1);
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "completed",
+      output: "awake",
+      attemptCount: 5,
+    });
+    expect(firstStepExecutions).toBe(1);
+    const timers = await adapter.pool.query<{ status: string }>(
+      "select status from durlo_timers where run_id = $1 order by step_id",
+      [handle.id],
+    );
+    expect(timers.rows).toEqual([{ status: "fired" }, { status: "fired" }, { status: "fired" }, { status: "fired" }]);
+  });
+
+  it("keeps sleepUntil durable until its timer becomes due", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "sleep-until-workflow",
+      run: async ({ step }) => {
+        await step.sleepUntil("future", "2030-01-01T00:00:00.000Z");
+        return "resumed";
+      },
+    });
+    const handle = await workflow.start({});
+    const worker = durlo.worker({ workflows: [workflow] });
+
+    expect(await worker.runOnce()).toBe(1);
+    expect(await worker.runOnce()).toBe(0);
+    expect(await adapter.getTimer(handle.id, "future")).toMatchObject({
+      status: "pending",
+      fireAt: new Date("2030-01-01T00:00:00.000Z"),
+    });
+    await adapter.pool.query("update durlo_timers set fire_at = now() - interval '1 second' where run_id = $1", [
+      handle.id,
+    ]);
+    expect(await worker.runOnce()).toBe(1);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "completed", output: "resumed" });
+  });
+
+  it("cancels sleeping timers atomically and never resumes the workflow", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "cancel-sleep-workflow",
+      run: async ({ step }) => {
+        await step.sleep("long-wait", "1d");
+      },
+    });
+    const handle = await workflow.start({});
+    const worker = durlo.worker({ workflows: [workflow] });
+
+    await worker.runOnce();
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "sleeping" });
+    expect(await durlo.runs.cancel(handle)).toMatchObject({ status: "cancelled" });
+    expect(await durlo.runs.cancel(handle)).toMatchObject({ status: "cancelled" });
+    expect(await adapter.getTimer(handle.id, "long-wait")).toMatchObject({ status: "cancelled" });
+    expect(await worker.runOnce()).toBe(0);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "cancelled" });
+  });
+
+  it("cancels running work by invalidating its lease token", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "cancel-running", run: async () => "late" });
+    const handle = await task.enqueue({});
+    const [claim] = await adapter.claimRuns({
+      appId: "integration",
+      workerId: "cancellable-worker",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources: [{ kind: "task", resourceId: task.id }],
+    });
+
+    await durlo.runs.cancel(handle);
+    await expect(
+      adapter.completeRun({
+        runId: handle.id,
+        workerId: "cancellable-worker",
+        leaseToken: claim!.leaseToken,
+        output: "late",
+      }),
+    ).rejects.toBeInstanceOf(LostLeaseError);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "cancelled" });
+    const attempt = await adapter.pool.query<{ status: string }>(
+      "select status from durlo_attempts where run_id = $1 and kind = 'run'",
+      [handle.id],
+    );
+    expect(attempt.rows).toEqual([{ status: "cancelled" }]);
+  });
+
+  it("manually retries only failed workflows and dead-letter tasks while preserving history", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let executions = 0;
+    const task = durlo.task({
+      id: "manual-retry-task",
+      retry: { attempts: 1 },
+      run: async () => {
+        executions += 1;
+        if (executions === 1) throw new Error("first failure");
+        return "recovered";
+      },
+    });
+    const handle = await task.enqueue({}, { idempotencyKey: "manual-key" });
+    const worker = durlo.worker({ tasks: [task] });
+
+    await worker.runOnce();
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "dead_letter", attemptCount: 1 });
+    expect(await durlo.runs.retry(handle)).toMatchObject({
+      status: "pending",
+      idempotencyKey: "manual-key",
+      attemptCount: 1,
+    });
+    await worker.runOnce();
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "completed",
+      output: "recovered",
+      attemptCount: 2,
+      idempotencyKey: "manual-key",
+    });
+    await expect(durlo.runs.retry(handle)).rejects.toBeInstanceOf(RunStateError);
+    await expect(durlo.runs.cancel(handle)).rejects.toBeInstanceOf(RunStateError);
+    const attempts = await adapter.pool.query<{ status: string }>(
+      "select status from durlo_attempts where run_id = $1 and kind = 'run' order by started_at",
+      [handle.id],
+    );
+    expect(attempts.rows.map(({ status }) => status)).toEqual(["failed", "succeeded"]);
+  });
+
+  it("allows a failed workflow one new manual attempt", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let executions = 0;
+    const workflow = durlo.workflow({
+      id: "manual-retry-workflow",
+      retry: { attempts: 1 },
+      run: async () => {
+        executions += 1;
+        if (executions === 1) throw new Error("workflow failed");
+        return "workflow recovered";
+      },
+    });
+    const handle = await workflow.start({});
+    const worker = durlo.worker({ workflows: [workflow] });
+
+    await worker.runOnce();
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "failed" });
+    expect(await durlo.runs.retry(handle)).toMatchObject({ status: "pending" });
+    await worker.runOnce();
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "completed", output: "workflow recovered" });
+  });
+
+  it("records cooperative attempt timeouts and aborts the task signal", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let aborted = false;
+    const task = durlo.task({
+      id: "timeout-task",
+      retry: { attempts: 1 },
+      timeout: "5ms",
+      run: async (_input: unknown, { signal }) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      },
+    });
+    const handle = await task.enqueue({});
+
+    await durlo.worker({ tasks: [task], leaseDuration: "1s" }).runOnce();
+
+    expect(aborted).toBe(true);
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "dead_letter",
+      error: { name: "TimeoutError" },
+    });
+    const attempt = await adapter.pool.query<{ status: string }>(
+      "select status from durlo_attempts where run_id = $1 and kind = 'run'",
+      [handle.id],
+    );
+    expect(attempt.rows).toEqual([{ status: "timed_out" }]);
   });
 });

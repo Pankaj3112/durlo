@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LostLeaseError, ValidationError } from "./errors.js";
+import { LostLeaseError, ValidationError, WorkflowSleepError } from "./errors.js";
 import { calculateRetryDelay } from "./retry.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
 import { createStepTools } from "./steps.js";
@@ -79,6 +79,7 @@ export class Worker {
   }
 
   async runOnce(): Promise<number> {
+    await this.adapter.fireDueTimers({ appId: this.appId, limit: this.concurrency });
     const runs = await this.adapter.claimRuns({
       appId: this.appId,
       workerId: this.id,
@@ -145,14 +146,16 @@ export class Worker {
         output: serialize(output === undefined ? null : output),
       });
     } catch (error) {
+      if (error instanceof WorkflowSleepError) return;
       if (!ownsLease || isLostLease(error)) return;
       const retry = this.retryFor(run);
-      const exhausted = run.attemptCount >= run.maxAttempts;
+      const failureNumber = run.failureCount + 1;
+      const exhausted = failureNumber >= run.maxAttempts;
       const outcome = exhausted
         ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
         : ({
             status: "pending",
-            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, run.attemptCount)),
+            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber)),
           } as const);
       try {
         await this.adapter.failRun({

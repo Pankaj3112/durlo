@@ -17,3 +17,7 @@ export class LostLeaseError extends DurloError {
 export class RunStateError extends DurloError {
   override readonly name = "RunStateError";
 }
+
+export class WorkflowSleepError extends DurloError {
+  override readonly name = "WorkflowSleepError";
+}
