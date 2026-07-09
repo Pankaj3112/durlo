@@ -91,6 +91,35 @@ export type RunHandle<TOutput = unknown> = Pick<
   "id" | "kind" | "resourceId" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
 
+export type ClaimedRun = RunRecord & {
+  status: "running";
+  lockedBy: string;
+  leaseToken: string;
+  lockedUntil: Date;
+};
+
+export type ClaimRunsInput = {
+  appId: string;
+  workerId: string;
+  limit: number;
+  leaseDuration: number;
+  resources: Array<{ kind: RunKind; resourceId: string }>;
+};
+
+export type OwnedRunInput = {
+  runId: string;
+  workerId: string;
+  leaseToken: string;
+};
+
+export type FailRunInput = OwnedRunInput & {
+  error: SerializedError;
+  attemptStatus?: "failed" | "timed_out";
+  outcome:
+    | { status: "pending"; scheduledAt: Date }
+    | { status: "failed" | "dead_letter" };
+};
+
 export type CreateRunInput = {
   id: string;
   appId: string;
@@ -113,6 +142,10 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(id: string): Promise<RunRecord | null>;
   cancelRun(id: string): Promise<RunRecord>;
   retryRun(id: string): Promise<RunRecord>;
+  claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]>;
+  extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
+  completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
+  failRun(input: FailRunInput): Promise<void>;
   withTransaction(client: unknown): TransactionalDurloAdapter;
 }
 
@@ -179,7 +212,16 @@ export type WorkflowDefinitionOptions<TInput, TOutput> = {
 
 export type BatchItem<TInput> = { input: TInput; options?: RunOptions };
 
-export interface TaskDefinition<TInput, TOutput> {
+export interface RegisteredTaskDefinition {
+  readonly id: string;
+  readonly kind: "task";
+  readonly _durlo: {
+    validate(input: unknown): Promise<unknown>;
+    run(input: unknown, context: TaskContext): Promise<unknown>;
+  };
+}
+
+export interface TaskDefinition<TInput, TOutput> extends RegisteredTaskDefinition {
   readonly id: string;
   readonly name?: string;
   readonly kind: "task";
@@ -209,4 +251,13 @@ export type DurloOptions = {
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;
+};
+
+export type WorkerOptions = {
+  tasks?: RegisteredTaskDefinition[];
+  workflows?: Array<WorkflowDefinition<unknown, unknown>>;
+  concurrency?: number;
+  pollInterval?: DurationInput;
+  leaseDuration?: DurationInput;
+  workerId?: string;
 };

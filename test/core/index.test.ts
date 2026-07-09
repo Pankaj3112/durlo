@@ -58,6 +58,10 @@ function createAdapter(): DurloAdapter & { created: CreateRunInput[]; transactio
     retryRun: async () => {
       throw new Error("not implemented by test adapter");
     },
+    claimRuns: async () => [],
+    extendRunLease: async () => false,
+    completeRun: async () => undefined,
+    failRun: async () => undefined,
     withTransaction(client) {
       this.transactionClient = client;
       return transactional;

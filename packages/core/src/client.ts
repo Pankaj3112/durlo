@@ -17,6 +17,8 @@ import type {
   WorkflowDefinitionOptions,
 } from "./types.js";
 import { parseDuration, validateId, validateRunOptions, validateSchema } from "./validation.js";
+import { Worker } from "./worker.js";
+import type { WorkerOptions } from "./types.js";
 
 function toHandle<TOutput>(record: RunRecord): RunHandle<TOutput> {
   return {
@@ -70,6 +72,10 @@ export class Durlo {
       ...(options.name === undefined ? {} : { name: options.name }),
       kind: "task",
       options,
+      _durlo: {
+        validate: (input) => validateSchema(options.schema, input),
+        run: async (input, context) => options.run(input as TInput, context),
+      },
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
         const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
@@ -128,6 +134,10 @@ export class Durlo {
         return this.createRun(adapter, "workflow", workflow.id, workflow.options.schema, input, options, retry, timeout);
       },
     };
+  }
+
+  worker(options: WorkerOptions): Worker {
+    return new Worker(this.id, this.adapter, options);
   }
 
   private register(kind: "task" | "workflow", id: string): void {

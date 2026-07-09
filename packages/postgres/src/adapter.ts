@@ -1,13 +1,19 @@
 import type {
+  ClaimedRun,
+  ClaimRunsInput,
   CreateRunInput,
   DurloAdapter,
+  FailRunInput,
   JsonValue,
+  OwnedRunInput,
   RunKind,
   RunRecord,
   RunStatus,
   SerializedError,
   TransactionalDurloAdapter,
 } from "@durlo/core";
+import { LostLeaseError } from "@durlo/core";
+import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
 import { migrations } from "./migrations.js";
@@ -153,6 +159,175 @@ export class PostgresAdapter implements DurloAdapter {
     return result.rows[0] ? mapRun(result.rows[0]) : null;
   }
 
+  async claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]> {
+    if (input.resources.length === 0 || input.limit <= 0) return [];
+    const resources = input.resources.map(({ kind, resourceId }) => `${kind}:${resourceId}`);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const candidates = await client.query<RunRow>(
+        `
+          select ${RUN_COLUMNS}
+          from durlo_runs
+          where app_id = $1
+            and (kind || ':' || resource_id) = any($2::text[])
+            and (
+              (status = 'pending' and scheduled_at <= now())
+              or (status = 'running' and locked_until < now())
+            )
+          order by
+            case when status = 'running' then 0 else 1 end,
+            priority desc,
+            scheduled_at asc,
+            created_at asc
+          for update skip locked
+          limit $3
+        `,
+        [input.appId, resources, input.limit],
+      );
+      const claimed: ClaimedRun[] = [];
+      for (const candidate of candidates.rows) {
+        if (candidate.status === "running") {
+          await client.query(
+            `
+              update durlo_attempts
+              set status = 'stalled', completed_at = now(),
+                  error_json = $3::jsonb
+              where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'
+            `,
+            [
+              candidate.id,
+              candidate.lease_token,
+              JSON.stringify({ name: "StalledError", message: "worker lease expired" }),
+            ],
+          );
+          if (candidate.attempt_count >= candidate.max_attempts) {
+            await client.query(
+              `
+                update durlo_runs
+                set status = case when kind = 'task' then 'dead_letter' else 'failed' end,
+                    error_json = $2::jsonb,
+                    stalled_count = stalled_count + 1,
+                    locked_by = null, lease_token = null, locked_until = null,
+                    updated_at = now(), completed_at = now()
+                where id = $1
+              `,
+              [candidate.id, JSON.stringify({ name: "StalledError", message: "worker lease expired" })],
+            );
+            continue;
+          }
+        }
+
+        const leaseToken = randomUUID();
+        const updated = await client.query<RunRow>(
+          `
+            update durlo_runs
+            set status = 'running',
+                locked_by = $2,
+                lease_token = $3,
+                locked_until = now() + ($4 * interval '1 millisecond'),
+                attempt_count = attempt_count + 1,
+                stalled_count = stalled_count + $5,
+                started_at = coalesce(started_at, now()),
+                updated_at = now()
+            where id = $1
+            returning ${RUN_COLUMNS}
+          `,
+          [candidate.id, input.workerId, leaseToken, input.leaseDuration, candidate.status === "running" ? 1 : 0],
+        );
+        const row = updated.rows[0];
+        if (!row) continue;
+        await client.query(
+          `
+            insert into durlo_attempts (
+              id, run_id, kind, attempt_number, status, worker_id, lease_token
+            ) values ($1, $2, 'run', $3, 'running', $4, $5)
+          `,
+          [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken],
+        );
+        claimed.push(mapRun(row) as ClaimedRun);
+      }
+      await client.query("commit");
+      return claimed;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean> {
+    const result = await this.query()(
+      `
+        update durlo_runs
+        set locked_until = now() + ($4 * interval '1 millisecond'), updated_at = now()
+        where id = $1 and locked_by = $2 and lease_token = $3
+          and status = 'running' and locked_until > now()
+      `,
+      [input.runId, input.workerId, input.leaseToken, input.leaseDuration],
+    );
+    return result.rowCount === 1;
+  }
+
+  async completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void> {
+    await this.finishOwnedRun(async (client) => {
+      const result = await client.query(
+        `
+          update durlo_runs
+          set status = 'completed', output_json = $4::jsonb, error_json = null,
+              locked_by = null, lease_token = null, locked_until = null,
+              updated_at = now(), completed_at = now()
+          where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
+          returning id
+        `,
+        [input.runId, input.workerId, input.leaseToken, JSON.stringify(input.output)],
+      );
+      if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      await client.query(
+        `update durlo_attempts set status = 'succeeded', completed_at = now()
+         where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'`,
+        [input.runId, input.leaseToken],
+      );
+    });
+  }
+
+  async failRun(input: FailRunInput): Promise<void> {
+    await this.finishOwnedRun(async (client) => {
+      const scheduledAt = input.outcome.status === "pending" ? input.outcome.scheduledAt : null;
+      const result = await client.query(
+        `
+          update durlo_runs
+          set status = $4,
+              scheduled_at = coalesce($5, scheduled_at),
+              error_json = $6::jsonb,
+              locked_by = null, lease_token = null, locked_until = null,
+              updated_at = now(),
+              completed_at = case when $4 in ('failed', 'dead_letter') then now() else null end
+          where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
+          returning id
+        `,
+        [
+          input.runId,
+          input.workerId,
+          input.leaseToken,
+          input.outcome.status,
+          scheduledAt,
+          JSON.stringify(input.error),
+        ],
+      );
+      if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      await client.query(
+        `
+          update durlo_attempts
+          set status = $3, error_json = $4::jsonb, completed_at = now()
+          where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'
+        `,
+        [input.runId, input.leaseToken, input.attemptStatus ?? "failed", JSON.stringify(input.error)],
+      );
+    });
+  }
+
   async cancelRun(id: string): Promise<RunRecord> {
     void id;
     throw new Error("cancelRun is implemented in Slice 6");
@@ -203,6 +378,20 @@ export class PostgresAdapter implements DurloAdapter {
     const row = result.rows[0];
     if (!row) throw new Error("Postgres did not return the created run");
     return mapRun(row);
+  }
+
+  private async finishOwnedRun(operation: (client: PoolClient) => Promise<void>): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await operation(client);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

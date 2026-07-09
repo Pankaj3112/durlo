@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo } from "@durlo/core";
+import { Durlo, LostLeaseError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
@@ -88,5 +88,135 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
 
   it("rejects invalid raw transaction clients", () => {
     expect(() => adapter.withTransaction({})).toThrow("raw pg client");
+  });
+
+  it("claims and completes tasks with append-only attempt history", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({
+      id: "complete-task",
+      run: async (input: { value: number }, context) => ({
+        doubled: input.value * 2,
+        attempt: context.attempt.number,
+      }),
+    });
+    const handle = await task.enqueue({ value: 21 });
+
+    const worker = durlo.worker({ tasks: [task], workerId: "worker-a", leaseDuration: "5s" });
+    expect(await worker.runOnce()).toBe(1);
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "completed",
+      output: { doubled: 42, attempt: 1 },
+      attemptCount: 1,
+      lockedBy: null,
+      leaseToken: null,
+    });
+    const attempts = await adapter.pool.query<{ status: string; worker_id: string }>(
+      "select status, worker_id from durlo_attempts where run_id = $1",
+      [handle.id],
+    );
+    expect(attempts.rows).toEqual([{ status: "succeeded", worker_id: "worker-a" }]);
+  });
+
+  it("retries thrown task errors and dead-letters after exhaustion", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let executions = 0;
+    const task = durlo.task({
+      id: "retry-task",
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      run: async () => {
+        executions += 1;
+        throw new Error(`failure ${executions}`);
+      },
+    });
+    const handle = await task.enqueue({});
+    const worker = durlo.worker({ tasks: [task], workerId: "worker-retry" });
+
+    expect(await worker.runOnce()).toBe(1);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "pending", attemptCount: 1 });
+    expect(await worker.runOnce()).toBe(1);
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "dead_letter",
+      attemptCount: 2,
+      error: { name: "Error", message: "failure 2" },
+    });
+  });
+
+  it("reclaims expired leases, records stalls, and rejects stale completion", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "stalled-task", retry: { attempts: 2 }, run: async () => "done" });
+    const handle = await task.enqueue({});
+    const resources = [{ kind: "task" as const, resourceId: task.id }];
+
+    const [first] = await adapter.claimRuns({
+      appId: "integration",
+      workerId: "worker-old",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources,
+    });
+    expect(first).toBeDefined();
+    await adapter.pool.query("update durlo_runs set locked_until = now() - interval '1 second' where id = $1", [
+      handle.id,
+    ]);
+    const [second] = await adapter.claimRuns({
+      appId: "integration",
+      workerId: "worker-new",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources,
+    });
+
+    expect(second?.leaseToken).not.toBe(first?.leaseToken);
+    await expect(
+      adapter.completeRun({
+        runId: handle.id,
+        workerId: "worker-old",
+        leaseToken: first!.leaseToken,
+        output: "stale",
+      }),
+    ).rejects.toBeInstanceOf(LostLeaseError);
+    await adapter.completeRun({
+      runId: handle.id,
+      workerId: "worker-new",
+      leaseToken: second!.leaseToken,
+      output: "current",
+    });
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "completed",
+      output: "current",
+      attemptCount: 2,
+      stalledCount: 1,
+    });
+    const attempts = await adapter.pool.query<{ status: string }>(
+      "select status from durlo_attempts where run_id = $1 order by started_at",
+      [handle.id],
+    );
+    expect(attempts.rows.map(({ status }) => status).sort()).toEqual(["stalled", "succeeded"]);
+  });
+
+  it("terminally fails an expired lease when its retry budget is exhausted", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "expired-task", retry: { attempts: 1 }, run: async () => undefined });
+    const handle = await task.enqueue({});
+    const claimInput = {
+      appId: "integration",
+      workerId: "worker",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources: [{ kind: "task" as const, resourceId: task.id }],
+    };
+
+    expect(await adapter.claimRuns(claimInput)).toHaveLength(1);
+    await adapter.pool.query("update durlo_runs set locked_until = now() - interval '1 second' where id = $1", [
+      handle.id,
+    ]);
+    expect(await adapter.claimRuns(claimInput)).toHaveLength(0);
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "dead_letter",
+      stalledCount: 1,
+      error: { name: "StalledError" },
+    });
   });
 });
