@@ -27,9 +27,14 @@
     "test": "vitest run --config ../../vitest.config.ts test/postgres/index.test.ts"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "eslint": "^9.39.4",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@durlo/core": "workspace:*",
+    "pg": "^8.22.0"
   }
 }
