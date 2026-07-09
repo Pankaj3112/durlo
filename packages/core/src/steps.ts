@@ -10,7 +10,10 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
   const begin = (stepId: string): void => {
     validateId(stepId, "step id");
     if (insideStep) throw new ValidationError("nested step calls are not allowed");
-    if (seen.has(stepId)) throw new ValidationError(`step '${stepId}' was called more than once in this workflow execution`);
+    if (seen.has(stepId))
+      throw new ValidationError(
+        `step '${stepId}' was called more than once in this workflow execution`
+      );
     seen.add(stepId);
   };
 
@@ -34,7 +37,7 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
         await adapter.completeStep({
           ...ownership,
           stepId,
-          result: serialize(result === undefined ? null : result),
+          result: serialize(result === undefined ? null : result)
         });
         return result;
       } catch (error) {
@@ -57,15 +60,17 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
     async sleepUntil(stepId, date): Promise<void> {
       begin(stepId);
       await sleepUntil(stepId, new Date(date));
-    },
+    }
   };
 
   async function sleepUntil(stepId: string, fireAt: Date): Promise<void> {
-    if (!Number.isFinite(fireAt.getTime())) throw new ValidationError("sleepUntil date must be valid");
+    if (!Number.isFinite(fireAt.getTime()))
+      throw new ValidationError("sleepUntil date must be valid");
     if (await adapter.getStep(run.id, stepId)) {
       throw new ValidationError(`step '${stepId}' is already used by step.run`);
     }
     const timer = await adapter.sleepRun({ ...ownership, stepId, fireAt });
-    if (timer.status === "pending") throw new WorkflowSleepError(`workflow sleeping until ${timer.fireAt.toISOString()}`);
+    if (timer.status === "pending")
+      throw new WorkflowSleepError(`workflow sleeping until ${timer.fireAt.toISOString()}`);
   }
 }

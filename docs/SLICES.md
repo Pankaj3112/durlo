@@ -3,6 +3,8 @@
 Keep v1 small: direct tasks, direct workflows, Postgres storage, local worker.
 Events, cron, distributed concurrency, and framework adapters wait.
 
+Implementation status (2026-07-10): Slices 1 through 6 are implemented and tested. Slice 7 remains future work.
+
 ## 1. Repo Foundation
 
 Create the monorepo, packages, TypeScript config, test runner, linting, and public exports.

@@ -7,13 +7,13 @@ import {
   deserialize,
   normalizeRetryPolicy,
   parseDuration,
-  serialize,
+  serialize
 } from "@durlo/core";
 import type {
   CreateRunInput,
   DurloAdapter,
   RunRecord,
-  TransactionalDurloAdapter,
+  TransactionalDurloAdapter
 } from "@durlo/core";
 
 function recordFromInput(input: CreateRunInput): RunRecord {
@@ -32,11 +32,14 @@ function recordFromInput(input: CreateRunInput): RunRecord {
     updatedAt: now,
     startedAt: null,
     completedAt: null,
-    cancelledAt: null,
+    cancelledAt: null
   };
 }
 
-function createAdapter(): DurloAdapter & { created: CreateRunInput[]; transactionClient?: unknown } {
+function createAdapter(): DurloAdapter & {
+  created: CreateRunInput[];
+  transactionClient?: unknown;
+} {
   const created: CreateRunInput[] = [];
   const transactional: TransactionalDurloAdapter = {
     createRun: async (input) => {
@@ -46,7 +49,7 @@ function createAdapter(): DurloAdapter & { created: CreateRunInput[]; transactio
     createRuns: async (inputs) => {
       created.push(...inputs);
       return inputs.map(recordFromInput);
-    },
+    }
   };
   return {
     created,
@@ -62,6 +65,7 @@ function createAdapter(): DurloAdapter & { created: CreateRunInput[]; transactio
     extendRunLease: async () => false,
     completeRun: async () => undefined,
     failRun: async () => undefined,
+    releaseRun: async () => false,
     getStep: async () => null,
     startStep: async () => {
       throw new Error("not implemented by test adapter");
@@ -76,7 +80,7 @@ function createAdapter(): DurloAdapter & { created: CreateRunInput[]; transactio
     withTransaction(client) {
       this.transactionClient = client;
       return transactional;
-    },
+    }
   };
 }
 
@@ -87,12 +91,12 @@ describe("Durlo core API", () => {
     const task = durlo.task<{ email: string }, { sent: boolean }>({
       id: "send-email",
       retry: { backoff: { type: "fixed", delay: "5s" } },
-      run: async () => ({ sent: true }),
+      run: async () => ({ sent: true })
     });
 
     const handle = await task.enqueue(
       { email: "a@example.com" },
-      { delay: "10s", attempts: 2, idempotencyKey: "email:1", priority: 10 },
+      { delay: "10s", attempts: 2, idempotencyKey: "email:1", priority: 10 }
     );
 
     expect(handle).toMatchObject({ kind: "task", resourceId: "send-email", status: "pending" });
@@ -102,7 +106,7 @@ describe("Durlo core API", () => {
       idempotencyKey: "email:1",
       priority: 10,
       input: { email: "a@example.com" },
-      options: { retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } } },
+      options: { retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } } }
     });
     expect(adapter.created[0]!.scheduledAt.getTime()).toBeGreaterThan(Date.now() + 9_000);
   });
@@ -112,13 +116,13 @@ describe("Durlo core API", () => {
     const validate = vi.fn((value: unknown) =>
       typeof value === "object" && value !== null && "userId" in value
         ? { value: value as { userId: string } }
-        : { issues: [{ message: "userId is required" }] },
+        : { issues: [{ message: "userId is required" }] }
     );
     const durlo = new Durlo({ id: "test-app", adapter });
     const workflow = durlo.workflow({
       id: "onboarding",
       schema: { "~standard": { version: 1, vendor: "test", validate } },
-      run: async () => undefined,
+      run: async () => undefined
     });
 
     await expect(workflow.start({ userId: "user_1" })).resolves.toMatchObject({ kind: "workflow" });
@@ -130,7 +134,7 @@ describe("Durlo core API", () => {
     const adapter = createAdapter();
     const task = new Durlo({ id: "test-app", adapter }).task({
       id: "batch-task",
-      run: async (input: number) => input,
+      run: async (input: number) => input
     });
 
     const handles = await task.batchEnqueue([1, { input: 2, options: { idempotencyKey: "two" } }]);
@@ -138,8 +142,8 @@ describe("Durlo core API", () => {
     await expect(
       task.batchEnqueue([
         { input: 1, options: { idempotencyKey: "duplicate" } },
-        { input: 2, options: { idempotencyKey: "duplicate" } },
-      ]),
+        { input: 2, options: { idempotencyKey: "duplicate" } }
+      ])
     ).rejects.toThrow("duplicate idempotency keys");
   });
 
@@ -152,9 +156,10 @@ describe("Durlo core API", () => {
 
     await durlo.tx(client).enqueue(task, "input");
     await durlo.tx(client).start(workflow, { value: true });
+    await durlo.tx(client).batchEnqueue(task, ["one", "two"]);
 
     expect(adapter.transactionClient).toBe(client);
-    expect(adapter.created.map(({ kind }) => kind)).toEqual(["task", "workflow"]);
+    expect(adapter.created.map(({ kind }) => kind)).toEqual(["task", "workflow", "task", "task"]);
   });
 
   it("validates definitions and run options before persistence", async () => {
@@ -163,7 +168,9 @@ describe("Durlo core API", () => {
     const task = durlo.task({ id: "task", run: async () => undefined });
 
     expect(() => durlo.task({ id: "task", run: async () => undefined })).toThrow("already defined");
-    await expect(task.enqueue({}, { delay: "1s", runAt: new Date() })).rejects.toBeInstanceOf(ValidationError);
+    await expect(task.enqueue({}, { delay: "1s", runAt: new Date() })).rejects.toBeInstanceOf(
+      ValidationError
+    );
     await expect(task.enqueue({}, { attempts: 0 })).rejects.toBeInstanceOf(ValidationError);
     await expect(task.enqueue({}, { priority: 1001 })).rejects.toBeInstanceOf(ValidationError);
     await expect(task.enqueue({}, { idempotencyKey: "" })).rejects.toBeInstanceOf(ValidationError);
@@ -181,11 +188,11 @@ describe("durations and retries", () => {
   it("normalizes retry defaults and calculates bounded jitter", () => {
     const retry = normalizeRetryPolicy({
       attempts: 5,
-      backoff: { type: "exponential", delay: "1s", factor: 3, maxDelay: "5s", jitter: 0.2 },
+      backoff: { type: "exponential", delay: "1s", factor: 3, maxDelay: "5s", jitter: 0.2 }
     });
     expect(retry).toEqual({
       attempts: 5,
-      backoff: { type: "exponential", delay: 1_000, factor: 3, maxDelay: 5_000, jitter: 0.2 },
+      backoff: { type: "exponential", delay: 1_000, factor: 3, maxDelay: 5_000, jitter: 0.2 }
     });
     expect(calculateRetryDelay(retry.backoff, 3, () => 0.5)).toBe(5_000);
   });
@@ -201,7 +208,7 @@ describe("durable serialization", () => {
     "rejects unsupported value %#",
     (value) => {
       expect(() => serialize(value)).toThrow(SerializationError);
-    },
+    }
   );
 
   it("rejects circular references and unsupported class instances", () => {
@@ -209,5 +216,15 @@ describe("durable serialization", () => {
     circular.self = circular;
     expect(() => serialize(circular)).toThrow("circular");
     expect(() => serialize(new Map())).toThrow("class instance");
+  });
+
+  it("always serializes thrown values, even when the value itself is unsupported", async () => {
+    const { serializeError } = await import("@durlo/core");
+    expect(serializeError(undefined)).toEqual({
+      name: "Error",
+      message: "Unknown error",
+      cause: "undefined"
+    });
+    expect(serializeError(1n)).toEqual({ name: "Error", message: "Unknown error", cause: "1" });
   });
 });

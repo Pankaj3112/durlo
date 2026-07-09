@@ -95,6 +95,6 @@ export const migrations: readonly Migration[] = [
       );
       create index durlo_attempts_run_idx on durlo_attempts (run_id, started_at);
       create index durlo_attempts_step_idx on durlo_attempts (run_id, step_id, started_at) where step_id is not null;
-    `,
-  },
+    `
+  }
 ];

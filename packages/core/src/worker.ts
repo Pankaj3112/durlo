@@ -9,7 +9,7 @@ import type {
   NormalizedRetryPolicy,
   RegisteredTaskDefinition,
   RegisteredWorkflowDefinition,
-  WorkerOptions,
+  WorkerOptions
 } from "./types.js";
 import { parseDuration } from "./validation.js";
 
@@ -47,9 +47,11 @@ export class Worker {
     }
     this.pollInterval = parseDuration(options.pollInterval ?? "1s", "poll interval");
     this.leaseDuration = parseDuration(options.leaseDuration ?? "30s", "lease duration");
-    if (this.leaseDuration <= 0) throw new ValidationError("lease duration must be greater than zero");
+    if (this.leaseDuration <= 0)
+      throw new ValidationError("lease duration must be greater than zero");
     for (const task of options.tasks ?? []) {
-      if (this.tasks.has(task.id)) throw new ValidationError(`task '${task.id}' is registered more than once`);
+      if (this.tasks.has(task.id))
+        throw new ValidationError(`task '${task.id}' is registered more than once`);
       this.tasks.set(task.id, task);
     }
     for (const workflow of options.workflows ?? []) {
@@ -87,8 +89,11 @@ export class Worker {
       leaseDuration: this.leaseDuration,
       resources: [
         ...[...this.tasks.keys()].map((resourceId) => ({ kind: "task" as const, resourceId })),
-        ...[...this.workflows.keys()].map((resourceId) => ({ kind: "workflow" as const, resourceId })),
-      ],
+        ...[...this.workflows.keys()].map((resourceId) => ({
+          kind: "workflow" as const,
+          resourceId
+        }))
+      ]
     });
     await Promise.all(runs.map((run) => this.executeRun(run)));
     return runs.length;
@@ -100,25 +105,28 @@ export class Worker {
     if (!task && !workflow) return;
     const abortController = new AbortController();
     let ownsLease = true;
-    const heartbeat = setInterval(() => {
-      void this.adapter
-        .extendRunLease({
-          runId: run.id,
-          workerId: this.id,
-          leaseToken: run.leaseToken,
-          leaseDuration: this.leaseDuration,
-        })
-        .then((extended) => {
-          if (!extended) {
+    const heartbeat = setInterval(
+      () => {
+        void this.adapter
+          .extendRunLease({
+            runId: run.id,
+            workerId: this.id,
+            leaseToken: run.leaseToken,
+            leaseDuration: this.leaseDuration
+          })
+          .then((extended) => {
+            if (!extended) {
+              ownsLease = false;
+              abortController.abort(new LostLeaseError(`lease lost for run ${run.id}`));
+            }
+          })
+          .catch(() => {
             ownsLease = false;
-            abortController.abort(new LostLeaseError(`lease lost for run ${run.id}`));
-          }
-        })
-        .catch(() => {
-          ownsLease = false;
-          abortController.abort(new LostLeaseError(`lease renewal failed for run ${run.id}`));
-        });
-    }, Math.max(1, Math.floor(this.leaseDuration / 3)));
+            abortController.abort(new LostLeaseError(`lease renewal failed for run ${run.id}`));
+          });
+      },
+      Math.max(1, Math.floor(this.leaseDuration / 3))
+    );
     heartbeat.unref();
 
     try {
@@ -127,23 +135,26 @@ export class Worker {
       const context = {
         run: { id: run.id, kind: run.kind, resourceId: run.resourceId },
         attempt: { number: run.attemptCount, maxAttempts: run.maxAttempts },
-        signal: abortController.signal,
+        signal: abortController.signal
       };
       const execution = task
         ? task._durlo.run(input, context)
         : workflow!._durlo.run({
             input,
             step: createStepTools(this.adapter, run),
-            ...context,
+            ...context
           });
       const timeout = this.timeoutFor(run);
-      const output = timeout === undefined ? await execution : await this.withTimeout(execution, timeout, abortController);
+      const output =
+        timeout === undefined
+          ? await execution
+          : await this.withTimeout(execution, timeout, abortController);
       if (!ownsLease) return;
       await this.adapter.completeRun({
         runId: run.id,
         workerId: this.id,
         leaseToken: run.leaseToken,
-        output: serialize(output === undefined ? null : output),
+        output: serialize(output === undefined ? null : output)
       });
     } catch (error) {
       if (error instanceof WorkflowSleepError) return;
@@ -155,7 +166,7 @@ export class Worker {
         ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
         : ({
             status: "pending",
-            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber)),
+            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber))
           } as const);
       try {
         await this.adapter.failRun({
@@ -164,7 +175,7 @@ export class Worker {
           leaseToken: run.leaseToken,
           error: serializeError(error),
           ...(error instanceof TimeoutError ? { attemptStatus: "timed_out" } : {}),
-          outcome,
+          outcome
         });
       } catch (writeError) {
         if (!isLostLease(writeError)) throw writeError;
@@ -185,7 +196,11 @@ export class Worker {
     return typeof options.timeout === "number" ? options.timeout : undefined;
   }
 
-  private async withTimeout<T>(promise: Promise<T>, milliseconds: number, controller: AbortController): Promise<T> {
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    milliseconds: number,
+    controller: AbortController
+  ): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {

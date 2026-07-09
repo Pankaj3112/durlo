@@ -15,7 +15,7 @@ import type {
   StepStatus,
   TimerRecord,
   TimerStatus,
-  TransactionalDurloAdapter,
+  TransactionalDurloAdapter
 } from "@durlo/core";
 import { LostLeaseError, RunStateError } from "@durlo/core";
 import { randomUUID } from "node:crypto";
@@ -80,7 +80,10 @@ type TimerRow = QueryResultRow & {
   cancelled_at: Date | null;
 };
 
-type Query = <R extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) => Promise<QueryResult<R>>;
+type Query = <R extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: unknown[]
+) => Promise<QueryResult<R>>;
 
 function mapRun(row: RunRow): RunRecord {
   return {
@@ -106,7 +109,7 @@ function mapRun(row: RunRow): RunRecord {
     updatedAt: row.updated_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
-    cancelledAt: row.cancelled_at,
+    cancelledAt: row.cancelled_at
   };
 }
 
@@ -124,7 +127,7 @@ function mapStep(row: StepRow): StepRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,
-    completedAt: row.completed_at,
+    completedAt: row.completed_at
   };
 }
 
@@ -137,7 +140,7 @@ function mapTimer(row: TimerRow): TimerRecord {
     status: row.status,
     createdAt: row.created_at,
     firedAt: row.fired_at,
-    cancelledAt: row.cancelled_at,
+    cancelledAt: row.cancelled_at
   };
 }
 
@@ -182,11 +185,13 @@ export class PostgresAdapter implements DurloAdapter {
       for (const migration of migrations) {
         const applied = await client.query<{ version: string }>(
           "select version from durlo_schema_migrations where version = $1",
-          [migration.version],
+          [migration.version]
         );
         if (applied.rowCount === 0) {
           await client.query(migration.sql);
-          await client.query("insert into durlo_schema_migrations (version) values ($1)", [migration.version]);
+          await client.query("insert into durlo_schema_migrations (version) values ($1)", [
+            migration.version
+          ]);
         }
       }
       await client.query("commit");
@@ -207,9 +212,13 @@ export class PostgresAdapter implements DurloAdapter {
   }
 
   async createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]> {
-    const keys = inputs.map((input) => input.idempotencyKey).filter((key): key is string => key !== null);
-    if (new Set(keys).size !== keys.length) throw new Error("duplicate idempotency keys in one batch are not allowed");
-    if (this.boundClient) return Promise.all(inputs.map((input) => this.insertRun(this.query(), input)));
+    const keys = inputs
+      .map((input) => input.idempotencyKey)
+      .filter((key): key is string => key !== null);
+    if (new Set(keys).size !== keys.length)
+      throw new Error("duplicate idempotency keys in one batch are not allowed");
+    if (this.boundClient)
+      return Promise.all(inputs.map((input) => this.insertRun(this.query(), input)));
 
     const client = await this.pool.connect();
     try {
@@ -228,7 +237,10 @@ export class PostgresAdapter implements DurloAdapter {
   }
 
   async getRun(id: string): Promise<RunRecord | null> {
-    const result = await this.query()<RunRow>(`select ${RUN_COLUMNS} from durlo_runs where id = $1`, [id]);
+    const result = await this.query()<RunRow>(
+      `select ${RUN_COLUMNS} from durlo_runs where id = $1`,
+      [id]
+    );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
   }
 
@@ -256,7 +268,7 @@ export class PostgresAdapter implements DurloAdapter {
           for update skip locked
           limit $3
         `,
-        [input.appId, resources, input.limit],
+        [input.appId, resources, input.limit]
       );
       const claimed: ClaimedRun[] = [];
       for (const candidate of candidates.rows) {
@@ -271,15 +283,15 @@ export class PostgresAdapter implements DurloAdapter {
             [
               candidate.id,
               candidate.lease_token,
-              JSON.stringify({ name: "StalledError", message: "worker lease expired" }),
-            ],
+              JSON.stringify({ name: "StalledError", message: "worker lease expired" })
+            ]
           );
           const failureResult = await client.query<{ count: string }>(
             `
               select count(*)::text as count from durlo_attempts
               where run_id = $1 and kind = 'run' and status in ('failed', 'timed_out', 'stalled')
             `,
-            [candidate.id],
+            [candidate.id]
           );
           const failureCount = Number(failureResult.rows[0]?.count ?? 0);
           if (failureCount >= candidate.max_attempts) {
@@ -293,7 +305,10 @@ export class PostgresAdapter implements DurloAdapter {
                     updated_at = now(), completed_at = now()
                 where id = $1
               `,
-              [candidate.id, JSON.stringify({ name: "StalledError", message: "worker lease expired" })],
+              [
+                candidate.id,
+                JSON.stringify({ name: "StalledError", message: "worker lease expired" })
+              ]
             );
             continue;
           }
@@ -304,7 +319,7 @@ export class PostgresAdapter implements DurloAdapter {
             select count(*)::text as count from durlo_attempts
             where run_id = $1 and kind = 'run' and status in ('failed', 'timed_out', 'stalled')
           `,
-          [candidate.id],
+          [candidate.id]
         );
         const failureCount = Number(failureResult.rows[0]?.count ?? 0);
 
@@ -323,7 +338,13 @@ export class PostgresAdapter implements DurloAdapter {
             where id = $1
             returning ${RUN_COLUMNS}
           `,
-          [candidate.id, input.workerId, leaseToken, input.leaseDuration, candidate.status === "running" ? 1 : 0],
+          [
+            candidate.id,
+            input.workerId,
+            leaseToken,
+            input.leaseDuration,
+            candidate.status === "running" ? 1 : 0
+          ]
         );
         const row = updated.rows[0];
         if (!row) continue;
@@ -333,7 +354,7 @@ export class PostgresAdapter implements DurloAdapter {
               id, run_id, kind, attempt_number, status, worker_id, lease_token
             ) values ($1, $2, 'run', $3, 'running', $4, $5)
           `,
-          [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken],
+          [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken]
         );
         claimed.push({ ...mapRun(row), failureCount } as ClaimedRun);
       }
@@ -355,7 +376,7 @@ export class PostgresAdapter implements DurloAdapter {
         where id = $1 and locked_by = $2 and lease_token = $3
           and status = 'running' and locked_until > now()
       `,
-      [input.runId, input.workerId, input.leaseToken, input.leaseDuration],
+      [input.runId, input.workerId, input.leaseToken, input.leaseDuration]
     );
     return result.rowCount === 1;
   }
@@ -371,13 +392,13 @@ export class PostgresAdapter implements DurloAdapter {
           where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
           returning id
         `,
-        [input.runId, input.workerId, input.leaseToken, JSON.stringify(input.output)],
+        [input.runId, input.workerId, input.leaseToken, JSON.stringify(input.output)]
       );
       if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(
         `update durlo_attempts set status = 'succeeded', completed_at = now()
          where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'`,
-        [input.runId, input.leaseToken],
+        [input.runId, input.leaseToken]
       );
     });
   }
@@ -403,8 +424,8 @@ export class PostgresAdapter implements DurloAdapter {
           input.leaseToken,
           input.outcome.status,
           scheduledAt,
-          JSON.stringify(input.error),
-        ],
+          JSON.stringify(input.error)
+        ]
       );
       if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(
@@ -413,15 +434,54 @@ export class PostgresAdapter implements DurloAdapter {
           set status = $3, error_json = $4::jsonb, completed_at = now()
           where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'
         `,
-        [input.runId, input.leaseToken, input.attemptStatus ?? "failed", JSON.stringify(input.error)],
+        [
+          input.runId,
+          input.leaseToken,
+          input.attemptStatus ?? "failed",
+          JSON.stringify(input.error)
+        ]
       );
     });
+  }
+
+  async releaseRun(input: OwnedRunInput): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const result = await client.query(
+        `
+          update durlo_runs
+          set status = 'pending', scheduled_at = now(),
+              locked_by = null, lease_token = null, locked_until = null,
+              updated_at = now()
+          where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
+          returning id
+        `,
+        [input.runId, input.workerId, input.leaseToken]
+      );
+      if (result.rowCount === 1) {
+        await client.query(
+          `
+            update durlo_attempts set status = 'cancelled', completed_at = now()
+            where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
+          `,
+          [input.runId, input.leaseToken]
+        );
+      }
+      await client.query("commit");
+      return result.rowCount === 1;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getStep(runId: string, stepId: string): Promise<StepRecord | null> {
     const result = await this.query()<StepRow>(
       `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2`,
-      [runId, stepId],
+      [runId, stepId]
     );
     return result.rows[0] ? mapStep(result.rows[0]) : null;
   }
@@ -437,11 +497,11 @@ export class PostgresAdapter implements DurloAdapter {
           values ($1, $2, $3, 'pending', $4)
           on conflict (run_id, step_id) do nothing
         `,
-        [randomUUID(), input.runId, input.stepId, input.maxAttempts],
+        [randomUUID(), input.runId, input.stepId, input.maxAttempts]
       );
       const selected = await client.query<StepRow>(
         `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2 for update`,
-        [input.runId, input.stepId],
+        [input.runId, input.stepId]
       );
       const current = selected.rows[0];
       if (!current) throw new Error(`step '${input.stepId}' could not be created`);
@@ -458,7 +518,7 @@ export class PostgresAdapter implements DurloAdapter {
           where id = $1
           returning ${STEP_COLUMNS}
         `,
-        [current.id],
+        [current.id]
       );
       const row = updated.rows[0];
       if (!row) throw new Error(`step '${input.stepId}' could not be started`);
@@ -468,7 +528,14 @@ export class PostgresAdapter implements DurloAdapter {
             id, run_id, step_id, kind, attempt_number, status, worker_id, lease_token
           ) values ($1, $2, $3, 'step', $4, 'running', $5, $6)
         `,
-        [randomUUID(), input.runId, input.stepId, row.attempt_count, input.workerId, input.leaseToken],
+        [
+          randomUUID(),
+          input.runId,
+          input.stepId,
+          row.attempt_count,
+          input.workerId,
+          input.leaseToken
+        ]
       );
       await client.query("commit");
       return mapStep(row);
@@ -490,7 +557,7 @@ export class PostgresAdapter implements DurloAdapter {
               updated_at = now(), completed_at = now()
           where run_id = $1 and step_id = $2 and status = 'running'
         `,
-        [input.runId, input.stepId, JSON.stringify(input.result)],
+        [input.runId, input.stepId, JSON.stringify(input.result)]
       );
       if (result.rowCount !== 1) throw new Error(`step '${input.stepId}' is not running`);
       await client.query(
@@ -499,7 +566,7 @@ export class PostgresAdapter implements DurloAdapter {
           where run_id = $1 and step_id = $2 and kind = 'step'
             and lease_token = $3 and status = 'running'
         `,
-        [input.runId, input.stepId, input.leaseToken],
+        [input.runId, input.stepId, input.leaseToken]
       );
     });
   }
@@ -513,7 +580,7 @@ export class PostgresAdapter implements DurloAdapter {
           set status = 'failed', error_json = $3::jsonb, updated_at = now(), completed_at = now()
           where run_id = $1 and step_id = $2 and status = 'running'
         `,
-        [input.runId, input.stepId, JSON.stringify(input.error)],
+        [input.runId, input.stepId, JSON.stringify(input.error)]
       );
       if (result.rowCount !== 1) throw new Error(`step '${input.stepId}' is not running`);
       await client.query(
@@ -523,7 +590,7 @@ export class PostgresAdapter implements DurloAdapter {
           where run_id = $1 and step_id = $2 and kind = 'step'
             and lease_token = $3 and status = 'running'
         `,
-        [input.runId, input.stepId, input.leaseToken, JSON.stringify(input.error)],
+        [input.runId, input.stepId, input.leaseToken, JSON.stringify(input.error)]
       );
     });
   }
@@ -531,7 +598,7 @@ export class PostgresAdapter implements DurloAdapter {
   async getTimer(runId: string, stepId: string): Promise<TimerRecord | null> {
     const result = await this.query()<TimerRow>(
       `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2`,
-      [runId, stepId],
+      [runId, stepId]
     );
     return result.rows[0] ? mapTimer(result.rows[0]) : null;
   }
@@ -547,11 +614,11 @@ export class PostgresAdapter implements DurloAdapter {
           values ($1, $2, $3, $4, 'pending')
           on conflict (run_id, step_id) do nothing
         `,
-        [randomUUID(), input.runId, input.stepId, input.fireAt],
+        [randomUUID(), input.runId, input.stepId, input.fireAt]
       );
       const selected = await client.query<TimerRow>(
         `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2 for update`,
-        [input.runId, input.stepId],
+        [input.runId, input.stepId]
       );
       const timer = selected.rows[0];
       if (!timer) throw new Error(`timer '${input.stepId}' could not be created`);
@@ -569,7 +636,7 @@ export class PostgresAdapter implements DurloAdapter {
               updated_at = now()
           where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
         `,
-        [input.runId, input.workerId, input.leaseToken],
+        [input.runId, input.workerId, input.leaseToken]
       );
       if (runResult.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(
@@ -577,7 +644,7 @@ export class PostgresAdapter implements DurloAdapter {
           update durlo_attempts set status = 'succeeded', completed_at = now()
           where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
         `,
-        [input.runId, input.leaseToken],
+        [input.runId, input.leaseToken]
       );
       await client.query("commit");
       return mapTimer(timer);
@@ -605,7 +672,7 @@ export class PostgresAdapter implements DurloAdapter {
           for update of t, r skip locked
           limit $2
         `,
-        [input.appId, input.limit],
+        [input.appId, input.limit]
       );
       const fired: TimerRecord[] = [];
       for (const timer of selected.rows) {
@@ -616,7 +683,7 @@ export class PostgresAdapter implements DurloAdapter {
             where id = $1 and status = 'pending'
             returning ${TIMER_COLUMNS}
           `,
-          [timer.id],
+          [timer.id]
         );
         const row = updated.rows[0];
         if (!row) continue;
@@ -625,7 +692,7 @@ export class PostgresAdapter implements DurloAdapter {
             update durlo_runs set status = 'pending', scheduled_at = now(), updated_at = now()
             where id = $1 and status = 'sleeping'
           `,
-          [timer.run_id],
+          [timer.run_id]
         );
         if (resumed.rowCount === 1) fired.push(mapTimer(row));
       }
@@ -645,7 +712,7 @@ export class PostgresAdapter implements DurloAdapter {
       await client.query("begin");
       const selected = await client.query<RunRow>(
         `select ${RUN_COLUMNS} from durlo_runs where id = $1 for update`,
-        [id],
+        [id]
       );
       const current = selected.rows[0];
       if (!current) throw new RunStateError(`run '${id}' was not found`);
@@ -662,14 +729,14 @@ export class PostgresAdapter implements DurloAdapter {
             update durlo_attempts set status = 'cancelled', completed_at = now()
             where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
           `,
-          [id, current.lease_token],
+          [id, current.lease_token]
         );
         await client.query(
           `
             update durlo_attempts set status = 'cancelled', completed_at = now()
             where run_id = $1 and kind = 'step' and lease_token = $2 and status = 'running'
           `,
-          [id, current.lease_token],
+          [id, current.lease_token]
         );
       }
       await client.query(
@@ -677,7 +744,7 @@ export class PostgresAdapter implements DurloAdapter {
           update durlo_timers set status = 'cancelled', cancelled_at = now()
           where run_id = $1 and status = 'pending'
         `,
-        [id],
+        [id]
       );
       const updated = await client.query<RunRow>(
         `
@@ -687,7 +754,7 @@ export class PostgresAdapter implements DurloAdapter {
           where id = $1
           returning ${RUN_COLUMNS}
         `,
-        [id],
+        [id]
       );
       await client.query("commit");
       return mapRun(updated.rows[0]!);
@@ -710,7 +777,7 @@ export class PostgresAdapter implements DurloAdapter {
           and ((kind = 'task' and status = 'dead_letter') or (kind = 'workflow' and status = 'failed'))
         returning ${RUN_COLUMNS}
       `,
-      [id],
+      [id]
     );
     const row = result.rows[0];
     if (row) return mapRun(row);
@@ -720,7 +787,12 @@ export class PostgresAdapter implements DurloAdapter {
   }
 
   withTransaction(client: unknown): TransactionalDurloAdapter {
-    if (!client || typeof client !== "object" || !("query" in client) || typeof client.query !== "function") {
+    if (
+      !client ||
+      typeof client !== "object" ||
+      !("query" in client) ||
+      typeof client.query !== "function"
+    ) {
       throw new TypeError("transaction client must be a raw pg client");
     }
     return new PostgresAdapter(this.pool, client as PoolClient);
@@ -753,8 +825,8 @@ export class PostgresAdapter implements DurloAdapter {
         input.idempotencyKey,
         input.priority,
         input.scheduledAt,
-        input.maxAttempts,
-      ],
+        input.maxAttempts
+      ]
     );
     const row = result.rows[0];
     if (!row) throw new Error("Postgres did not return the created run");
@@ -782,7 +854,7 @@ export class PostgresAdapter implements DurloAdapter {
         where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
         for update
       `,
-      [input.runId, input.workerId, input.leaseToken],
+      [input.runId, input.workerId, input.leaseToken]
     );
     if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
   }

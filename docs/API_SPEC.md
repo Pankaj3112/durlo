@@ -45,12 +45,20 @@ No default import is required for v1.
 import { Durlo } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 
+export const adapter = postgresAdapter({
+  connectionString: process.env.DATABASE_URL!,
+});
+
 export const durlo = new Durlo({
   id: "my-app",
-  adapter: postgresAdapter({
-    connectionString: process.env.DATABASE_URL!,
-  }),
+  adapter,
 });
+```
+
+Call the Postgres adapter's idempotent migration method before enqueueing or running work:
+
+```ts
+await adapter.migrate();
 ```
 
 ```ts
@@ -355,28 +363,35 @@ import { durlo } from "./client";
 import { sendWelcomeEmail } from "./tasks";
 import { onboarding } from "./workflows";
 
-await durlo.worker({
+const worker = durlo.worker({
   tasks: [sendWelcomeEmail],
   workflows: [onboarding],
   concurrency: 10,
   pollInterval: "1s",
   leaseDuration: "30s",
-}).start();
+});
+
+const running = worker.start();
+
+// During graceful application shutdown:
+worker.stop();
+await running;
 ```
 
 ```ts
 const worker = durlo.worker({
-  tasks?: Task<any, any>[];
-  workflows?: Workflow<any, any>[];
+  tasks?: RegisteredTaskDefinition[];
+  workflows?: RegisteredWorkflowDefinition[];
   concurrency?: number;
   pollInterval?: DurationInput;
   leaseDuration?: DurationInput;
   workerId?: string;
-  shutdownTimeout?: DurationInput;
 });
 
-await worker.start();
-await worker.stop();
+await worker.runOnce(); // one timer/claim/execution cycle
+const running = worker.start(); // polls until stop() is requested
+worker.stop();
+await running;
 ```
 
 Worker option defaults:
@@ -385,8 +400,7 @@ Worker option defaults:
 {
   concurrency: 10,
   pollInterval: "1s",
-  leaseDuration: "30s",
-  shutdownTimeout: "30s"
+  leaseDuration: "30s"
 }
 ```
 

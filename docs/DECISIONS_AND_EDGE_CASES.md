@@ -150,6 +150,12 @@ Decision:
 - manual retry preserves attempt history
 - manual retry does not reset idempotency keys
 
+Manual retry also does not reset automatic failure history. It grants one new execution attempt; a failed manual attempt returns to terminal status and can be retried manually again.
+
+### Workflow Sleeps Do Not Consume Failure Retries
+
+`attempt_count` records every claim, including workflow re-entry after a sleep. Retry exhaustion is calculated from failed, timed-out, and stalled attempt records rather than raw claim count. A workflow may therefore cross more durable sleep boundaries than its configured `attempts` value, while actual failures still obey that retry budget.
+
 ## Workflow Edge Cases
 
 ### Durlo Is Not Temporal Replay

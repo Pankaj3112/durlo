@@ -1,10 +1,5 @@
 import { ValidationError } from "./errors.js";
-import type {
-  BackoffPolicy,
-  DurationInput,
-  RunOptions,
-  StandardSchema,
-} from "./types.js";
+import type { BackoffPolicy, DurationInput, RunOptions, StandardSchema } from "./types.js";
 
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/;
 const DURATION_FACTORS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
@@ -70,7 +65,11 @@ export function validateRunOptions(options: RunOptions): void {
   if (options.attempts !== undefined) validateAttempts(options.attempts);
   if (options.backoff !== undefined) validateBackoff(options.backoff);
   if (options.priority !== undefined) {
-    if (!Number.isInteger(options.priority) || options.priority < -1000 || options.priority > 1000) {
+    if (
+      !Number.isInteger(options.priority) ||
+      options.priority < -1000 ||
+      options.priority > 1000
+    ) {
       throw new ValidationError("priority must be an integer from -1000 to 1000");
     }
   }
@@ -81,7 +80,10 @@ export function validateRunOptions(options: RunOptions): void {
   }
 }
 
-export async function validateSchema<T>(schema: StandardSchema<T> | undefined, input: unknown): Promise<T> {
+export async function validateSchema<T>(
+  schema: StandardSchema<T> | undefined,
+  input: unknown
+): Promise<T> {
   if (!schema) return input as T;
   const result = await schema["~standard"].validate(input);
   if (result.issues) {

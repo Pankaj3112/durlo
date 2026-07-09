@@ -7,16 +7,19 @@ export function serialize(value: unknown): JsonValue {
   const seen = new WeakSet<object>();
 
   const visit = (current: unknown, path: string): JsonValue => {
-    if (current === null || typeof current === "string" || typeof current === "boolean") return current;
+    if (current === null || typeof current === "string" || typeof current === "boolean")
+      return current;
     if (typeof current === "number") {
-      if (!Number.isFinite(current)) throw new SerializationError(`${path} contains a non-finite number`);
+      if (!Number.isFinite(current))
+        throw new SerializationError(`${path} contains a non-finite number`);
       return current;
     }
     if (["undefined", "bigint", "function", "symbol"].includes(typeof current)) {
       throw new SerializationError(`${path} contains unsupported ${typeof current}`);
     }
     if (current instanceof Date) {
-      if (!Number.isFinite(current.getTime())) throw new SerializationError(`${path} contains an invalid Date`);
+      if (!Number.isFinite(current.getTime()))
+        throw new SerializationError(`${path} contains an invalid Date`);
       return { [DATE_TAG]: current.toISOString() };
     }
     if (current instanceof Error) return serializeError(current) as unknown as JsonValue;
@@ -24,13 +27,15 @@ export function serialize(value: unknown): JsonValue {
     if (seen.has(current)) throw new SerializationError(`${path} contains a circular reference`);
     seen.add(current);
     try {
-      if (Array.isArray(current)) return current.map((item, index) => visit(item, `${path}[${index}]`));
+      if (Array.isArray(current))
+        return current.map((item, index) => visit(item, `${path}[${index}]`));
       const prototype = Object.getPrototypeOf(current) as object | null;
       if (prototype !== Object.prototype && prototype !== null) {
         throw new SerializationError(`${path} contains an unsupported class instance`);
       }
       const result: Record<string, JsonValue> = {};
-      for (const [key, item] of Object.entries(current)) result[key] = visit(item, `${path}.${key}`);
+      for (const [key, item] of Object.entries(current))
+        result[key] = visit(item, `${path}.${key}`);
       return result;
     } finally {
       seen.delete(current);
@@ -65,8 +70,14 @@ export function serializeError(error: unknown): SerializedError {
       name: error.name,
       message: error.message,
       ...(error.stack === undefined ? {} : { stack: error.stack }),
-      ...(cause === undefined ? {} : { cause }),
+      ...(cause === undefined ? {} : { cause })
     };
   }
-  return { name: "Error", message: typeof error === "string" ? error : "Unknown error", cause: serialize(error) };
+  let cause: JsonValue;
+  try {
+    cause = serialize(error);
+  } catch {
+    cause = String(error);
+  }
+  return { name: "Error", message: typeof error === "string" ? error : "Unknown error", cause };
 }

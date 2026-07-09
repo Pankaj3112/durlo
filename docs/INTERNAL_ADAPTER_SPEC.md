@@ -137,6 +137,8 @@ Expired running rows are claimable only when `locked_until < now()`. Reclaiming 
 
 Rows moved to terminal status during expired-lease cleanup are not returned to the worker.
 
+Retry budget checks count run attempts whose status is `failed`, `timed_out`, or `stalled`. Raw `attempt_count` includes successful workflow sleep/resume claims and is not used by itself for exhaustion.
+
 ## Lease Extension
 
 `extendRunLease(...)` extends a running run's lease.

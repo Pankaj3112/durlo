@@ -276,10 +276,12 @@ limit $2;
 
 Expired running rows must not stay `running` forever. The adapter must either:
 
-1. Reclaim the row for another attempt if `attempt_count < max_attempts`.
+1. Reclaim the row when the count of failed, timed-out, and stalled run attempts is below `max_attempts`.
 2. Move the row to `dead_letter` for tasks or `failed` for workflows if retry budget is exhausted.
 
 When reclaiming expired running rows, the adapter must first mark the previous active attempt `stalled`, increment `stalled_count`, and then create a new running attempt.
+
+`attempt_count` is an execution/claim counter, not the retry-failure counter. This distinction lets workflow sleep resumes create honest attempt history without consuming the workflow's failure retry budget.
 
 The transaction should update claimed rows with:
 

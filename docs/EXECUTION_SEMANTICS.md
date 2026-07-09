@@ -82,6 +82,8 @@ Durlo must not hold a database transaction open while user code runs.
 
 Lease expiry is treated as a stalled attempt. It is recorded in attempt history and consumes retry budget. If retry budget is exhausted, an expired task moves to `dead_letter` and an expired workflow moves to `failed`.
 
+`attempt_count` counts claims and workflow re-entries. Retry exhaustion is based on failed, timed-out, and stalled attempt history, so successful sleep/resume boundaries do not consume the workflow's failure retry budget.
+
 ## Task Semantics
 
 A task run executes the task `run(input, ctx)` function.
@@ -192,6 +194,8 @@ For running runs, cancellation changes the run to `cancelled` and clears the lea
 `durlo.runs.retry(handleOrId)` creates a new attempt for a failed or dead-letter run.
 
 Manual retry does not clear history. Attempts remain visible for debugging.
+
+Manual retry schedules one new claim without resetting the automatic retry budget. If that manual attempt fails, the run returns to `dead_letter` or `failed`; another manual retry may be requested afterward.
 
 Manual retry is allowed for `failed` workflow runs and `dead_letter` task runs. V1 does not manually retry `completed`, `cancelled`, `pending`, `running`, or `sleeping` runs.
 

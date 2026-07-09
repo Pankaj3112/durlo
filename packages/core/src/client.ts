@@ -14,7 +14,7 @@ import type {
   TaskDefinitionOptions,
   TransactionalDurloAdapter,
   WorkflowDefinition,
-  WorkflowDefinitionOptions,
+  WorkflowDefinitionOptions
 } from "./types.js";
 import { parseDuration, validateId, validateRunOptions, validateSchema } from "./validation.js";
 import { Worker } from "./worker.js";
@@ -26,12 +26,13 @@ function toHandle<TOutput>(record: RunRecord): RunHandle<TOutput> {
     kind: record.kind,
     resourceId: record.resourceId,
     status: record.status,
-    createdAt: record.createdAt,
+    createdAt: record.createdAt
   };
 }
 
 function isBatchItem<T>(item: T | BatchItem<T>): item is BatchItem<T> {
-  return Boolean(item && typeof item === "object" && "input" in item);
+  if (!item || typeof item !== "object" || !("input" in item)) return false;
+  return Object.keys(item).every((key) => key === "input" || key === "options");
 }
 
 export class Durlo {
@@ -52,21 +53,37 @@ export class Durlo {
     this.id = options.id;
     this.adapter = options.adapter;
     this.defaultRetry = normalizeRetryPolicy(options.defaultRetry);
-    if (options.defaultTimeout !== undefined) this.defaultTimeout = parseDuration(options.defaultTimeout, "default timeout");
-    const getId = (value: RunHandle | string): string => (typeof value === "string" ? value : value.id);
+    if (options.defaultTimeout !== undefined)
+      this.defaultTimeout = parseDuration(options.defaultTimeout, "default timeout");
+    const getId = (value: RunHandle | string): string =>
+      typeof value === "string" ? value : value.id;
     this.runs = {
       get: (value) => this.adapter.getRun(getId(value)),
       cancel: (value) => this.adapter.cancelRun(getId(value)),
-      retry: (value) => this.adapter.retryRun(getId(value)),
+      retry: (value) => this.adapter.retryRun(getId(value))
     };
   }
 
-  task<TInput, TOutput = void>(options: TaskDefinitionOptions<TInput, TOutput>): TaskDefinition<TInput, TOutput> {
+  task<TInput, TOutput = void>(
+    options: TaskDefinitionOptions<TInput, TOutput>
+  ): TaskDefinition<TInput, TOutput> {
     this.register("task", options.id);
     const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
-    const definitionTimeout = options.timeout === undefined ? this.defaultTimeout : parseDuration(options.timeout, "task timeout");
+    const definitionTimeout =
+      options.timeout === undefined
+        ? this.defaultTimeout
+        : parseDuration(options.timeout, "task timeout");
     const create = (adapter: TransactionalDurloAdapter, input: TInput, runOptions?: RunOptions) =>
-      this.createRun<TInput, TOutput>(adapter, "task", options.id, options.schema, input, runOptions, definitionRetry, definitionTimeout);
+      this.createRun<TInput, TOutput>(
+        adapter,
+        "task",
+        options.id,
+        options.schema,
+        input,
+        runOptions,
+        definitionRetry,
+        definitionTimeout
+      );
     return {
       id: options.id,
       ...(options.name === undefined ? {} : { name: options.name }),
@@ -74,30 +91,43 @@ export class Durlo {
       options,
       _durlo: {
         validate: (input) => validateSchema(options.schema, input),
-        run: async (input, context) => options.run(input as TInput, context),
+        run: async (input, context) => options.run(input as TInput, context)
       },
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
         const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
         const prepared = await Promise.all(
           normalized.map(({ input, options: runOptions }) =>
-            this.prepareRun("task", options.id, options.schema, input, runOptions, definitionRetry, definitionTimeout),
-          ),
+            this.prepareRun(
+              "task",
+              options.id,
+              options.schema,
+              input,
+              runOptions,
+              definitionRetry,
+              definitionTimeout
+            )
+          )
         );
-        const keys = prepared.map((item) => item.idempotencyKey).filter((key): key is string => key !== null);
-        if (new Set(keys).size !== keys.length) throw new Error("duplicate idempotency keys in one batch are not allowed");
+        const keys = prepared
+          .map((item) => item.idempotencyKey)
+          .filter((key): key is string => key !== null);
+        if (new Set(keys).size !== keys.length)
+          throw new Error("duplicate idempotency keys in one batch are not allowed");
         return (await this.adapter.createRuns(prepared)).map(toHandle<TOutput>);
-      },
+      }
     };
   }
 
   workflow<TInput, TOutput = void>(
-    options: WorkflowDefinitionOptions<TInput, TOutput>,
+    options: WorkflowDefinitionOptions<TInput, TOutput>
   ): WorkflowDefinition<TInput, TOutput> {
     this.register("workflow", options.id);
     const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
     const definitionTimeout =
-      options.timeout === undefined ? this.defaultTimeout : parseDuration(options.timeout, "workflow timeout");
+      options.timeout === undefined
+        ? this.defaultTimeout
+        : parseDuration(options.timeout, "workflow timeout");
     return {
       id: options.id,
       ...(options.name === undefined ? {} : { name: options.name }),
@@ -105,7 +135,7 @@ export class Durlo {
       options,
       _durlo: {
         validate: (input) => validateSchema(options.schema, input),
-        run: async (context) => options.run(context as Parameters<typeof options.run>[0]),
+        run: async (context) => options.run(context as Parameters<typeof options.run>[0])
       },
       start: (input, runOptions) =>
         this.createRun(
@@ -116,27 +146,85 @@ export class Durlo {
           input,
           runOptions,
           definitionRetry,
-          definitionTimeout,
-        ),
+          definitionTimeout
+        )
     };
   }
 
   tx(client: unknown): {
-    enqueue: <TInput, TOutput>(task: TaskDefinition<TInput, TOutput>, input: TInput, options?: RunOptions) => Promise<RunHandle<TOutput>>;
-    start: <TInput, TOutput>(workflow: WorkflowDefinition<TInput, TOutput>, input: TInput, options?: RunOptions) => Promise<RunHandle<TOutput>>;
+    enqueue: <TInput, TOutput>(
+      task: TaskDefinition<TInput, TOutput>,
+      input: TInput,
+      options?: RunOptions
+    ) => Promise<RunHandle<TOutput>>;
+    start: <TInput, TOutput>(
+      workflow: WorkflowDefinition<TInput, TOutput>,
+      input: TInput,
+      options?: RunOptions
+    ) => Promise<RunHandle<TOutput>>;
+    batchEnqueue: <TInput, TOutput>(
+      task: TaskDefinition<TInput, TOutput>,
+      items: Array<TInput | BatchItem<TInput>>
+    ) => Promise<Array<RunHandle<TOutput>>>;
   } {
     const adapter = this.adapter.withTransaction(client);
     return {
       enqueue: (task, input, options) => {
         const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
-        const timeout = task.options.timeout === undefined ? this.defaultTimeout : parseDuration(task.options.timeout);
-        return this.createRun(adapter, "task", task.id, task.options.schema, input, options, retry, timeout);
+        const timeout =
+          task.options.timeout === undefined
+            ? this.defaultTimeout
+            : parseDuration(task.options.timeout);
+        return this.createRun(
+          adapter,
+          "task",
+          task.id,
+          task.options.schema,
+          input,
+          options,
+          retry,
+          timeout
+        );
       },
       start: (workflow, input, options) => {
         const retry = normalizeRetryPolicy(workflow.options.retry, this.defaultRetry);
-        const timeout = workflow.options.timeout === undefined ? this.defaultTimeout : parseDuration(workflow.options.timeout);
-        return this.createRun(adapter, "workflow", workflow.id, workflow.options.schema, input, options, retry, timeout);
+        const timeout =
+          workflow.options.timeout === undefined
+            ? this.defaultTimeout
+            : parseDuration(workflow.options.timeout);
+        return this.createRun(
+          adapter,
+          "workflow",
+          workflow.id,
+          workflow.options.schema,
+          input,
+          options,
+          retry,
+          timeout
+        );
       },
+      batchEnqueue: async <TInput, TOutput>(
+        task: TaskDefinition<TInput, TOutput>,
+        items: Array<TInput | BatchItem<TInput>>
+      ) => {
+        const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
+        const timeout =
+          task.options.timeout === undefined
+            ? this.defaultTimeout
+            : parseDuration(task.options.timeout);
+        const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
+        const prepared = await Promise.all(
+          normalized.map(({ input, options }) =>
+            this.prepareRun("task", task.id, task.options.schema, input, options, retry, timeout)
+          )
+        );
+        const keys = prepared
+          .map((item) => item.idempotencyKey)
+          .filter((key): key is string => key !== null);
+        if (new Set(keys).size !== keys.length)
+          throw new Error("duplicate idempotency keys in one batch are not allowed");
+        return (await adapter.createRuns(prepared)).map(toHandle<TOutput>);
+      }
     };
   }
 
@@ -159,10 +247,12 @@ export class Durlo {
     input: TInput,
     options: RunOptions | undefined,
     retry: NormalizedRetryPolicy,
-    timeout: number | undefined,
+    timeout: number | undefined
   ): Promise<RunHandle<TOutput>> {
     return toHandle<TOutput>(
-      await adapter.createRun(await this.prepareRun(kind, resourceId, schema, input, options, retry, timeout)),
+      await adapter.createRun(
+        await this.prepareRun(kind, resourceId, schema, input, options, retry, timeout)
+      )
     );
   }
 
@@ -173,21 +263,29 @@ export class Durlo {
     input: TInput,
     options: RunOptions | undefined,
     definitionRetry: NormalizedRetryPolicy,
-    definitionTimeout: number | undefined,
+    definitionTimeout: number | undefined
   ): Promise<CreateRunInput> {
     const runOptions = options ?? {};
     validateRunOptions(runOptions);
     const validatedInput = await validateSchema(schema, input);
     const retry = normalizeRetryPolicy(
-      { ...(runOptions.attempts === undefined ? {} : { attempts: runOptions.attempts }), ...(runOptions.backoff === undefined ? {} : { backoff: runOptions.backoff }) },
-      definitionRetry,
+      {
+        ...(runOptions.attempts === undefined ? {} : { attempts: runOptions.attempts }),
+        ...(runOptions.backoff === undefined ? {} : { backoff: runOptions.backoff })
+      },
+      definitionRetry
     );
-    const timeout = runOptions.timeout === undefined ? definitionTimeout : parseDuration(runOptions.timeout, "run timeout");
+    const timeout =
+      runOptions.timeout === undefined
+        ? definitionTimeout
+        : parseDuration(runOptions.timeout, "run timeout");
     const now = Date.now();
     const scheduledAt =
       runOptions.runAt !== undefined
         ? new Date(runOptions.runAt)
-        : new Date(now + (runOptions.delay === undefined ? 0 : parseDuration(runOptions.delay, "delay")));
+        : new Date(
+            now + (runOptions.delay === undefined ? 0 : parseDuration(runOptions.delay, "delay"))
+          );
     const storedOptions = serialize({ retry, ...(timeout === undefined ? {} : { timeout }) });
     return {
       id: randomUUID(),
@@ -199,7 +297,7 @@ export class Durlo {
       idempotencyKey: runOptions.idempotencyKey ?? null,
       priority: runOptions.priority ?? 0,
       scheduledAt,
-      maxAttempts: retry.attempts,
+      maxAttempts: retry.attempts
     };
   }
 }

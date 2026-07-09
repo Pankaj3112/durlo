@@ -42,13 +42,7 @@ export type RunOptions = {
 
 export type RunKind = "task" | "workflow";
 export type RunStatus =
-  | "pending"
-  | "running"
-  | "sleeping"
-  | "completed"
-  | "failed"
-  | "dead_letter"
-  | "cancelled";
+  "pending" | "running" | "sleeping" | "completed" | "failed" | "dead_letter" | "cancelled";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -116,9 +110,7 @@ export type OwnedRunInput = {
 export type FailRunInput = OwnedRunInput & {
   error: SerializedError;
   attemptStatus?: "failed" | "timed_out";
-  outcome:
-    | { status: "pending"; scheduledAt: Date }
-    | { status: "failed" | "dead_letter" };
+  outcome: { status: "pending"; scheduledAt: Date } | { status: "failed" | "dead_letter" };
 };
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";
@@ -180,6 +172,7 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
   completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
+  releaseRun(input: OwnedRunInput): Promise<boolean>;
   getStep(runId: string, stepId: string): Promise<StepRecord | null>;
   startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord>;
   completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
@@ -192,13 +185,18 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
 
 export type StandardSchemaResult<T> =
   | { value: T; issues?: undefined }
-  | { value?: undefined; issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey> }> };
+  | {
+      value?: undefined;
+      issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey> }>;
+    };
 
 export type StandardSchema<TInput> = {
   readonly "~standard": {
     readonly version: 1;
     readonly vendor: string;
-    readonly validate: (value: unknown) => StandardSchemaResult<TInput> | Promise<StandardSchemaResult<TInput>>;
+    readonly validate: (
+      value: unknown
+    ) => StandardSchemaResult<TInput> | Promise<StandardSchemaResult<TInput>>;
   };
 };
 

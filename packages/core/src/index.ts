@@ -3,7 +3,7 @@ export {
   DEFAULT_RETRY_POLICY,
   calculateRetryDelay,
   normalizeBackoff,
-  normalizeRetryPolicy,
+  normalizeRetryPolicy
 } from "./retry.js";
 export { deserialize, serialize, serializeError } from "./serialization.js";
 export { parseDuration } from "./validation.js";
@@ -14,6 +14,6 @@ export {
   RunStateError,
   SerializationError,
   ValidationError,
-  WorkflowSleepError,
+  WorkflowSleepError
 } from "./errors.js";
 export type * from "./types.js";
