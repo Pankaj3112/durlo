@@ -120,6 +120,26 @@ export type FailRunInput = OwnedRunInput & {
     | { status: "failed" | "dead_letter" };
 };
 
+export type StepStatus = "pending" | "running" | "completed" | "failed";
+
+export type StepRecord = {
+  id: string;
+  runId: string;
+  stepId: string;
+  status: StepStatus;
+  result: JsonValue | null;
+  error: SerializedError | null;
+  options: JsonValue;
+  attemptCount: number;
+  maxAttempts: number;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+};
+
+export type StepInput = OwnedRunInput & { stepId: string };
+
 export type CreateRunInput = {
   id: string;
   appId: string;
@@ -146,6 +166,10 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
   completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
+  getStep(runId: string, stepId: string): Promise<StepRecord | null>;
+  startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord>;
+  completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
+  failStep(input: StepInput & { error: SerializedError }): Promise<void>;
   withTransaction(client: unknown): TransactionalDurloAdapter;
 }
 
@@ -230,7 +254,16 @@ export interface TaskDefinition<TInput, TOutput> extends RegisteredTaskDefinitio
   batchEnqueue(items: Array<TInput | BatchItem<TInput>>): Promise<Array<RunHandle<TOutput>>>;
 }
 
-export interface WorkflowDefinition<TInput, TOutput> {
+export interface RegisteredWorkflowDefinition {
+  readonly id: string;
+  readonly kind: "workflow";
+  readonly _durlo: {
+    validate(input: unknown): Promise<unknown>;
+    run(context: WorkflowContext<unknown>): Promise<unknown>;
+  };
+}
+
+export interface WorkflowDefinition<TInput, TOutput> extends RegisteredWorkflowDefinition {
   readonly id: string;
   readonly name?: string;
   readonly kind: "workflow";
@@ -255,7 +288,7 @@ export type DurloOptions = {
 
 export type WorkerOptions = {
   tasks?: RegisteredTaskDefinition[];
-  workflows?: Array<WorkflowDefinition<unknown, unknown>>;
+  workflows?: RegisteredWorkflowDefinition[];
   concurrency?: number;
   pollInterval?: DurationInput;
   leaseDuration?: DurationInput;

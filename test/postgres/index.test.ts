@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Durlo, LostLeaseError } from "@durlo/core";
+import type { StepTools } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
@@ -218,5 +219,104 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       stalledCount: 1,
       error: { name: "StalledError" },
     });
+  });
+
+  it("executes workflows and persists reusable step results", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "step-workflow",
+      run: async ({ input, step }: { input: { value: number }; step: StepTools }) => {
+        const doubled = await step.run("double", () => input.value * 2);
+        return step.run("result", () => ({ doubled }));
+      },
+    });
+    const handle = await workflow.start({ value: 21 });
+    const worker = durlo.worker({ workflows: [workflow], workerId: "workflow-worker" });
+
+    expect(await worker.runOnce()).toBe(1);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "completed", output: { doubled: 42 } });
+    expect(await adapter.getStep(handle.id, "double")).toMatchObject({
+      status: "completed",
+      result: 42,
+      attemptCount: 1,
+    });
+    expect(await adapter.getStep(handle.id, "result")).toMatchObject({
+      status: "completed",
+      result: { doubled: 42 },
+    });
+  });
+
+  it("skips completed checkpoints when a failed workflow is re-entered", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let durableExecutions = 0;
+    let flakyExecutions = 0;
+    const workflow = durlo.workflow({
+      id: "retry-workflow",
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      run: async ({ step }) => {
+        const durable = await step.run("durable", () => {
+          durableExecutions += 1;
+          return { value: 10 };
+        });
+        return step.run("flaky", () => {
+          flakyExecutions += 1;
+          if (flakyExecutions === 1) throw new Error("try again");
+          return durable.value + 1;
+        });
+      },
+    });
+    const handle = await workflow.start({});
+    const worker = durlo.worker({ workflows: [workflow], workerId: "workflow-retry" });
+
+    expect(await worker.runOnce()).toBe(1);
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "pending", attemptCount: 1 });
+    expect(await worker.runOnce()).toBe(1);
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "completed", output: 11, attemptCount: 2 });
+    expect(durableExecutions).toBe(1);
+    expect(flakyExecutions).toBe(2);
+    expect(await adapter.getStep(handle.id, "durable")).toMatchObject({ attemptCount: 1, status: "completed" });
+    expect(await adapter.getStep(handle.id, "flaky")).toMatchObject({ attemptCount: 2, status: "completed" });
+  });
+
+  it("fails workflows that reuse a step id in one execution", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "duplicate-step-workflow",
+      retry: { attempts: 1 },
+      run: async ({ step }) => {
+        await step.run("same", () => 1);
+        await step.run("same", () => 2);
+      },
+    });
+    const handle = await workflow.start({});
+
+    await durlo.worker({ workflows: [workflow] }).runOnce();
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "failed",
+      error: { name: "ValidationError", message: expect.stringContaining("more than once") },
+    });
+  });
+
+  it("rejects nested step calls", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "nested-step-workflow",
+      retry: { attempts: 1 },
+      run: async ({ step }) => {
+        await step.run("outer", async () => step.run("inner", () => "no"));
+      },
+    });
+    const handle = await workflow.start({});
+
+    await durlo.worker({ workflows: [workflow] }).runOnce();
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "failed",
+      error: { name: "ValidationError", message: "nested step calls are not allowed" },
+    });
+    expect(await adapter.getStep(handle.id, "inner")).toBeNull();
+    expect(await adapter.getStep(handle.id, "outer")).toMatchObject({ status: "failed" });
   });
 });

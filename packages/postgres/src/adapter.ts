@@ -10,6 +10,9 @@ import type {
   RunRecord,
   RunStatus,
   SerializedError,
+  StepInput,
+  StepRecord,
+  StepStatus,
   TransactionalDurloAdapter,
 } from "@durlo/core";
 import { LostLeaseError } from "@durlo/core";
@@ -48,6 +51,22 @@ type RunRow = QueryResultRow & {
   cancelled_at: Date | null;
 };
 
+type StepRow = QueryResultRow & {
+  id: string;
+  run_id: string;
+  step_id: string;
+  status: StepStatus;
+  result_json: JsonValue | null;
+  error_json: SerializedError | null;
+  options_json: JsonValue;
+  attempt_count: number;
+  max_attempts: number;
+  created_at: Date;
+  updated_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+};
+
 type Query = <R extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) => Promise<QueryResult<R>>;
 
 function mapRun(row: RunRow): RunRecord {
@@ -78,11 +97,34 @@ function mapRun(row: RunRow): RunRecord {
   };
 }
 
+function mapStep(row: StepRow): StepRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    status: row.status,
+    result: row.result_json,
+    error: row.error_json,
+    options: row.options_json,
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+  };
+}
+
 const RUN_COLUMNS = `
   id, app_id, kind, resource_id, status, input_json, output_json, error_json, options_json,
   idempotency_key, priority, scheduled_at, attempt_count, max_attempts, locked_by,
   lease_token, locked_until, stalled_count, created_at, updated_at, started_at,
   completed_at, cancelled_at
+`;
+
+const STEP_COLUMNS = `
+  id, run_id, step_id, status, result_json, error_json, options_json,
+  attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
 `;
 
 export class PostgresAdapter implements DurloAdapter {
@@ -328,6 +370,116 @@ export class PostgresAdapter implements DurloAdapter {
     });
   }
 
+  async getStep(runId: string, stepId: string): Promise<StepRecord | null> {
+    const result = await this.query()<StepRow>(
+      `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2`,
+      [runId, stepId],
+    );
+    return result.rows[0] ? mapStep(result.rows[0]) : null;
+  }
+
+  async startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await this.assertOwnedRun(client, input);
+      await client.query(
+        `
+          insert into durlo_steps (id, run_id, step_id, status, max_attempts)
+          values ($1, $2, $3, 'pending', $4)
+          on conflict (run_id, step_id) do nothing
+        `,
+        [randomUUID(), input.runId, input.stepId, input.maxAttempts],
+      );
+      const selected = await client.query<StepRow>(
+        `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2 for update`,
+        [input.runId, input.stepId],
+      );
+      const current = selected.rows[0];
+      if (!current) throw new Error(`step '${input.stepId}' could not be created`);
+      if (current.status === "completed") {
+        await client.query("commit");
+        return mapStep(current);
+      }
+      const updated = await client.query<StepRow>(
+        `
+          update durlo_steps
+          set status = 'running', attempt_count = attempt_count + 1,
+              error_json = null, updated_at = now(), started_at = coalesce(started_at, now()),
+              completed_at = null
+          where id = $1
+          returning ${STEP_COLUMNS}
+        `,
+        [current.id],
+      );
+      const row = updated.rows[0];
+      if (!row) throw new Error(`step '${input.stepId}' could not be started`);
+      await client.query(
+        `
+          insert into durlo_attempts (
+            id, run_id, step_id, kind, attempt_number, status, worker_id, lease_token
+          ) values ($1, $2, $3, 'step', $4, 'running', $5, $6)
+        `,
+        [randomUUID(), input.runId, input.stepId, row.attempt_count, input.workerId, input.leaseToken],
+      );
+      await client.query("commit");
+      return mapStep(row);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeStep(input: StepInput & { result: JsonValue }): Promise<void> {
+    await this.finishOwnedRun(async (client) => {
+      await this.assertOwnedRun(client, input);
+      const result = await client.query(
+        `
+          update durlo_steps
+          set status = 'completed', result_json = $3::jsonb, error_json = null,
+              updated_at = now(), completed_at = now()
+          where run_id = $1 and step_id = $2 and status = 'running'
+        `,
+        [input.runId, input.stepId, JSON.stringify(input.result)],
+      );
+      if (result.rowCount !== 1) throw new Error(`step '${input.stepId}' is not running`);
+      await client.query(
+        `
+          update durlo_attempts set status = 'succeeded', completed_at = now()
+          where run_id = $1 and step_id = $2 and kind = 'step'
+            and lease_token = $3 and status = 'running'
+        `,
+        [input.runId, input.stepId, input.leaseToken],
+      );
+    });
+  }
+
+  async failStep(input: StepInput & { error: SerializedError }): Promise<void> {
+    await this.finishOwnedRun(async (client) => {
+      await this.assertOwnedRun(client, input);
+      const result = await client.query(
+        `
+          update durlo_steps
+          set status = 'failed', error_json = $3::jsonb, updated_at = now(), completed_at = now()
+          where run_id = $1 and step_id = $2 and status = 'running'
+        `,
+        [input.runId, input.stepId, JSON.stringify(input.error)],
+      );
+      if (result.rowCount !== 1) throw new Error(`step '${input.stepId}' is not running`);
+      await client.query(
+        `
+          update durlo_attempts
+          set status = 'failed', error_json = $4::jsonb, completed_at = now()
+          where run_id = $1 and step_id = $2 and kind = 'step'
+            and lease_token = $3 and status = 'running'
+        `,
+        [input.runId, input.stepId, input.leaseToken, JSON.stringify(input.error)],
+      );
+    });
+  }
+
   async cancelRun(id: string): Promise<RunRecord> {
     void id;
     throw new Error("cancelRun is implemented in Slice 6");
@@ -392,6 +544,18 @@ export class PostgresAdapter implements DurloAdapter {
     } finally {
       client.release();
     }
+  }
+
+  private async assertOwnedRun(client: PoolClient, input: OwnedRunInput): Promise<void> {
+    const result = await client.query(
+      `
+        select id from durlo_runs
+        where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
+        for update
+      `,
+      [input.runId, input.workerId, input.leaseToken],
+    );
+    if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
   }
 }
 

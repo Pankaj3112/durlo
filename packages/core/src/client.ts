@@ -103,6 +103,10 @@ export class Durlo {
       ...(options.name === undefined ? {} : { name: options.name }),
       kind: "workflow",
       options,
+      _durlo: {
+        validate: (input) => validateSchema(options.schema, input),
+        run: async (context) => options.run(context as Parameters<typeof options.run>[0]),
+      },
       start: (input, runOptions) =>
         this.createRun(
           this.adapter,

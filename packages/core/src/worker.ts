@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { LostLeaseError, ValidationError } from "./errors.js";
 import { calculateRetryDelay } from "./retry.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
+import { createStepTools } from "./steps.js";
 import type {
   ClaimedRun,
   DurloAdapter,
   NormalizedRetryPolicy,
   RegisteredTaskDefinition,
+  RegisteredWorkflowDefinition,
   WorkerOptions,
 } from "./types.js";
 import { parseDuration } from "./validation.js";
@@ -28,6 +30,7 @@ export class Worker {
   private readonly appId: string;
   private readonly adapter: DurloAdapter;
   private readonly tasks = new Map<string, RegisteredTaskDefinition>();
+  private readonly workflows = new Map<string, RegisteredWorkflowDefinition>();
   private readonly concurrency: number;
   private readonly pollInterval: number;
   private readonly leaseDuration: number;
@@ -48,6 +51,12 @@ export class Worker {
     for (const task of options.tasks ?? []) {
       if (this.tasks.has(task.id)) throw new ValidationError(`task '${task.id}' is registered more than once`);
       this.tasks.set(task.id, task);
+    }
+    for (const workflow of options.workflows ?? []) {
+      if (this.workflows.has(workflow.id)) {
+        throw new ValidationError(`workflow '${workflow.id}' is registered more than once`);
+      }
+      this.workflows.set(workflow.id, workflow);
     }
   }
 
@@ -75,15 +84,19 @@ export class Worker {
       workerId: this.id,
       limit: this.concurrency,
       leaseDuration: this.leaseDuration,
-      resources: [...this.tasks.keys()].map((resourceId) => ({ kind: "task", resourceId })),
+      resources: [
+        ...[...this.tasks.keys()].map((resourceId) => ({ kind: "task" as const, resourceId })),
+        ...[...this.workflows.keys()].map((resourceId) => ({ kind: "workflow" as const, resourceId })),
+      ],
     });
-    await Promise.all(runs.map((run) => this.executeTask(run)));
+    await Promise.all(runs.map((run) => this.executeRun(run)));
     return runs.length;
   }
 
-  private async executeTask(run: ClaimedRun): Promise<void> {
-    const task = this.tasks.get(run.resourceId);
-    if (!task) return;
+  private async executeRun(run: ClaimedRun): Promise<void> {
+    const task = run.kind === "task" ? this.tasks.get(run.resourceId) : undefined;
+    const workflow = run.kind === "workflow" ? this.workflows.get(run.resourceId) : undefined;
+    if (!task && !workflow) return;
     const abortController = new AbortController();
     let ownsLease = true;
     const heartbeat = setInterval(() => {
@@ -108,13 +121,20 @@ export class Worker {
     heartbeat.unref();
 
     try {
-      const input = await task._durlo.validate(deserialize(run.input));
+      const definition = task ?? workflow!;
+      const input = await definition._durlo.validate(deserialize(run.input));
       const context = {
         run: { id: run.id, kind: run.kind, resourceId: run.resourceId },
         attempt: { number: run.attemptCount, maxAttempts: run.maxAttempts },
         signal: abortController.signal,
       };
-      const execution = task._durlo.run(input, context);
+      const execution = task
+        ? task._durlo.run(input, context)
+        : workflow!._durlo.run({
+            input,
+            step: createStepTools(this.adapter, run),
+            ...context,
+          });
       const timeout = this.timeoutFor(run);
       const output = timeout === undefined ? await execution : await this.withTimeout(execution, timeout, abortController);
       if (!ownsLease) return;
