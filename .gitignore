@@ -1,6 +1,7 @@
 node_modules
 dist
 coverage
+test-results
 .turbo
 .DS_Store
 .env

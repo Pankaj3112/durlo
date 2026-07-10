@@ -24,7 +24,7 @@
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --config ../../vitest.config.ts test/postgres/index.test.ts"
+    "test": "pnpm --dir ../.. test:integration"
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",

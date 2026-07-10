@@ -19,13 +19,33 @@ Start here:
 - [API spec](docs/API_SPEC.md)
 - [Execution semantics](docs/EXECUTION_SEMANTICS.md)
 - [Edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
+- [Testing strategy](docs/TESTING_STRATEGY.md)
 
 ## Current Status
 
 Slices 1 through 6 are implemented: core APIs, Postgres migrations and persistence, lease-safe workers, task retries, workflow checkpoints, durable timers, cancellation, and manual retry. The CLI, dashboard, and demo in Slice 7 are not implemented yet.
 
-Postgres integration tests run when `DURLO_TEST_DATABASE_URL` is set:
+Run the complete suite with a disposable local PostgreSQL 17 container:
 
 ```bash
-DURLO_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/durlo_test pnpm test
+pnpm test:local
+```
+
+Pure unit tests do not require Docker:
+
+```bash
+pnpm test:unit
+```
+
+Generate full unit-plus-integration coverage with another disposable database:
+
+```bash
+pnpm test:local:coverage
+```
+
+To use an existing Postgres database, provide its URL explicitly. The integration command fails
+clearly when the URL is missing; it never reports a skipped suite as success.
+
+```bash
+DURLO_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/durlo_test pnpm test:integration
 ```
