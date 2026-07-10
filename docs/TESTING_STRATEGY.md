@@ -49,6 +49,12 @@ have controlled unit tests. Real-Postgres races cover cancel-versus-complete,
 cancel-versus-final-failure, and cancel-versus-due-timer safety. The suite has 48 tests and its
 ratcheted global coverage floor is 88% statements, 80% branches, 95% functions, and 90% lines.
 
+Implementation status (2026-07-11, expanded): the state matrix, real process-death fixtures, seeded
+contention, persistence mutation audit, migration concurrency/recovery, restricted-role execution,
+packed ESM/CJS/TypeScript consumers, nightly Node/Postgres bounds, scenario ledger, and release QA
+charters are implemented. Upgrade fixtures remain structurally deferred until migration `0002`;
+CLI/dashboard QA remains deferred until Slice 7.
+
 ## What To Copy From Mature Durable Execution Projects
 
 The useful common pattern is layered verification, not their product-specific machinery:
