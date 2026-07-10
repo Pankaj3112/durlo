@@ -7,8 +7,8 @@ export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
-    exclude: ["test/postgres/**/*.stress.test.ts"],
     fileParallelism: false,
-    include: ["test/postgres/**/*.test.ts"]
+    include: ["test/postgres/**/*.stress.test.ts"],
+    testTimeout: 60_000
   }
 });

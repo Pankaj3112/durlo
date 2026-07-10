@@ -2,6 +2,7 @@ node_modules
 dist
 coverage
 test-results
+packages/postgres/src/*.mutation.ts
 .turbo
 .DS_Store
 .env

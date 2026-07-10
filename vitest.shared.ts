@@ -7,7 +7,9 @@ export const sharedVitestConfig = {
   resolve: {
     alias: {
       "@durlo/core": sourceAlias("./packages/core/src/index.ts"),
-      "@durlo/postgres": sourceAlias("./packages/postgres/src/index.ts"),
+      "@durlo/postgres": sourceAlias(
+        process.env.DURLO_POSTGRES_TEST_ENTRY ?? "./packages/postgres/src/index.ts"
+      ),
       durlo: sourceAlias("./packages/cli/src/index.ts")
     }
   },

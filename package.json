@@ -17,8 +17,12 @@
     "test:all": "pnpm test:unit && pnpm test:integration",
     "test:local": "node scripts/test-local.mjs",
     "test:local:coverage": "node scripts/test-local.mjs test:coverage",
+    "test:local:mutations": "node scripts/test-local.mjs test:persistence-mutations",
+    "test:local:stress": "node scripts/test-local.mjs test:stress",
     "test:coverage": "vitest run --config vitest.coverage.config.ts",
     "test:ci": "vitest run --config vitest.ci.config.ts",
+    "test:persistence-mutations": "node scripts/check-persistence-mutations.mjs",
+    "test:stress": "vitest run --config vitest.stress.config.ts",
     "format": "prettier --write \"**/*.{js,ts,json,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,json,yaml,yml}\""
   },
