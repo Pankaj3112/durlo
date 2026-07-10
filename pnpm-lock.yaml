@@ -77,13 +77,13 @@ importers:
       '@durlo/core':
         specifier: workspace:*
         version: link:../core
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
       pg:
         specifier: ^8.22.0
         version: 8.22.0
     devDependencies:
-      '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
       eslint:
         specifier: ^9.39.4
         version: 9.39.4

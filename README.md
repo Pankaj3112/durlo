@@ -43,6 +43,20 @@ Generate full unit-plus-integration coverage with another disposable database:
 pnpm test:local:coverage
 ```
 
+Heavier durability checks are available separately:
+
+```bash
+pnpm test:local:stress
+pnpm test:local:mutations
+pnpm test:local:privileged
+pnpm test:package
+```
+
+Nightly compatibility tests exercise Node.js 22 and 24 LTS plus Node.js 26 Current against the
+oldest and newest supported PostgreSQL bounds, currently PostgreSQL 14 and 18. See the
+[Node.js release schedule](https://nodejs.org/en/about/previous-releases) and
+[PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/).
+
 To use an existing Postgres database, provide its URL explicitly. The integration command fails
 clearly when the URL is missing; it never reports a skipped suite as success.
 

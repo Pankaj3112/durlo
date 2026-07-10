@@ -181,7 +181,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
   it("skips a claimable row locked by another transaction", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "skip-locked-task", run: async () => undefined });
-    await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
+    await task.batchEnqueue([
+      { input: { value: 1 }, options: { priority: 100 } },
+      { input: { value: 2 }, options: { priority: 0 } }
+    ]);
     const lockingClient = await adapter.pool.connect();
     let claimPromise: ReturnType<typeof adapter.claimRuns> | undefined;
 
@@ -190,7 +193,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       const locked = await lockingClient.query<{ id: string }>(
         `select id from durlo_runs
          where resource_id = 'skip-locked-task'
-         order by created_at, id
+         order by priority desc, scheduled_at, created_at, id
          for update limit 1`
       );
 

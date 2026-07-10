@@ -66,8 +66,14 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Test packed package consumers
+        run: pnpm test:package
+
       - name: Test with coverage
         run: pnpm test:ci
+
+      - name: Test restricted database role
+        run: pnpm test:privileged
 
       - name: Upload test artifacts
         if: always()
