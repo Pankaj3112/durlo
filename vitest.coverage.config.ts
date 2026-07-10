@@ -15,10 +15,10 @@ export default defineConfig({
       include: ["packages/*/src/**/*.ts"],
       exclude: ["packages/*/src/index.ts"],
       thresholds: {
-        statements: 85,
-        branches: 75,
-        functions: 90,
-        lines: 85
+        statements: 88,
+        branches: 80,
+        functions: 95,
+        lines: 90
       }
     },
     fileParallelism: false,

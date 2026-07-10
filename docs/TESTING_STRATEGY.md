@@ -44,6 +44,11 @@ Implementation status (2026-07-10): Phase 0 is underway on `codex/testing-strate
 and required integration commands, disposable local Postgres execution, coverage/JUnit reporting,
 Postgres CI, and the first concurrent idempotency/claim and owned-write tests have been added.
 
+Implementation status (2026-07-11): worker lifecycle and lease-renewal success/loss/error paths now
+have controlled unit tests. Real-Postgres races cover cancel-versus-complete,
+cancel-versus-final-failure, and cancel-versus-due-timer safety. The suite has 48 tests and its
+ratcheted global coverage floor is 88% statements, 80% branches, 95% functions, and 90% lines.
+
 ## What To Copy From Mature Durable Execution Projects
 
 The useful common pattern is layered verification, not their product-specific machinery:
