@@ -52,6 +52,13 @@ pnpm test:local:privileged
 pnpm test:package
 ```
 
+Run the complete release-candidate audit—including package consumers, core and persistence
+mutations, privileged-role checks, and seeded stress—with:
+
+```bash
+pnpm test:audit
+```
+
 Nightly compatibility tests exercise Node.js 22 and 24 LTS plus Node.js 26 Current against the
 oldest and newest supported PostgreSQL bounds, currently PostgreSQL 14 and 18. See the
 [Node.js release schedule](https://nodejs.org/en/about/previous-releases) and

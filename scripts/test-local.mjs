@@ -4,7 +4,7 @@ const docker = process.platform === "win32" ? "docker.exe" : "docker";
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const container = `durlo-test-${process.pid}-${Date.now()}`;
 const image = process.env.DURLO_TEST_POSTGRES_IMAGE ?? "postgres:17-alpine";
-const testScript = process.argv[2] ?? "test:all";
+const testScripts = process.argv.length > 2 ? process.argv.slice(2) : ["test:all"];
 
 function command(executable, args, options = {}) {
   return spawnSync(executable, args, {
@@ -75,14 +75,19 @@ try {
   const port = portResult.stdout.trim().match(/:(\d+)$/)?.[1];
   if (!port) throw new Error(`could not parse Postgres port from '${portResult.stdout.trim()}'`);
 
-  const tests = command(pnpm, [testScript], {
-    env: {
-      ...process.env,
-      DURLO_TEST_DATABASE_URL: `postgres://durlo:durlo@127.0.0.1:${port}/durlo_test`
-    },
-    stdio: "inherit"
-  });
-  if (tests.status !== 0) process.exitCode = tests.status ?? 1;
+  for (const testScript of testScripts) {
+    const tests = command(pnpm, [testScript], {
+      env: {
+        ...process.env,
+        DURLO_TEST_DATABASE_URL: `postgres://durlo:durlo@127.0.0.1:${port}/durlo_test`
+      },
+      stdio: "inherit"
+    });
+    if (tests.status !== 0) {
+      process.exitCode = tests.status ?? 1;
+      break;
+    }
+  }
 } finally {
   command(docker, ["rm", "--force", container]);
 }

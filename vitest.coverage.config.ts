@@ -15,10 +15,10 @@ export default defineConfig({
       include: ["packages/*/src/**/*.ts"],
       exclude: ["packages/*/src/index.ts"],
       thresholds: {
-        statements: 88,
-        branches: 80,
-        functions: 95,
-        lines: 90
+        statements: 93,
+        branches: 88,
+        functions: 97,
+        lines: 96
       }
     },
     exclude: ["test/postgres/**/*.privileged.test.ts", "test/postgres/**/*.stress.test.ts"],

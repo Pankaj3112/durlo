@@ -55,6 +55,15 @@ packed ESM/CJS/TypeScript consumers, nightly Node/Postgres bounds, scenario ledg
 charters are implemented. Upgrade fixtures remain structurally deferred until migration `0002`;
 CLI/dashboard QA remains deferred until Slice 7.
 
+Core mutation testing is enforced nightly for retry, serialization, and validation logic. The
+initial mutation score is 91.83%, with a 90% breaking floor; persistence safety mutations remain a
+separate real-Postgres gate.
+
+Final implementation audit (2026-07-11): the required PR suite has 70 tests, the privileged-role
+lane has 1 test, and the default seeded stress run has 10 scenarios (50 per compatibility job
+nightly). Coverage is 93.76% statements, 88.51% branches, 97.39% functions, and 96.24% lines; the
+ratcheted floors are 93%, 88%, 97%, and 96% respectively.
+
 ## What To Copy From Mature Durable Execution Projects
 
 The useful common pattern is layered verification, not their product-specific machinery:

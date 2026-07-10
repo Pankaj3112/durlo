@@ -37,6 +37,7 @@ Status meanings:
 | CLM-006 | Wrong worker and stale tokens cannot extend, release, complete, or fail          | `test/postgres/index.test.ts`                                               | PR           |
 | CLM-007 | Attempts are append-only and no active attempt remains after terminal transition | `test/postgres/index.test.ts`, `races.test.ts`, `contention.stress.test.ts` | PR + Nightly |
 | CLM-008 | Safety predicates kill deliberate SQL mutations                                  | `scripts/check-persistence-mutations.mjs`                                   | Nightly      |
+| CLM-009 | Pure retry, serialization, and validation decisions resist mutation              | `stryker.config.mjs` (90% breaking floor)                                   | Nightly      |
 
 ## Worker And Retry Behavior
 

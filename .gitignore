@@ -4,5 +4,6 @@ coverage
 test-results
 packages/postgres/src/*.mutation.ts
 .turbo
+.stryker-tmp
 .DS_Store
 .env
