@@ -7,6 +7,7 @@ if (!process.env.DURLO_TEST_DATABASE_URL) {
 }
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 const adapterPath = fileURLToPath(new URL("../packages/postgres/src/adapter.ts", import.meta.url));
 const mutationPath = fileURLToPath(
   new URL("../packages/postgres/src/adapter.mutation.ts", import.meta.url)
@@ -64,6 +65,16 @@ try {
     ].join("\n")
   );
 
+  for (const target of uniqueTargets(mutations)) {
+    const baseline = runTest(target, "./packages/postgres/src/index.ts");
+    const assertion = readTargetAssertion(baseline, target);
+    if (baseline.status !== 0 || assertion.status !== "passed") {
+      throw new Error(
+        `persistence mutation baseline failed for '${target.test}':\n${testDiagnostics(baseline)}`
+      );
+    }
+  }
+
   for (const mutation of mutations) {
     const mutated = replaceOccurrence(
       source,
@@ -72,29 +83,16 @@ try {
       mutation.occurrence
     );
     await writeFile(mutationPath, mutated);
-    const result = spawnSync(
-      pnpm,
-      [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        "vitest.integration.config.ts",
-        mutation.file,
-        "-t",
-        mutation.test
-      ],
-      {
-        cwd: fileURLToPath(new URL("..", import.meta.url)),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          DURLO_POSTGRES_TEST_ENTRY: "./packages/postgres/src/index.mutation.ts"
-        }
-      }
-    );
-    if (result.status === 0) {
+    const result = runTest(mutation, "./packages/postgres/src/index.mutation.ts");
+    const assertion = readTargetAssertion(result, mutation);
+    if (result.status === 0 || assertion.status === "passed") {
       throw new Error(`persistence safety mutation survived: ${mutation.name}`);
+    }
+    if (assertion.status !== "failed") {
+      throw new Error(
+        `persistence mutation did not execute '${mutation.test}' for ${mutation.name}:\n` +
+          testDiagnostics(result)
+      );
     }
     process.stdout.write(`killed mutation: ${mutation.name}\n`);
   }
@@ -115,4 +113,87 @@ function replaceOccurrence(value, search, replacement, occurrence) {
     offset = found + search.length;
   }
   throw new Error("unreachable mutation replacement");
+}
+
+function uniqueTargets(values) {
+  return [
+    ...new Map(values.map(({ file, test }) => [`${file}\0${test}`, { file, test }])).values()
+  ];
+}
+
+function runTest(target, postgresEntry) {
+  return spawnSync(
+    pnpm,
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      "vitest.integration.config.ts",
+      target.file,
+      "-t",
+      target.test,
+      "--reporter=json"
+    ],
+    {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DURLO_POSTGRES_TEST_ENTRY: postgresEntry
+      }
+    }
+  );
+}
+
+function readTargetAssertion(result, target) {
+  if (result.error) {
+    throw new Error(`could not run '${target.test}': ${result.error.message}`);
+  }
+
+  let report;
+  try {
+    report = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(
+      `could not read Vitest result for '${target.test}':\n${testDiagnostics(result)}`
+    );
+  }
+
+  const assertions = (report.testResults ?? []).flatMap(({ assertionResults = [] }) =>
+    assertionResults.filter(({ fullName }) => fullName?.includes(target.test))
+  );
+  if (assertions.length !== 1) {
+    throw new Error(
+      `expected one Vitest result for '${target.test}', found ${assertions.length}:\n` +
+        testDiagnostics(result)
+    );
+  }
+  return assertions[0];
+}
+
+function testDiagnostics(result) {
+  let stdout = result.stdout?.trim();
+  if (stdout) {
+    try {
+      const report = JSON.parse(stdout);
+      const failures = (report.testResults ?? []).flatMap((testResult) => [
+        testResult.message,
+        ...(testResult.assertionResults ?? []).flatMap(({ failureMessages = [] }) => failureMessages)
+      ]);
+      stdout = [
+        `Vitest tests: ${report.numPassedTests ?? 0} passed, ${report.numFailedTests ?? 0} failed, ${report.numPendingTests ?? 0} pending`,
+        ...failures.filter(Boolean).slice(0, 3)
+      ].join("\n");
+    } catch {
+      // Preserve non-JSON output for diagnostics when Vitest cannot produce a report.
+    }
+  }
+  return [
+    `exit status: ${result.status ?? "none"}${result.signal ? ` (${result.signal})` : ""}`,
+    stdout,
+    result.stderr?.trim()
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

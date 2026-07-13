@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_RETRY_POLICY,
   Durlo,
   SerializationError,
   ValidationError,
@@ -107,7 +106,10 @@ describe("duration and id boundaries", () => {
 
 describe("retry decision boundaries", () => {
   it("normalizes defaults, fixed policies, exponential defaults, and optional caps", () => {
-    expect(normalizeRetryPolicy(undefined)).toEqual(DEFAULT_RETRY_POLICY);
+    expect(normalizeRetryPolicy(undefined)).toEqual({
+      attempts: 3,
+      backoff: { type: "exponential", delay: 10_000, factor: 2, jitter: 0.2 }
+    });
     expect(normalizeRetryPolicy({ attempts: 1 })).toMatchObject({ attempts: 1 });
     expect(normalizeRetryPolicy({ attempts: 100 })).toMatchObject({ attempts: 100 });
     expect(normalizeBackoff({ type: "fixed", delay: "2s", jitter: 1 })).toEqual({
