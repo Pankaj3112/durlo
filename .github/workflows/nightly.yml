@@ -1,0 +1,95 @@
+name: Nightly durability
+
+on:
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-durability-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility-and-stress:
+    name: Node ${{ matrix.node }} / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+        postgres: [14, 18]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: durlo
+          POSTGRES_PASSWORD: durlo
+          POSTGRES_DB: durlo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U durlo -d durlo_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      DURLO_TEST_DATABASE_URL: postgres://durlo:durlo@127.0.0.1:5432/durlo_test
+      DURLO_STRESS_SEEDS: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test packed package consumers
+        run: pnpm test:package
+
+      - name: Run full suite
+        run: pnpm test:ci
+
+      - name: Test restricted database role
+        run: pnpm test:privileged
+
+      - name: Run seeded contention
+        run: pnpm test:stress
+
+      - name: Verify persistence safety mutations
+        if: matrix.node == 22 && matrix.postgres == 18
+        run: pnpm test:persistence-mutations
+
+      - name: Mutate pure core decisions
+        if: matrix.node == 22 && matrix.postgres == 18
+        run: pnpm test:mutations:core
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.node }}-${{ matrix.postgres }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            coverage
+            test-results
+          retention-days: 14

@@ -58,6 +58,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect((await adapter.getRun(first.id))?.input).toEqual({ value: 1 });
   });
 
+  it("deduplicates concurrent run creation atomically", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "concurrent-idempotency", run: async () => undefined });
+
+    const handles = await Promise.all(
+      Array.from({ length: 20 }, (_, value) =>
+        task.enqueue({ value }, { idempotencyKey: "one-business-operation" })
+      )
+    );
+
+    expect(new Set(handles.map(({ id }) => id)).size).toBe(1);
+    const count = await adapter.pool.query<{ count: string }>(
+      "select count(*)::text as count from durlo_runs where resource_id = 'concurrent-idempotency'"
+    );
+    expect(count.rows[0]?.count).toBe("1");
+  });
+
   it("creates batches atomically and preserves input order", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "batch", run: async (input: number) => input });
@@ -122,6 +139,137 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       [handle.id]
     );
     expect(attempts.rows).toEqual([{ status: "succeeded", worker_id: "worker-a" }]);
+  });
+
+  it("claims each run at most once across concurrent workers", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "contended-task", run: async () => undefined });
+    const handles = await task.batchEnqueue(Array.from({ length: 20 }, (_, value) => ({ value })));
+    const resources = [{ kind: "task" as const, resourceId: task.id }];
+
+    const [workerA, workerB] = await Promise.all([
+      adapter.claimRuns({
+        appId: "integration",
+        workerId: "worker-a",
+        limit: 10,
+        leaseDuration: 10_000,
+        resources
+      }),
+      adapter.claimRuns({
+        appId: "integration",
+        workerId: "worker-b",
+        limit: 10,
+        leaseDuration: 10_000,
+        resources
+      })
+    ]);
+
+    const claimedIds = [...workerA, ...workerB].map(({ id }) => id);
+    expect(workerA).toHaveLength(10);
+    expect(workerB).toHaveLength(10);
+    expect(new Set(claimedIds).size).toBe(20);
+    expect(new Set(claimedIds)).toEqual(new Set(handles.map(({ id }) => id)));
+
+    const attempts = await adapter.pool.query<{ run_id: string; count: string }>(
+      `select run_id, count(*)::text as count
+       from durlo_attempts where kind = 'run' group by run_id`
+    );
+    expect(attempts.rows).toHaveLength(20);
+    expect(attempts.rows.every(({ count }) => count === "1")).toBe(true);
+  });
+
+  it("skips a claimable row locked by another transaction", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "skip-locked-task", run: async () => undefined });
+    await task.batchEnqueue([
+      { input: { value: 1 }, options: { priority: 100 } },
+      { input: { value: 2 }, options: { priority: 0 } }
+    ]);
+    const lockingClient = await adapter.pool.connect();
+    let claimPromise: ReturnType<typeof adapter.claimRuns> | undefined;
+
+    try {
+      await lockingClient.query("begin");
+      const locked = await lockingClient.query<{ id: string }>(
+        `select id from durlo_runs
+         where resource_id = 'skip-locked-task'
+         order by priority desc, scheduled_at, created_at, id
+         for update limit 1`
+      );
+
+      claimPromise = adapter.claimRuns({
+        appId: "integration",
+        workerId: "non-blocked-worker",
+        limit: 1,
+        leaseDuration: 10_000,
+        resources: [{ kind: "task", resourceId: task.id }]
+      });
+      const timeout = new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("claim blocked on a row lock")), 1_000).unref();
+      });
+      const [claim] = await Promise.race([claimPromise, timeout]);
+
+      expect(claim).toBeDefined();
+      expect(claim?.id).not.toBe(locked.rows[0]?.id);
+    } finally {
+      await lockingClient.query("rollback");
+      lockingClient.release();
+      await claimPromise?.catch(() => undefined);
+    }
+  });
+
+  it("rejects every ownership-sensitive write with the wrong worker or lease token", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "owned-write-task", run: async () => undefined });
+    const handle = await task.enqueue({});
+    const [claim] = await adapter.claimRuns({
+      appId: "integration",
+      workerId: "owner",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources: [{ kind: "task", resourceId: task.id }]
+    });
+
+    const invalidOwners = [
+      { runId: handle.id, workerId: "owner", leaseToken: "stale-token" },
+      { runId: handle.id, workerId: "intruder", leaseToken: claim!.leaseToken }
+    ];
+    for (const invalidOwner of invalidOwners) {
+      expect(await adapter.extendRunLease({ ...invalidOwner, leaseDuration: 10_000 })).toBe(false);
+      expect(await adapter.releaseRun(invalidOwner)).toBe(false);
+      await expect(
+        adapter.completeRun({ ...invalidOwner, output: "stale" })
+      ).rejects.toBeInstanceOf(LostLeaseError);
+      await expect(
+        adapter.failRun({
+          ...invalidOwner,
+          error: { name: "Error", message: "stale" },
+          outcome: { status: "dead_letter" }
+        })
+      ).rejects.toBeInstanceOf(LostLeaseError);
+    }
+
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "running",
+      lockedBy: "owner",
+      leaseToken: claim!.leaseToken
+    });
+    const attempt = await adapter.pool.query<{ status: string; lease_token: string }>(
+      "select status, lease_token from durlo_attempts where run_id = $1 and kind = 'run'",
+      [handle.id]
+    );
+    expect(attempt.rows).toEqual([{ status: "running", lease_token: claim!.leaseToken }]);
+
+    await adapter.completeRun({
+      runId: handle.id,
+      workerId: "owner",
+      leaseToken: claim!.leaseToken,
+      output: "current"
+    });
+    expect(await adapter.getRun(handle.id)).toMatchObject({
+      status: "completed",
+      output: "current"
+    });
   });
 
   it("retries thrown task errors and dead-letters after exhaustion", async () => {
