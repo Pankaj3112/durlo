@@ -1,7 +1,7 @@
 # Durlo Execution Semantics
 
-Status: Draft
-Date: 2026-07-08
+Status: Current
+Updated: 2026-07-15
 
 Answers: **What guarantees do the public calls provide?**
 

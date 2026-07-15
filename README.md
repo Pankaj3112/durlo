@@ -14,16 +14,14 @@ V1 does not include events, cron, distributed concurrency, hosted cloud, or fram
 
 Start here:
 
-- [Product spec](docs/PRD.md)
-- [Build slices](docs/SLICES.md)
-- [API spec](docs/API_SPEC.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Execution semantics](docs/EXECUTION_SEMANTICS.md)
-- [Edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
-- [Testing strategy](docs/TESTING_STRATEGY.md)
+- [Decisions and edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
 
 ## Current Status
 
-Slices 1 through 6 are implemented: core APIs, Postgres migrations and persistence, lease-safe workers, task retries, workflow checkpoints, durable timers, cancellation, and manual retry. The CLI, dashboard, and demo in Slice 7 are not implemented yet.
+The execution foundation is implemented: core APIs, Postgres migrations and persistence, lease-safe workers, task retries, workflow checkpoints, durable timers, cancellation, and manual retry. The next work is production hardening, followed by observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
 
 Run the complete suite with a disposable local PostgreSQL 17 container:
 

@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
-Status: Draft
-Date: 2026-07-08
+Status: Current
+Updated: 2026-07-15
 
 Purpose: record product and architecture decisions that came out of auditing the docs against Trigger.dev, Inngest, BullMQ, and Temporal. This file is the implementation risk register for v1.
 
@@ -320,7 +320,7 @@ Priority only orders eligible pending work. Higher priority can starve low-prior
 
 ## Documentation Invariants
 
-Before implementation starts, searches across `docs/` should show:
+The canonical documentation must retain these invariants:
 
 - no v1 examples that import `@durable/*`
 - no v1 examples that call `createDurable(...)`
