@@ -138,6 +138,47 @@ Status: Planned
 - No known failure can silently strand eligible work.
 - The documented guarantees match observed production-like behavior.
 
+## Post-v1: Adapter Ecosystem
+
+Status: Future
+
+Adapter work begins only after the direct `pg` Postgres implementation meets the beta release gates. Durlo will keep one semantic execution contract while allowing applications to connect through their existing database client and, later, use additional storage engines.
+
+### Adapter Foundation
+
+- Stabilize and version the semantic storage contract around claims, leases, retries, steps, timers, idempotency, and transaction-bound run creation.
+- Define connection ownership so Durlo never closes a user-owned client or pool.
+- Add adapter lifecycle and capability metadata without weakening required execution guarantees.
+- Publish an adapter conformance suite covering concurrency, lease fencing, crash recovery, idempotency, timers, and transactions.
+- Keep the Postgres state-machine implementation shared so client integrations do not duplicate its correctness logic.
+
+### Postgres Client Integrations
+
+- Add an official Drizzle integration first, allowing users to provide their configured Drizzle client and transaction.
+- Add Prisma and Kysely integrations based on demand and the transaction guarantees their clients can expose.
+- Keep raw `pg` as the canonical Postgres implementation and the option for applications that do not use an ORM.
+- Name and document integrations so both the storage engine and client are clear; Drizzle and Prisma are connection choices, not separate durability engines.
+
+### Additional Storage Engines
+
+- Evaluate an official MongoDB storage adapter after the conformance suite is proven by Postgres.
+- Require MongoDB deployments and transaction capabilities that can preserve Durlo's existing atomicity and lease guarantees.
+- Model MongoDB as its own durable state engine rather than routing it through the Postgres implementation.
+- Do not release any storage adapter that weakens Durlo's documented at-least-once, idempotency, or lease-fencing semantics.
+
+### Community Adapters
+
+- Document how to implement and test third-party adapters.
+- Distinguish Durlo-maintained adapters from community-maintained adapters.
+- Require published compatibility and conformance results before listing a community adapter as supported.
+
+### Done When
+
+- Postgres passes the same public conformance suite available to adapter authors.
+- A Drizzle user can run Durlo and transactionally create runs using an existing configured client without separately managing a Durlo pool.
+- Adapter authors can implement the contract without importing Postgres-specific concepts into Durlo core.
+- Any additional storage engine demonstrates the same correctness guarantees under contention and crash recovery as Postgres.
+
 ## Tracking Model
 
 The roadmap and GitHub serve different purposes:
