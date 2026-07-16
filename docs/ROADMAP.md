@@ -39,7 +39,17 @@ The project is now in pre-release hardening. Product UI work begins after the ex
 
 ## Phase 1: Execution Hardening
 
-Status: Next
+Status: In Progress
+
+### Progress
+
+- Continuously replenished worker slots and independent timer promotion are implemented.
+- Lease heartbeats are serialized so a slow renewal cannot overlap the next renewal.
+- `worker.stop()` stops new claims and timer promotion, then `worker.start()` drains active work before returning.
+- Claim and timer polling recover independently from transient Postgres failures with bounded exponential backoff and jitter.
+- `worker.getHealth()` exposes lifecycle, active-slot, polling-success, and database-failure state.
+- Configured loggers receive structured worker lifecycle, database recovery, and run transition records.
+- App-scoped controls, sequential-step enforcement, and cooperative termination finalization remain open.
 
 ### Outcomes
 

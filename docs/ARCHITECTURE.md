@@ -63,7 +63,7 @@ A run is a durable task or workflow instance stored in `durlo_runs`. The run row
 
 ### Worker
 
-A worker polls Postgres for eligible runs whose resource ids it registered. It executes user code in-process and renews a lease while the run is active.
+A worker polls Postgres for eligible runs whose resource ids it registered. It executes user code in-process and renews a lease while the run is active. Execution slots are replenished as individual runs finish; the worker does not wait for an entire claimed group before claiming into newly available capacity.
 
 ### Step
 
@@ -115,7 +115,7 @@ worker claims the run again
 workflow re-enters and the fired sleep returns immediately
 ```
 
-No compute is held while a workflow sleeps. A running worker is required to promote due timers and claim resumed work.
+No compute is held while a workflow sleeps. A running worker is required to promote due timers and claim resumed work. Timer promotion runs independently of execution-slot availability, so long-running user code does not pause due timers.
 
 ## Ownership And Crash Recovery
 
@@ -157,7 +157,13 @@ Durlo does not begin, commit, or roll back the caller's transaction.
 
 Worker concurrency is local to one process. Postgres prevents two workers from owning the same claim, but Durlo v1 does not provide a global, per-resource, or per-tenant concurrency limit.
 
-The current worker executes claimed runs in polling cycles. Replacing batch-shaped cycles with continuously replenished capacity and independent timer promotion is the first roadmap phase.
+The worker maintains process-local concurrency with continuously replenished execution slots. Claiming waits only when every slot is occupied. Due-timer promotion runs in a separate maintenance loop.
+
+`worker.stop()` stops the claim and timer loops. Already claimed runs retain their heartbeats and are allowed to finish; the `worker.start()` promise settles only after those active runs drain. Lease renewals for each run are serialized so a slow database call cannot overlap a later heartbeat.
+
+Claim and timer polling recover independently from transient database errors. Each loop uses exponential backoff starting at 100 milliseconds, capped at 30 seconds, with 20 percent jitter. A persistence error for one active run is logged and left for lease-based recovery instead of permanently stopping the worker process.
+
+`worker.getHealth()` returns a process-local snapshot containing lifecycle status, active slots, consecutive claim and timer failures, last successful polling times, and the most recent operational error. When a `Durlo` logger is configured, worker lifecycle, database retries, lease loss, and run transitions are emitted as structured records.
 
 ## Control Boundary
 

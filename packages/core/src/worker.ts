@@ -4,11 +4,14 @@ import { calculateRetryDelay } from "./retry.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
 import { createStepTools } from "./steps.js";
 import type {
+  ClaimRunsInput,
   ClaimedRun,
   DurloAdapter,
+  Logger,
   NormalizedRetryPolicy,
   RegisteredTaskDefinition,
   RegisteredWorkflowDefinition,
+  WorkerHealth,
   WorkerOptions
 } from "./types.js";
 import { parseDuration } from "./validation.js";
@@ -17,12 +20,38 @@ class TimeoutError extends Error {
   override readonly name = "TimeoutError";
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+const OPERATIONAL_BACKOFF_INITIAL = 100;
+const OPERATIONAL_BACKOFF_MAX = 30_000;
+const OPERATIONAL_BACKOFF_JITTER = 0.2;
+
+function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, milliseconds);
+    timer.unref();
+    signal?.addEventListener("abort", finish, { once: true });
+
+    function finish(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    }
+  });
 }
 
 function isLostLease(error: unknown): boolean {
   return error instanceof LostLeaseError;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function operationalBackoff(failureCount: number): number {
+  const exponential = OPERATIONAL_BACKOFF_INITIAL * 2 ** Math.min(failureCount - 1, 20);
+  const base = Math.min(OPERATIONAL_BACKOFF_MAX, exponential);
+  const jitter = 1 - OPERATIONAL_BACKOFF_JITTER + Math.random() * OPERATIONAL_BACKOFF_JITTER * 2;
+  return Math.min(OPERATIONAL_BACKOFF_MAX, Math.floor(base * jitter));
 }
 
 export class Worker {
@@ -34,12 +63,20 @@ export class Worker {
   private readonly concurrency: number;
   private readonly pollInterval: number;
   private readonly leaseDuration: number;
-  private stopping = false;
+  private readonly logger: Logger | undefined;
+  private readonly activeRuns = new Set<Promise<void>>();
+  private stopController: AbortController | undefined;
+  private claimFailures = 0;
+  private timerFailures = 0;
+  private lastSuccessfulClaimAt: Date | null = null;
+  private lastSuccessfulTimerPromotionAt: Date | null = null;
+  private lastError: WorkerHealth["database"]["lastError"] = null;
   private started = false;
 
-  constructor(appId: string, adapter: DurloAdapter, options: WorkerOptions) {
+  constructor(appId: string, adapter: DurloAdapter, options: WorkerOptions, logger?: Logger) {
     this.appId = appId;
     this.adapter = adapter;
+    this.logger = logger;
     this.id = options.workerId ?? randomUUID();
     this.concurrency = options.concurrency ?? 10;
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 1_000) {
@@ -65,19 +102,50 @@ export class Worker {
   async start(): Promise<void> {
     if (this.started) throw new Error("worker is already started");
     this.started = true;
-    this.stopping = false;
+    this.claimFailures = 0;
+    this.timerFailures = 0;
+    this.lastError = null;
+    const stopController = new AbortController();
+    this.stopController = stopController;
+    this.log("info", "worker.started", { concurrency: this.concurrency });
+    const claimLoop = this.runClaimLoop(stopController.signal);
+    const timerLoop = this.runTimerLoop(stopController.signal);
     try {
-      while (!this.stopping) {
-        const count = await this.runOnce();
-        if (count === 0 && !this.stopping) await delay(this.pollInterval);
-      }
+      await Promise.all([claimLoop, timerLoop]);
     } finally {
+      stopController.abort();
+      await Promise.allSettled([claimLoop, timerLoop]);
+      await Promise.allSettled([...this.activeRuns]);
+      this.stopController = undefined;
       this.started = false;
+      this.log("info", "worker.stopped");
     }
   }
 
   stop(): void {
-    this.stopping = true;
+    if (this.stopController && !this.stopController.signal.aborted) {
+      this.log("info", "worker.stopping", { activeRuns: this.activeRuns.size });
+    }
+    this.stopController?.abort();
+  }
+
+  getHealth(): WorkerHealth {
+    const stopping = this.stopController?.signal.aborted === true;
+    return {
+      workerId: this.id,
+      appId: this.appId,
+      status: this.started ? (stopping ? "stopping" : "running") : "idle",
+      activeRuns: this.activeRuns.size,
+      concurrency: this.concurrency,
+      database: {
+        healthy: this.claimFailures === 0 && this.timerFailures === 0,
+        claimFailures: this.claimFailures,
+        timerFailures: this.timerFailures,
+        lastSuccessfulClaimAt: this.lastSuccessfulClaimAt,
+        lastSuccessfulTimerPromotionAt: this.lastSuccessfulTimerPromotionAt,
+        lastError: this.lastError
+      }
+    };
   }
 
   async runOnce(): Promise<number> {
@@ -99,35 +167,151 @@ export class Worker {
     return runs.length;
   }
 
+  private async runClaimLoop(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      const capacity = this.concurrency - this.activeRuns.size;
+      if (capacity === 0) {
+        await Promise.race([...this.activeRuns, delay(this.pollInterval, signal)]);
+        continue;
+      }
+
+      let runs: ClaimedRun[];
+      try {
+        runs = await this.adapter.claimRuns({
+          appId: this.appId,
+          workerId: this.id,
+          limit: capacity,
+          leaseDuration: this.leaseDuration,
+          resources: this.resources()
+        });
+        this.claimFailures = 0;
+        this.lastSuccessfulClaimAt = new Date();
+      } catch (error) {
+        if (signal.aborted) return;
+        this.claimFailures += 1;
+        const retryIn = operationalBackoff(this.claimFailures);
+        this.recordError("claim", error);
+        this.log("warn", "worker.database_retry", {
+          operation: "claim",
+          failureCount: this.claimFailures,
+          retryIn,
+          error: errorMessage(error)
+        });
+        await delay(retryIn, signal);
+        continue;
+      }
+      if (signal.aborted) {
+        const released = await Promise.allSettled(
+          runs.map((run) =>
+            this.adapter.releaseRun({
+              runId: run.id,
+              workerId: this.id,
+              leaseToken: run.leaseToken
+            })
+          )
+        );
+        for (const result of released) {
+          if (result.status === "rejected") {
+            this.recordError("release", result.reason);
+            this.log("error", "worker.release_failed", {
+              error: errorMessage(result.reason)
+            });
+          }
+        }
+        return;
+      }
+      if (runs.length === 0) {
+        await delay(this.pollInterval, signal);
+        continue;
+      }
+      this.log("debug", "worker.runs_claimed", { count: runs.length });
+      for (const run of runs) this.trackRun(run);
+    }
+  }
+
+  private async runTimerLoop(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      let timers;
+      try {
+        timers = await this.adapter.fireDueTimers({
+          appId: this.appId,
+          limit: this.concurrency
+        });
+        this.timerFailures = 0;
+        this.lastSuccessfulTimerPromotionAt = new Date();
+      } catch (error) {
+        if (signal.aborted) return;
+        this.timerFailures += 1;
+        const retryIn = operationalBackoff(this.timerFailures);
+        this.recordError("timer", error);
+        this.log("warn", "worker.database_retry", {
+          operation: "timer",
+          failureCount: this.timerFailures,
+          retryIn,
+          error: errorMessage(error)
+        });
+        await delay(retryIn, signal);
+        continue;
+      }
+      if (timers.length > 0) {
+        this.log("debug", "worker.timers_promoted", { count: timers.length });
+      }
+      if (timers.length < this.concurrency) await delay(this.pollInterval, signal);
+    }
+  }
+
+  private trackRun(run: ClaimedRun): void {
+    const tracked = this.executeRun(run)
+      .catch((error: unknown) => {
+        this.recordError("execution", error);
+        this.log("error", "run.persistence_failed", {
+          runId: run.id,
+          resourceId: run.resourceId,
+          error: errorMessage(error)
+        });
+      })
+      .finally(() => {
+        this.activeRuns.delete(tracked);
+      });
+    this.activeRuns.add(tracked);
+  }
+
+  private resources(): ClaimRunsInput["resources"] {
+    return [
+      ...[...this.tasks.keys()].map((resourceId) => ({ kind: "task" as const, resourceId })),
+      ...[...this.workflows.keys()].map((resourceId) => ({
+        kind: "workflow" as const,
+        resourceId
+      }))
+    ];
+  }
+
   private async executeRun(run: ClaimedRun): Promise<void> {
     const task = run.kind === "task" ? this.tasks.get(run.resourceId) : undefined;
     const workflow = run.kind === "workflow" ? this.workflows.get(run.resourceId) : undefined;
     if (!task && !workflow) return;
+    this.log("debug", "run.started", {
+      runId: run.id,
+      kind: run.kind,
+      resourceId: run.resourceId,
+      attempt: run.attemptCount
+    });
     const abortController = new AbortController();
     let ownsLease = true;
-    const heartbeat = setInterval(
-      () => {
-        void this.adapter
-          .extendRunLease({
-            runId: run.id,
-            workerId: this.id,
-            leaseToken: run.leaseToken,
-            leaseDuration: this.leaseDuration
-          })
-          .then((extended) => {
-            if (!extended) {
-              ownsLease = false;
-              abortController.abort(new LostLeaseError(`lease lost for run ${run.id}`));
-            }
-          })
-          .catch(() => {
-            ownsLease = false;
-            abortController.abort(new LostLeaseError(`lease renewal failed for run ${run.id}`));
-          });
-      },
-      Math.max(1, Math.floor(this.leaseDuration / 3))
-    );
-    heartbeat.unref();
+    const heartbeatController = new AbortController();
+    const heartbeat = this.runHeartbeat(run, heartbeatController.signal, (error) => {
+      ownsLease = false;
+      abortController.abort(error);
+      this.log("warn", "run.lease_lost", {
+        runId: run.id,
+        resourceId: run.resourceId,
+        error: error.message
+      });
+    });
+    const stopHeartbeat = async (): Promise<void> => {
+      heartbeatController.abort();
+      await heartbeat;
+    };
 
     try {
       const definition = task ?? workflow!;
@@ -149,6 +333,7 @@ export class Worker {
         timeout === undefined
           ? await execution
           : await this.withTimeout(execution, timeout, abortController);
+      await stopHeartbeat();
       if (!ownsLease) return;
       await this.adapter.completeRun({
         runId: run.id,
@@ -156,8 +341,17 @@ export class Worker {
         leaseToken: run.leaseToken,
         output: serialize(output === undefined ? null : output)
       });
+      this.log("info", "run.completed", {
+        runId: run.id,
+        kind: run.kind,
+        resourceId: run.resourceId
+      });
     } catch (error) {
-      if (error instanceof WorkflowSleepError) return;
+      await stopHeartbeat();
+      if (error instanceof WorkflowSleepError) {
+        this.log("debug", "run.sleeping", { runId: run.id, resourceId: run.resourceId });
+        return;
+      }
       if (!ownsLease || isLostLease(error)) return;
       const retry = this.retryFor(run);
       const failureNumber = run.failureCount + 1;
@@ -177,11 +371,46 @@ export class Worker {
           ...(error instanceof TimeoutError ? { attemptStatus: "timed_out" } : {}),
           outcome
         });
+        this.log(outcome.status === "pending" ? "warn" : "error", "run.failed", {
+          runId: run.id,
+          kind: run.kind,
+          resourceId: run.resourceId,
+          attemptStatus: error instanceof TimeoutError ? "timed_out" : "failed",
+          outcome: outcome.status,
+          error: errorMessage(error)
+        });
       } catch (writeError) {
         if (!isLostLease(writeError)) throw writeError;
       }
     } finally {
-      clearInterval(heartbeat);
+      await stopHeartbeat();
+    }
+  }
+
+  private async runHeartbeat(
+    run: ClaimedRun,
+    signal: AbortSignal,
+    loseLease: (error: LostLeaseError) => void
+  ): Promise<void> {
+    const interval = Math.max(1, Math.floor(this.leaseDuration / 3));
+    while (!signal.aborted) {
+      await delay(interval, signal);
+      if (signal.aborted) return;
+      try {
+        const extended = await this.adapter.extendRunLease({
+          runId: run.id,
+          workerId: this.id,
+          leaseToken: run.leaseToken,
+          leaseDuration: this.leaseDuration
+        });
+        if (!extended) {
+          loseLease(new LostLeaseError(`lease lost for run ${run.id}`));
+          return;
+        }
+      } catch {
+        loseLease(new LostLeaseError(`lease renewal failed for run ${run.id}`));
+        return;
+      }
     }
   }
 
@@ -214,6 +443,34 @@ export class Worker {
       return await Promise.race([promise, timeout]);
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  private recordError(
+    operation: WorkerHealth["database"]["lastError"] extends infer T
+      ? T extends { operation: infer O }
+        ? O
+        : never
+      : never,
+    error: unknown
+  ): void {
+    this.lastError = { operation, message: errorMessage(error), at: new Date() };
+  }
+
+  private log(
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    data: Record<string, unknown> = {}
+  ): void {
+    try {
+      this.logger?.[level]?.(message, {
+        event: message,
+        appId: this.appId,
+        workerId: this.id,
+        ...data
+      });
+    } catch {
+      // Logging must never change durable execution behavior.
     }
   }
 }

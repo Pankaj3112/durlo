@@ -72,11 +72,16 @@ Rules:
 - A claimed run has `locked_by` and `locked_until`.
 - A claimed run also has a unique `lease_token` generated for that claim.
 - A worker may extend the lease while executing.
+- Heartbeat renewals for one run are serialized; Durlo does not start another renewal while the previous renewal is unresolved.
 - If a worker crashes, the lease eventually expires.
 - Another worker may reclaim expired work.
 - User code can therefore execute more than once.
 - Completion, failure, cancellation, and lease extension must verify the current lease token when acting on a running attempt.
 - If lease extension returns false, the worker has lost ownership. It should stop scheduling more Durlo work for that run and any final completion write must be rejected by the adapter.
+- Worker concurrency slots are replenished individually as runs finish.
+- Timer promotion continues independently while execution slots are occupied.
+- Graceful stop prevents new claims and waits for already active runs to settle.
+- Transient claim and timer query failures are retried with bounded exponential backoff and jitter; either loop can recover without restarting the worker.
 
 Durlo must not hold a database transaction open while user code runs.
 

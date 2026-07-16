@@ -309,3 +309,23 @@ export type WorkerOptions = {
   leaseDuration?: DurationInput;
   workerId?: string;
 };
+
+export type WorkerHealth = {
+  workerId: string;
+  appId: string;
+  status: "idle" | "running" | "stopping";
+  activeRuns: number;
+  concurrency: number;
+  database: {
+    healthy: boolean;
+    claimFailures: number;
+    timerFailures: number;
+    lastSuccessfulClaimAt: Date | null;
+    lastSuccessfulTimerPromotionAt: Date | null;
+    lastError: {
+      operation: "claim" | "timer" | "execution" | "release";
+      message: string;
+      at: Date;
+    } | null;
+  };
+};

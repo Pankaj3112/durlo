@@ -6,6 +6,7 @@ import type {
   CreateRunInput,
   DurloAdapter,
   DurloOptions,
+  Logger,
   NormalizedRetryPolicy,
   RunHandle,
   RunOptions,
@@ -45,6 +46,7 @@ export class Durlo {
   };
   private readonly defaultRetry: NormalizedRetryPolicy;
   private readonly defaultTimeout?: number;
+  private readonly logger: Logger | undefined;
   private readonly resourceKeys = new Set<string>();
 
   constructor(options: DurloOptions) {
@@ -52,6 +54,7 @@ export class Durlo {
     if (!options.adapter) throw new TypeError("adapter is required");
     this.id = options.id;
     this.adapter = options.adapter;
+    this.logger = options.logger === false ? undefined : options.logger;
     this.defaultRetry = normalizeRetryPolicy(options.defaultRetry);
     if (options.defaultTimeout !== undefined)
       this.defaultTimeout = parseDuration(options.defaultTimeout, "default timeout");
@@ -229,7 +232,7 @@ export class Durlo {
   }
 
   worker(options: WorkerOptions): Worker {
-    return new Worker(this.id, this.adapter, options);
+    return new Worker(this.id, this.adapter, options, this.logger);
   }
 
   private register(kind: "task" | "workflow", id: string): void {

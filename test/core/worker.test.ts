@@ -31,10 +31,10 @@ function createWorkerAdapter(): DurloAdapter {
   };
 }
 
-function claimedTask(resourceId: string): ClaimedRun {
+function claimedTask(resourceId: string, id = "run-1"): ClaimedRun {
   const now = new Date("2026-07-11T00:00:00.000Z");
   return {
-    id: "run-1",
+    id,
     appId: "worker-tests",
     kind: "task",
     resourceId,
@@ -54,7 +54,7 @@ function claimedTask(resourceId: string): ClaimedRun {
     attemptCount: 1,
     maxAttempts: 3,
     lockedBy: "worker-1",
-    leaseToken: "lease-1",
+    leaseToken: id === "run-1" ? "lease-1" : `lease-${id}`,
     lockedUntil: new Date(now.getTime() + 30_000),
     stalledCount: 0,
     failureCount: 0,
@@ -146,6 +146,196 @@ describe("worker lifecycle", () => {
     });
     await expect(worker.start()).resolves.toBeUndefined();
   });
+
+  it("replenishes a free concurrency slot without waiting for a slow run", async () => {
+    const adapter = createWorkerAdapter();
+    let finishSlowRun!: () => void;
+    let markThirdStarted!: () => void;
+    const slowRun = new Promise<void>((resolve) => {
+      finishSlowRun = resolve;
+    });
+    const thirdStarted = new Promise<void>((resolve) => {
+      markThirdStarted = resolve;
+    });
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "slot-task",
+      run: async (_input: unknown, context) => {
+        if (context.run.id === "run-1") await slowRun;
+        if (context.run.id === "run-3") {
+          markThirdStarted();
+          worker.stop();
+        }
+      }
+    });
+    adapter.claimRuns = vi
+      .fn()
+      .mockResolvedValueOnce([claimedTask(task.id, "run-1"), claimedTask(task.id, "run-2")])
+      .mockResolvedValueOnce([claimedTask(task.id, "run-3")])
+      .mockResolvedValue([]);
+    const worker = durlo.worker({
+      tasks: [task],
+      workerId: "worker-1",
+      concurrency: 2,
+      pollInterval: 1_000
+    });
+
+    let stopped = false;
+    const started = worker.start().then(() => {
+      stopped = true;
+    });
+    await thirdStarted;
+
+    expect(adapter.claimRuns).toHaveBeenNthCalledWith(2, expect.objectContaining({ limit: 1 }));
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    finishSlowRun();
+    await started;
+    expect(stopped).toBe(true);
+  });
+
+  it("promotes timers while all execution slots are occupied and drains on stop", async () => {
+    const adapter = createWorkerAdapter();
+    let finishRun!: () => void;
+    let markRunStarted!: () => void;
+    let markSecondTimerCycle!: () => void;
+    const runFinished = new Promise<void>((resolve) => {
+      finishRun = resolve;
+    });
+    const runStarted = new Promise<void>((resolve) => {
+      markRunStarted = resolve;
+    });
+    const secondTimerCycle = new Promise<void>((resolve) => {
+      markSecondTimerCycle = resolve;
+    });
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "timer-task",
+      run: async () => {
+        markRunStarted();
+        await runFinished;
+      }
+    });
+    adapter.claimRuns = vi
+      .fn()
+      .mockResolvedValueOnce([claimedTask(task.id)])
+      .mockResolvedValue([]);
+    adapter.fireDueTimers = vi.fn(async () => {
+      if (vi.mocked(adapter.fireDueTimers).mock.calls.length === 2) markSecondTimerCycle();
+      return [];
+    });
+    const worker = durlo.worker({
+      tasks: [task],
+      workerId: "worker-1",
+      concurrency: 1,
+      pollInterval: 5
+    });
+
+    let stopped = false;
+    const started = worker.start().then(() => {
+      stopped = true;
+    });
+    await runStarted;
+    await secondTimerCycle;
+    worker.stop();
+
+    expect(adapter.fireDueTimers).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    finishRun();
+    await started;
+    expect(stopped).toBe(true);
+  });
+
+  it("recovers claim polling after bounded backoff and reports worker health", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const adapter = createWorkerAdapter();
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      const durlo = new Durlo({ id: "worker-tests", adapter, logger });
+      const worker = durlo.worker({ workerId: "recovering-worker", pollInterval: 1_000 });
+      adapter.claimRuns = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("database unavailable"))
+        .mockImplementationOnce(async () => {
+          worker.stop();
+          return [];
+        });
+
+      expect(worker.getHealth()).toMatchObject({ status: "idle", activeRuns: 0 });
+      const started = worker.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(worker.getHealth()).toMatchObject({
+        status: "running",
+        database: {
+          healthy: false,
+          claimFailures: 1,
+          lastError: { operation: "claim", message: "database unavailable" }
+        }
+      });
+      expect(adapter.claimRuns).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      await started;
+      expect(adapter.claimRuns).toHaveBeenCalledTimes(2);
+      expect(worker.getHealth()).toMatchObject({
+        status: "idle",
+        database: { healthy: true, claimFailures: 0 }
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "worker.database_retry",
+        expect.objectContaining({ operation: "claim", failureCount: 1, retryIn: 100 })
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "worker.started",
+        expect.objectContaining({ appId: "worker-tests", workerId: "recovering-worker" })
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "worker.stopped",
+        expect.objectContaining({ appId: "worker-tests", workerId: "recovering-worker" })
+      );
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers timer promotion independently after a database failure", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const adapter = createWorkerAdapter();
+      const worker = new Durlo({ id: "worker-tests", adapter }).worker({ pollInterval: 1_000 });
+      adapter.fireDueTimers = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("timer query failed"))
+        .mockImplementationOnce(async () => {
+          worker.stop();
+          return [];
+        });
+
+      const started = worker.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.getHealth()).toMatchObject({
+        database: { healthy: false, timerFailures: 1 }
+      });
+
+      await vi.advanceTimersByTimeAsync(100);
+      await started;
+      expect(adapter.fireDueTimers).toHaveBeenCalledTimes(2);
+      expect(worker.getHealth()).toMatchObject({
+        status: "idle",
+        database: { healthy: true, timerFailures: 0 }
+      });
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("worker heartbeats", () => {
@@ -209,5 +399,61 @@ describe("worker heartbeats", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("serializes lease renewals when a heartbeat is slow", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createWorkerAdapter();
+      const controlled = controlledTask(adapter, "extended");
+      const renewals: Array<(extended: boolean) => void> = [];
+      adapter.extendRunLease = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            renewals.push(resolve);
+          })
+      );
+
+      const run = controlled.worker.runOnce();
+      await controlled.started;
+      await vi.advanceTimersByTimeAsync(30);
+      expect(adapter.extendRunLease).toHaveBeenCalledTimes(1);
+
+      renewals.shift()!(true);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(adapter.extendRunLease).toHaveBeenCalledTimes(2);
+
+      renewals.shift()!(true);
+      controlled.resolveExecution("completed result");
+      await expect(run).resolves.toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("worker logging", () => {
+  it("emits structured run transition records without requiring a logger", async () => {
+    const adapter = createWorkerAdapter();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const durlo = new Durlo({ id: "worker-tests", adapter, logger });
+    const task = durlo.task({ id: "logged-task", run: async () => "done" });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+
+    await durlo.worker({ tasks: [task], workerId: "logging-worker" }).runOnce();
+
+    expect(logger.debug).toHaveBeenCalledWith(
+      "run.started",
+      expect.objectContaining({
+        appId: "worker-tests",
+        workerId: "logging-worker",
+        runId: "run-1",
+        resourceId: "logged-task"
+      })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "run.completed",
+      expect.objectContaining({ runId: "run-1", kind: "task" })
+    );
   });
 });
