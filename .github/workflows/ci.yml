@@ -72,6 +72,9 @@ jobs:
       - name: Test with coverage
         run: pnpm test:ci
 
+      - name: Test packed crash-and-resume quickstart
+        run: pnpm test:quickstart
+
       - name: Test restricted database role
         run: pnpm test:privileged
 

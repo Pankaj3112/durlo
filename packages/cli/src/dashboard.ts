@@ -38,8 +38,11 @@ export async function startDashboard(
         response.destroy(error instanceof Error ? error : undefined);
         return;
       }
-      const status =
-        error instanceof ValidationError ? 400 : error instanceof RunStateError ? 409 : 500;
+      const status = isError(error, ValidationError, "ValidationError")
+        ? 400
+        : isError(error, RunStateError, "RunStateError")
+          ? 409
+          : 500;
       sendJson(response, status, { error: errorMessage(error) });
     });
   });
@@ -216,4 +219,15 @@ function closeServer(server: Server): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isError<T extends Error>(
+  error: unknown,
+  constructor: new (...args: never[]) => T,
+  name: string
+): error is T {
+  return (
+    error instanceof constructor ||
+    (typeof error === "object" && error !== null && "name" in error && error.name === name)
+  );
 }

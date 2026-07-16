@@ -1,0 +1,27 @@
+{
+  "name": "@durlo/quickstart",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "migrate": "durlo migrate",
+    "worker": "durlo worker",
+    "dev": "durlo dev",
+    "start": "tsx src/start.ts"
+  },
+  "dependencies": {
+    "@durlo/cli": "workspace:*",
+    "@durlo/core": "workspace:*",
+    "@durlo/postgres": "workspace:*",
+    "pg": "^8.22.0",
+    "tsx": "^4.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "@types/pg": "^8.20.0",
+    "eslint": "^9.39.4",
+    "typescript": "^5.9.3"
+  }
+}
