@@ -14,6 +14,7 @@ function createWorkerAdapter(): DurloAdapter {
     ...transactional,
     getRun: unsupported,
     getRunDetails: unsupported,
+    getBacklogHealth: unsupported,
     listRuns: unsupported,
     cancelRun: unsupported,
     retryRun: unsupported,

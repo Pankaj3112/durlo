@@ -57,6 +57,23 @@ function createAdapter(): DurloAdapter & {
     ...transactional,
     getRun: async () => null,
     getRunDetails: async () => null,
+    getBacklogHealth: async ({ appId }) => ({
+      appId,
+      checkedAt: new Date(),
+      runs: {
+        active: 0,
+        pending: 0,
+        ready: 0,
+        delayed: 0,
+        running: 0,
+        sleeping: 0,
+        expiredLeases: 0,
+        oldestReadyAt: null,
+        oldestReadyCreatedAt: null,
+        readyLagMs: 0
+      },
+      timers: { pending: 0, due: 0, oldestDueAt: null, lagMs: 0 }
+    }),
     listRuns: async () => [],
     cancelRun: async () => {
       throw new Error("not implemented by test adapter");
@@ -220,6 +237,7 @@ describe("Durlo core API", () => {
     const adapter = createAdapter();
     const getRun = vi.spyOn(adapter, "getRun").mockResolvedValue(null);
     const getRunDetails = vi.spyOn(adapter, "getRunDetails").mockResolvedValue(null);
+    const getBacklogHealth = vi.spyOn(adapter, "getBacklogHealth");
     const cancelRun = vi
       .spyOn(adapter, "cancelRun")
       .mockRejectedValue(new Error("cancel not implemented"));
@@ -231,6 +249,7 @@ describe("Durlo core API", () => {
 
     await expect(durlo.runs.get("run-1")).resolves.toBeNull();
     await expect(durlo.runs.getDetails("run-1")).resolves.toBeNull();
+    await expect(durlo.runs.getBacklogHealth()).resolves.toMatchObject({ appId: "scoped-app" });
     await expect(durlo.runs.cancel("run-1")).rejects.toThrow("cancel not implemented");
     await expect(durlo.runs.retry("run-1")).rejects.toThrow("retry not implemented");
     await expect(
@@ -240,6 +259,7 @@ describe("Durlo core API", () => {
     const expected = { appId: "scoped-app", runId: "run-1" };
     expect(getRun).toHaveBeenCalledWith(expected);
     expect(getRunDetails).toHaveBeenCalledWith(expected);
+    expect(getBacklogHealth).toHaveBeenCalledWith({ appId: "scoped-app" });
     expect(cancelRun).toHaveBeenCalledWith(expected);
     expect(retryRun).toHaveBeenCalledWith(expected);
     expect(cleanupRuns).toHaveBeenCalledWith({

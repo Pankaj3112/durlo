@@ -3,6 +3,7 @@ import type {
   AttemptKind,
   AttemptRecord,
   AttemptStatus,
+  BacklogHealth,
   ClaimedRun,
   ClaimRunsInput,
   CreateRunInput,
@@ -121,6 +122,21 @@ type AttemptRow = QueryResultRow & {
   error_json: SerializedError | null;
   started_at: Date;
   completed_at: Date | null;
+};
+
+type BacklogHealthRow = QueryResultRow & {
+  checked_at: Date;
+  pending: string;
+  ready: string;
+  delayed: string;
+  running: string;
+  sleeping: string;
+  expired_leases: string;
+  oldest_ready_at: Date | null;
+  oldest_ready_created_at: Date | null;
+  pending_timers: string;
+  due_timers: string;
+  oldest_due_at: Date | null;
 };
 
 type Query = <R extends QueryResultRow = QueryResultRow>(
@@ -373,6 +389,99 @@ export class PostgresAdapter implements DurloAdapter {
     } finally {
       client.release();
     }
+  }
+
+  async getBacklogHealth(input: { appId: string }): Promise<BacklogHealth> {
+    const result = await this.query()<BacklogHealthRow>(
+      `
+        with clock as (
+          select now() as checked_at
+        ), run_health as (
+          select
+            count(*) filter (where status = 'pending')::text as pending,
+            count(*) filter (
+              where status = 'pending' and scheduled_at <= clock.checked_at
+            )::text as ready,
+            count(*) filter (
+              where status = 'pending' and scheduled_at > clock.checked_at
+            )::text as delayed,
+            count(*) filter (where status = 'running')::text as running,
+            count(*) filter (where status = 'sleeping')::text as sleeping,
+            count(*) filter (
+              where status = 'running' and locked_until <= clock.checked_at
+            )::text as expired_leases,
+            min(scheduled_at) filter (
+              where status = 'pending' and scheduled_at <= clock.checked_at
+            ) as oldest_ready_at,
+            min(created_at) filter (
+              where status = 'pending' and scheduled_at <= clock.checked_at
+            ) as oldest_ready_created_at
+          from durlo_runs
+          cross join clock
+          where app_id = $1 and status in ('pending', 'running', 'sleeping')
+          group by clock.checked_at
+        ), timer_health as (
+          select
+            count(*)::text as pending_timers,
+            count(*) filter (where t.fire_at <= clock.checked_at)::text as due_timers,
+            min(t.fire_at) filter (where t.fire_at <= clock.checked_at) as oldest_due_at
+          from durlo_timers t
+          join durlo_runs r on r.id = t.run_id
+          cross join clock
+          where r.app_id = $1 and r.status = 'sleeping' and t.status = 'pending'
+          group by clock.checked_at
+        )
+        select
+          clock.checked_at,
+          coalesce(run_health.pending, '0') as pending,
+          coalesce(run_health.ready, '0') as ready,
+          coalesce(run_health.delayed, '0') as delayed,
+          coalesce(run_health.running, '0') as running,
+          coalesce(run_health.sleeping, '0') as sleeping,
+          coalesce(run_health.expired_leases, '0') as expired_leases,
+          run_health.oldest_ready_at,
+          run_health.oldest_ready_created_at,
+          coalesce(timer_health.pending_timers, '0') as pending_timers,
+          coalesce(timer_health.due_timers, '0') as due_timers,
+          timer_health.oldest_due_at
+        from clock
+        left join run_health on true
+        left join timer_health on true
+      `,
+      [input.appId]
+    );
+    const row = result.rows[0]!;
+    const pending = Number(row.pending);
+    const running = Number(row.running);
+    const sleeping = Number(row.sleeping);
+    return {
+      appId: input.appId,
+      checkedAt: row.checked_at,
+      runs: {
+        active: pending + running + sleeping,
+        pending,
+        ready: Number(row.ready),
+        delayed: Number(row.delayed),
+        running,
+        sleeping,
+        expiredLeases: Number(row.expired_leases),
+        oldestReadyAt: row.oldest_ready_at,
+        oldestReadyCreatedAt: row.oldest_ready_created_at,
+        readyLagMs:
+          row.oldest_ready_at === null
+            ? 0
+            : Math.max(0, row.checked_at.getTime() - row.oldest_ready_at.getTime())
+      },
+      timers: {
+        pending: Number(row.pending_timers),
+        due: Number(row.due_timers),
+        oldestDueAt: row.oldest_due_at,
+        lagMs:
+          row.oldest_due_at === null
+            ? 0
+            : Math.max(0, row.checked_at.getTime() - row.oldest_due_at.getTime())
+      }
+    };
   }
 
   async listRuns(input: RunListInput): Promise<RunSummary[]> {

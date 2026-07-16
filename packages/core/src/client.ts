@@ -11,6 +11,7 @@ import {
 } from "./limits.js";
 import type {
   BatchItem,
+  BacklogHealth,
   CreateRunInput,
   DurloAdapter,
   DurloLimits,
@@ -111,6 +112,7 @@ export class Durlo {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
     getDetails: (handleOrId: RunHandle | string) => Promise<RunDetails | null>;
     list: (options?: RunListOptions) => Promise<RunListPage>;
+    getBacklogHealth: () => Promise<BacklogHealth>;
     cancel: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     retry: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     cleanup: (options: RetentionCleanupOptions) => Promise<RetentionCleanupResult>;
@@ -140,6 +142,7 @@ export class Durlo {
         return records ? buildRunDetails(records) : null;
       },
       list: (listOptions) => this.listRuns(listOptions),
+      getBacklogHealth: () => this.adapter.getBacklogHealth({ appId: this.id }),
       cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
       retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) }),
       cleanup: (cleanupOptions) => this.cleanupRuns(cleanupOptions)

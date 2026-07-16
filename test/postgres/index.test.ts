@@ -246,6 +246,81 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(details?.timeline.map(({ type }) => type)).toContain("run_manual_retry_scheduled");
   });
 
+  it("reports app-scoped backlog, expired leases, and database-clocked timer lag", async () => {
+    const durlo = new Durlo({ id: "health-app", adapter });
+    const readyTask = durlo.task({ id: "ready-health", run: async () => undefined });
+    const runningTask = durlo.task({ id: "running-health", run: async () => undefined });
+    const delayedTask = durlo.task({ id: "delayed-health", run: async () => undefined });
+    const sleepingWorkflow = durlo.workflow({
+      id: "sleeping-health",
+      run: async ({ step }) => step.sleep("health-timer", "1d")
+    });
+    const running = await runningTask.enqueue({});
+    await adapter.claimRuns({
+      appId: durlo.id,
+      workerId: "expired-health-worker",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources: [
+        { kind: "task", resourceId: runningTask.id, resourceVersion: runningTask.version }
+      ]
+    });
+    const ready = await readyTask.enqueue({});
+    await delayedTask.enqueue({}, { runAt: "2030-01-01" });
+    const sleeping = await sleepingWorkflow.start({});
+    expect(await durlo.worker({ workflows: [sleepingWorkflow] }).runOnce()).toBe(1);
+
+    await adapter.pool.query(
+      `update durlo_runs
+       set locked_until = now() - interval '2 seconds'
+       where id = $1`,
+      [running.id]
+    );
+    await adapter.pool.query(
+      `update durlo_runs
+       set scheduled_at = now() - interval '10 seconds',
+           created_at = now() - interval '20 seconds'
+       where id = $1`,
+      [ready.id]
+    );
+    await adapter.pool.query(
+      "update durlo_timers set fire_at = now() - interval '5 seconds' where run_id = $1",
+      [sleeping.id]
+    );
+    const otherDurlo = new Durlo({ id: "other-health-app", adapter });
+    const otherTask = otherDurlo.task({ id: "other-ready", run: async () => undefined });
+    await otherTask.enqueue({});
+
+    const health = await durlo.runs.getBacklogHealth();
+    expect(health).toMatchObject({
+      appId: "health-app",
+      runs: {
+        active: 4,
+        pending: 2,
+        ready: 1,
+        delayed: 1,
+        running: 1,
+        sleeping: 1,
+        expiredLeases: 1,
+        oldestReadyAt: expect.any(Date),
+        oldestReadyCreatedAt: expect.any(Date)
+      },
+      timers: {
+        pending: 1,
+        due: 1,
+        oldestDueAt: expect.any(Date)
+      }
+    });
+    expect(health.runs.readyLagMs).toBeGreaterThanOrEqual(9_000);
+    expect(health.timers.lagMs).toBeGreaterThanOrEqual(4_000);
+    expect(health.checkedAt).toBeInstanceOf(Date);
+    await expect(durlo.runs.get(running)).resolves.toMatchObject({ status: "running" });
+    await expect(durlo.runs.get(sleeping)).resolves.toMatchObject({ status: "sleeping" });
+    await expect(durlo.runs.getDetails(sleeping)).resolves.toMatchObject({
+      diagnostics: { timerLagMs: expect.any(Number) }
+    });
+  });
+
   it("resumes a sleeping workflow only on its exact compatible version", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const oldWorkflow = durlo.workflow({

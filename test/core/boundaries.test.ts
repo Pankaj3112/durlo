@@ -41,6 +41,23 @@ function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
     ...transactional,
     getRun: async () => null,
     getRunDetails: async () => null,
+    getBacklogHealth: async ({ appId }) => ({
+      appId,
+      checkedAt: new Date(),
+      runs: {
+        active: 0,
+        pending: 0,
+        ready: 0,
+        delayed: 0,
+        running: 0,
+        sleeping: 0,
+        expiredLeases: 0,
+        oldestReadyAt: null,
+        oldestReadyCreatedAt: null,
+        readyLagMs: 0
+      },
+      timers: { pending: 0, due: 0, oldestDueAt: null, lagMs: 0 }
+    }),
     listRuns: async () => [],
     cancelRun: unused,
     retryRun: unused,

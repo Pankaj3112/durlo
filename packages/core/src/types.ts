@@ -347,6 +347,29 @@ export type RunDetails = StoredRunDetails & {
   diagnostics: RunDiagnostics;
 };
 
+export type BacklogHealth = {
+  appId: string;
+  checkedAt: Date;
+  runs: {
+    active: number;
+    pending: number;
+    ready: number;
+    delayed: number;
+    running: number;
+    sleeping: number;
+    expiredLeases: number;
+    oldestReadyAt: Date | null;
+    oldestReadyCreatedAt: Date | null;
+    readyLagMs: number;
+  };
+  timers: {
+    pending: number;
+    due: number;
+    oldestDueAt: Date | null;
+    lagMs: number;
+  };
+};
+
 export type CreateRunInput = {
   id: string;
   appId: string;
@@ -369,6 +392,7 @@ export interface TransactionalDurloAdapter {
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
+  getBacklogHealth(input: { appId: string }): Promise<BacklogHealth>;
   listRuns(input: RunListInput): Promise<RunSummary[]>;
   cancelRun(input: AppRunInput): Promise<RunRecord>;
   retryRun(input: AppRunInput): Promise<RunRecord>;
