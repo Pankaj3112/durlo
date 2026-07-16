@@ -22,6 +22,7 @@ Start here:
 - [Storage limits](docs/STORAGE_LIMITS.md)
 - [Retention cleanup](docs/RETENTION.md)
 - [Postgres performance envelope](docs/PERFORMANCE.md)
+- [Postgres operations](docs/OPERATIONS.md)
 
 ## Current Status
 

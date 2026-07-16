@@ -330,6 +330,8 @@ It is not:
 
 Distributed concurrency and custom queues are future features.
 
+Postgres pool sizing, multi-process connection budgeting, lease headroom, and polling tradeoffs are defined in [Postgres Operations](OPERATIONS.md).
+
 ### PgBouncer Compatibility
 
 Durlo must not hold transactions while user code runs.
