@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phases 1 through 4 are complete. Phase 5's repeatable engineering proof is implemented: production-like durability stress, rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball verification, and published beta limits and duplicate-execution guidance. The remaining Phase 5 gate is reviewed operating evidence from two real applications.
+Phases 1 through 4 are complete. Phase 5's repeatable engineering proof is implemented: production-like durability stress, rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball verification, deployable direct-task and direct-workflow reference applications, and published beta limits and duplicate-execution guidance. The remaining Phase 5 gate is reviewed operating evidence from two real applications.
 
 ## Phase 1: Execution Hardening
 
@@ -182,8 +182,9 @@ Status: In Progress
 - A Postgres integration scenario covers a sleeping old workflow, new-version-only deployment, mixed-version resume, idempotency across the version change, and rollback availability.
 - Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. The clean six-cell boundary audit passed on Node 22.23.1, 24.18.0, and 26.5.0 against PostgreSQL 14.23 and 18.4, and the same matrix runs nightly.
 - Immutable migrations and every schema-prefix upgrade are tested. Empty ESM, CommonJS, and strict TypeScript consumers verify the exact tarball contents, exports, CLI binary, migrations, and packed crash-and-resume quickstart.
+- Deployable [webhook-relay and catalog-import reference applications](../examples/README.md) exercise transactional task enqueue, external-delivery retry and idempotency, workflow checkpoints, durable cancellation windows, versioning, `SIGKILL` recovery, and business-data retention independently of Durlo history. Their actual APIs and workers run in CI and the nightly boundary matrix.
 - [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and real-application evidence protocol.
-- No qualifying operating reports from two real applications are recorded yet; repository tests and examples intentionally do not count toward that gate.
+- No qualifying operating reports from two real applications are recorded yet; repository-only tests and example runs intentionally do not count toward that gate.
 
 ### Outcomes
 

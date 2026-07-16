@@ -68,6 +68,17 @@ lease recovery, a durable sleep, one deliberate failure, automatic retry, and th
 The repository test installs packed tarballs into an empty consumer before running that scenario;
 it does not import workspace source.
 
+## Deployable reference applications
+
+The [`webhook-relay`](examples/webhook-relay/README.md) and
+[`catalog-import`](examples/catalog-import/README.md) examples are complete HTTP applications for
+direct tasks and direct workflows. Their automated smoke test covers transactional creation,
+at-least-once external delivery, retry, idempotency conflicts, durable sleep, cancellation,
+`SIGKILL` recovery, and checkpoint reuse.
+
+See the [examples index](examples/README.md) for the boundary between repeatable repository proof and
+the real operating reports still required by Phase 5.
+
 ## Delivery semantics
 
 Durlo is at-least-once. A process can perform an external side effect and die before recording
@@ -102,7 +113,7 @@ pnpm test:unit
 ```
 
 The default local suite creates a disposable PostgreSQL 17 container and includes the packed
-crash-and-resume quickstart:
+crash-and-resume quickstart and both deployable reference applications:
 
 ```bash
 pnpm test:local

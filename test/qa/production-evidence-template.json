@@ -2,6 +2,12 @@
   "application": "",
   "owner": "",
   "releaseCandidate": "",
+  "qualification": {
+    "continuingService": false,
+    "genuineWorkDescription": "",
+    "syntheticRunsExcluded": false,
+    "reviewNotes": ""
+  },
   "observation": {
     "startedAt": "",
     "completedAt": ""

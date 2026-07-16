@@ -18,4 +18,10 @@ Use `report-template.json` for the final report. Store release reports outside t
 or release artifacts; do not commit credentials or connection strings.
 
 Use `production-evidence-template.json` for the separate Phase 5 real-application gate. Automated
-tests, repository examples, and synthetic soak runs do not count as real-application evidence.
+tests, repository-only example runs, and synthetic soak runs do not count as real-application
+evidence.
+
+The deployable applications under `examples/` provide candidate integration code and a repeatable
+fault-exercise baseline through `pnpm test:reference-apps`. Follow the
+[examples qualification rules](../../examples/README.md) before treating an independently operated
+deployment as evidence.
