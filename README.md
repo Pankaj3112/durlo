@@ -21,7 +21,7 @@ Start here:
 
 ## Current Status
 
-The execution foundation is implemented: core APIs, Postgres migrations and persistence, lease-safe workers, task retries, workflow checkpoints, durable timers, cancellation, and manual retry. The next work is production hardening, followed by observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
+The execution foundation and Phase 1 hardening are implemented: core APIs, Postgres persistence, continuously replenished lease-safe workers, transient database recovery, task retries, sequential workflow checkpoints, durable timers, app-scoped controls, cooperative cancellation and timeouts, worker health, and structured logging. Deployment and storage safety are next, followed by observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
 
 Run the complete suite with a disposable local PostgreSQL 17 container:
 

@@ -309,13 +309,27 @@ describe("worker lifecycle", () => {
     const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
     try {
       const adapter = createWorkerAdapter();
-      const worker = new Durlo({ id: "worker-tests", adapter }).worker({ pollInterval: 1_000 });
+      const logger = { debug: vi.fn() };
+      const worker = new Durlo({ id: "worker-tests", adapter, logger }).worker({
+        pollInterval: 1_000
+      });
       adapter.fireDueTimers = vi
         .fn()
         .mockRejectedValueOnce(new Error("timer query failed"))
         .mockImplementationOnce(async () => {
           worker.stop();
-          return [];
+          return [
+            {
+              id: "timer-1",
+              runId: "run-1",
+              stepId: "sleep",
+              fireAt: new Date(),
+              status: "fired",
+              createdAt: new Date(),
+              firedAt: new Date(),
+              cancelledAt: null
+            }
+          ];
         });
 
       const started = worker.start();
@@ -331,6 +345,10 @@ describe("worker lifecycle", () => {
         status: "idle",
         database: { healthy: true, timerFailures: 0 }
       });
+      expect(logger.debug).toHaveBeenCalledWith(
+        "worker.timers_promoted",
+        expect.objectContaining({ count: 1 })
+      );
     } finally {
       random.mockRestore();
       vi.useRealTimers();

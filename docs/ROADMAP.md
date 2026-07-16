@@ -35,11 +35,11 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-The project is now in pre-release hardening. Product UI work begins after the execution engine meets the Phase 1 gates.
+Phase 1 execution hardening is complete. The project is moving into deployment and storage safety work before observability and product UI.
 
 ## Phase 1: Execution Hardening
 
-Status: In Progress
+Status: Complete
 
 ### Progress
 
@@ -76,7 +76,7 @@ Status: In Progress
 
 ## Phase 2: Deployment And Storage Safety
 
-Status: Planned
+Status: Next
 
 ### Outcomes
 
