@@ -1,5 +1,5 @@
 {
-  "name": "durlo",
+  "name": "@durlo/cli",
   "version": "0.0.0",
   "description": "Durlo CLI package.",
   "type": "module",
@@ -13,6 +13,9 @@
       "require": "./dist/index.cjs"
     }
   },
+  "bin": {
+    "durlo": "./dist/bin.js"
+  },
   "files": [
     "dist"
   ],
@@ -21,10 +24,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "build": "tsup src/index.ts src/bin.ts --format esm,cjs --dts --clean",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --config ../../vitest.config.ts test/cli/index.test.ts"
+  },
+  "dependencies": {
+    "@durlo/core": "workspace:*",
+    "tsx": "^4.23.0"
   },
   "devDependencies": {
     "eslint": "^9.39.4",
