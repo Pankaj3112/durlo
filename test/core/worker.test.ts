@@ -15,6 +15,7 @@ function createWorkerAdapter(): DurloAdapter {
     getRun: unsupported,
     cancelRun: unsupported,
     retryRun: unsupported,
+    cleanupRuns: vi.fn(async () => ({ deletedRuns: 0, deletedRunIds: [], limitReached: false })),
     claimRuns: vi.fn(async () => []),
     findUnavailableRuns: vi.fn(async () => []),
     extendRunLease: vi.fn(async () => true),

@@ -296,6 +296,85 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(rows.rows.map(({ input_json }) => input_json).sort()).toEqual([1, 2, 3]);
   });
 
+  it("cleans up terminal history in bounded app-scoped batches and releases idempotency keys", async () => {
+    const durlo = new Durlo({ id: "retention-app", adapter });
+    const task = durlo.task({
+      id: "retained-task",
+      run: async (input: { value: number }) => input
+    });
+    const handles = await task.batchEnqueue([
+      { input: { value: 1 }, options: { idempotencyKey: "retention-1" } },
+      { input: { value: 2 }, options: { idempotencyKey: "retention-2" } },
+      { input: { value: 3 }, options: { idempotencyKey: "retention-3" } }
+    ]);
+    expect(await durlo.worker({ tasks: [task], concurrency: 3 }).runOnce()).toBe(3);
+
+    const pending = await task.enqueue({ value: 4 }, { idempotencyKey: "pending-key" });
+    const otherDurlo = new Durlo({ id: "other-retention-app", adapter });
+    const otherTask = otherDurlo.task({ id: "retained-task", run: async () => undefined });
+    const other = await otherTask.enqueue({});
+    await otherDurlo.worker({ tasks: [otherTask] }).runOnce();
+
+    await adapter.pool.query(
+      `update durlo_runs
+       set updated_at = case id
+         when $1 then now() - interval '4 days'
+         when $2 then now() - interval '3 days'
+         when $3 then now() - interval '1 hour'
+         when $4 then now() - interval '5 days'
+         when $5 then now() - interval '5 days'
+       end
+       where id = any($6::text[])`,
+      [
+        handles[0]!.id,
+        handles[1]!.id,
+        handles[2]!.id,
+        pending.id,
+        other.id,
+        [...handles.map(({ id }) => id), pending.id, other.id]
+      ]
+    );
+
+    const duplicateBeforeCleanup = await task.enqueue(
+      { value: 99 },
+      { idempotencyKey: "retention-1" }
+    );
+    expect(duplicateBeforeCleanup.id).toBe(handles[0]!.id);
+
+    await expect(
+      durlo.runs.cleanup({ olderThan: "1d", limit: 1, statuses: ["completed"] })
+    ).resolves.toEqual({
+      deletedRuns: 1,
+      deletedRunIds: [handles[0]!.id],
+      limitReached: true
+    });
+    expect(await durlo.runs.get(handles[0]!)).toBeNull();
+    expect(await durlo.runs.get(handles[1]!)).toMatchObject({ status: "completed" });
+    expect(await durlo.runs.get(handles[2]!)).toMatchObject({ status: "completed" });
+    expect(await durlo.runs.get(pending)).toMatchObject({ status: "pending" });
+    expect(await otherDurlo.runs.get(other)).toMatchObject({ status: "completed" });
+    const cascaded = await adapter.pool.query<{ attempts: string }>(
+      "select count(*)::text as attempts from durlo_attempts where run_id = $1",
+      [handles[0]!.id]
+    );
+    expect(cascaded.rows[0]?.attempts).toBe("0");
+
+    const reused = await task.enqueue({ value: 100 }, { idempotencyKey: "retention-1" });
+    expect(reused.id).not.toBe(handles[0]!.id);
+    expect(reused.resourceVersion).toBe("1");
+
+    await expect(durlo.runs.cleanup({ olderThan: "1d", limit: 10 })).resolves.toEqual({
+      deletedRuns: 1,
+      deletedRunIds: [handles[1]!.id],
+      limitReached: false
+    });
+    await expect(durlo.runs.cleanup({ olderThan: "1d", limit: 10 })).resolves.toEqual({
+      deletedRuns: 0,
+      deletedRunIds: [],
+      limitReached: false
+    });
+  });
+
   it("writes through a caller-owned raw pg transaction", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "transactional", run: async () => undefined });

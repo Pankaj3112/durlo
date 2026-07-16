@@ -43,6 +43,7 @@ export type RunOptions = {
 export type RunKind = "task" | "workflow";
 export type RunStatus =
   "pending" | "running" | "sleeping" | "completed" | "failed" | "dead_letter" | "cancelled";
+export type TerminalRunStatus = "completed" | "failed" | "dead_letter" | "cancelled";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -152,6 +153,25 @@ export type AppRunInput = {
   runId: string;
 };
 
+export type RetentionCleanupOptions = {
+  olderThan: DurationInput;
+  limit?: number;
+  statuses?: TerminalRunStatus[];
+};
+
+export type RetentionCleanupInput = {
+  appId: string;
+  olderThan: number;
+  limit: number;
+  statuses: TerminalRunStatus[];
+};
+
+export type RetentionCleanupResult = {
+  deletedRuns: number;
+  deletedRunIds: string[];
+  limitReached: boolean;
+};
+
 export type FailRunInput = OwnedRunInput & {
   error: SerializedError;
   attemptStatus?: "failed" | "timed_out";
@@ -214,6 +234,7 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
   cancelRun(input: AppRunInput): Promise<RunRecord>;
   retryRun(input: AppRunInput): Promise<RunRecord>;
+  cleanupRuns(input: RetentionCleanupInput): Promise<RetentionCleanupResult>;
   claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]>;
   findUnavailableRuns(input: {
     appId: string;

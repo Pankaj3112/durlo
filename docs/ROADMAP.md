@@ -86,6 +86,8 @@ Status: In Progress
 - The rolling-deployment, rollback, workflow-compatibility, and idempotency interaction policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 - Additive migration `0002_resource_versions` preserves `0001_initial` and has a tested upgrade path that backfills existing runs to version `"1"`.
 - Inputs, outputs, errors, batches, step results, and total workflow step/sleep records now have documented configurable limits that fail before oversized JSON is persisted.
+- `durlo.runs.cleanup()` manually deletes bounded, app-scoped terminal history with row-lock safety; Durlo does not schedule cleanup itself.
+- Retention now explicitly defines the idempotency window: a key remains reserved until its run row is actually deleted.
 
 ### Outcomes
 

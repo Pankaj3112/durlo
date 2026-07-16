@@ -61,6 +61,7 @@ function createAdapter(): DurloAdapter & {
     retryRun: async () => {
       throw new Error("not implemented by test adapter");
     },
+    cleanupRuns: async () => ({ deletedRuns: 0, deletedRunIds: [], limitReached: false }),
     claimRuns: async () => [],
     findUnavailableRuns: async () => [],
     extendRunLease: async () => false,
@@ -221,16 +222,46 @@ describe("Durlo core API", () => {
     const retryRun = vi
       .spyOn(adapter, "retryRun")
       .mockRejectedValue(new Error("retry not implemented"));
+    const cleanupRuns = vi.spyOn(adapter, "cleanupRuns");
     const durlo = new Durlo({ id: "scoped-app", adapter });
 
     await expect(durlo.runs.get("run-1")).resolves.toBeNull();
     await expect(durlo.runs.cancel("run-1")).rejects.toThrow("cancel not implemented");
     await expect(durlo.runs.retry("run-1")).rejects.toThrow("retry not implemented");
+    await expect(
+      durlo.runs.cleanup({ olderThan: "30d", statuses: ["completed"], limit: 25 })
+    ).resolves.toMatchObject({ deletedRuns: 0 });
 
     const expected = { appId: "scoped-app", runId: "run-1" };
     expect(getRun).toHaveBeenCalledWith(expected);
     expect(cancelRun).toHaveBeenCalledWith(expected);
     expect(retryRun).toHaveBeenCalledWith(expected);
+    expect(cleanupRuns).toHaveBeenCalledWith({
+      appId: "scoped-app",
+      olderThan: 30 * 86_400_000,
+      statuses: ["completed"],
+      limit: 25
+    });
+  });
+
+  it("validates bounded retention cleanup options before calling storage", async () => {
+    const adapter = createAdapter();
+    const cleanupRuns = vi.spyOn(adapter, "cleanupRuns");
+    const durlo = new Durlo({ id: "cleanup-app", adapter });
+
+    for (const options of [
+      { olderThan: 0 },
+      { olderThan: "1d", limit: 0 },
+      { olderThan: "1d", limit: 10_001 },
+      { olderThan: "1d", statuses: [] },
+      { olderThan: "1d", statuses: ["completed", "completed"] },
+      { olderThan: "1d", statuses: ["pending"] }
+    ]) {
+      await expect(
+        durlo.runs.cleanup(options as Parameters<typeof durlo.runs.cleanup>[0])
+      ).rejects.toBeInstanceOf(ValidationError);
+    }
+    expect(cleanupRuns).not.toHaveBeenCalled();
   });
 });
 

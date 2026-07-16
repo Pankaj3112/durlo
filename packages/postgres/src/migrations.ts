@@ -110,5 +110,13 @@ export const migrations: readonly Migration[] = [
       create index durlo_runs_resource_idx
         on durlo_runs (app_id, kind, resource_id, resource_version, status, scheduled_at);
     `
+  },
+  {
+    version: "0003_retention_cleanup",
+    sql: `
+      create index durlo_runs_retention_idx
+        on durlo_runs (app_id, updated_at, id)
+        where status in ('completed', 'failed', 'dead_letter', 'cancelled');
+    `
   }
 ];

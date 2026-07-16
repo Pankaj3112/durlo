@@ -42,6 +42,7 @@ function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
     getRun: async () => null,
     cancelRun: unused,
     retryRun: unused,
+    cleanupRuns: async () => ({ deletedRuns: 0, deletedRunIds: [], limitReached: false }),
     claimRuns: async () => [],
     findUnavailableRuns: async () => [],
     extendRunLease: async () => false,

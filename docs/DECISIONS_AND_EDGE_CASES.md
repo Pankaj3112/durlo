@@ -270,6 +270,8 @@ Terminal runs keep their idempotency keys. Reusing a key after success/failure/c
 
 Future APIs can add TTL/reset once product needs are clear.
 
+The manual v1 retention operation deletes complete run rows. Once a terminal row is deleted, its idempotency key is released and may create a new run. Retention age therefore defines the minimum deduplication window for statuses included in cleanup. Rows skipped by limits, locks, filters, or app scope keep their keys.
+
 ### JSON Serialization
 
 Inputs, outputs, step results, and errors are stored as JSON.

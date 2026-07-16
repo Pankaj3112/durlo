@@ -20,10 +20,11 @@ Start here:
 - [Decisions and edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
 - [Deployment compatibility](docs/DEPLOYMENT_COMPATIBILITY.md)
 - [Storage limits](docs/STORAGE_LIMITS.md)
+- [Retention cleanup](docs/RETENTION.md)
 
 ## Current Status
 
-The execution foundation and Phase 1 hardening are implemented. Phase 2 is in progress: deployment compatibility, bounded missing-code diagnostics, explicit storage limits, and the initial-schema upgrade path are implemented. Retention, query benchmarks, and operational sizing guidance remain before observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
+The execution foundation and Phase 1 hardening are implemented. Phase 2 is in progress: deployment compatibility, bounded missing-code diagnostics, explicit storage limits, manual retention, and migration upgrade coverage are implemented. Query benchmarks and operational sizing guidance remain before observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
 
 Run the complete suite with a disposable local PostgreSQL 17 container:
 

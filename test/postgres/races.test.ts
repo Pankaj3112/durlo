@@ -138,4 +138,36 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     expect(timer?.status).toBe(fired.length === 1 ? "fired" : "cancelled");
     expect(await worker.runOnce()).toBe(0);
   });
+
+  it("serializes retention cleanup racing with manual retry", async () => {
+    const durlo = new Durlo({ id: "race-tests", adapter });
+    const task = durlo.task({
+      id: "cleanup-retry",
+      retry: { attempts: 1 },
+      run: async () => {
+        throw new Error("expected failure");
+      }
+    });
+    const handle = await task.enqueue({});
+    await durlo.worker({ tasks: [task] }).runOnce();
+    await adapter.pool.query(
+      "update durlo_runs set updated_at = now() - interval '2 days' where id = $1",
+      [handle.id]
+    );
+
+    const [cleanup, retry] = await Promise.allSettled([
+      durlo.runs.cleanup({ olderThan: "1d", limit: 1 }),
+      durlo.runs.retry(handle)
+    ]);
+    const run = await durlo.runs.get(handle);
+
+    if (cleanup.status === "fulfilled" && cleanup.value.deletedRuns === 1) {
+      expect(retry.status).toBe("rejected");
+      expect(run).toBeNull();
+    } else {
+      expect(cleanup).toMatchObject({ status: "fulfilled", value: { deletedRuns: 0 } });
+      expect(retry).toMatchObject({ status: "fulfilled", value: { status: "pending" } });
+      expect(run).toMatchObject({ status: "pending" });
+    }
+  });
 });

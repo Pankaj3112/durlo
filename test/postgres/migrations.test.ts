@@ -36,7 +36,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       );
       expect(versions.rows).toEqual([
         { version: "0001_initial", count: "1" },
-        { version: "0002_resource_versions", count: "1" }
+        { version: "0002_resource_versions", count: "1" },
+        { version: "0003_retention_cleanup", count: "1" }
       ]);
 
       const tables = await admin.pool.query<{ count: string }>(
@@ -81,7 +82,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       );
       expect(versions.rows).toEqual([
         { version: "0001_initial" },
-        { version: "0002_resource_versions" }
+        { version: "0002_resource_versions" },
+        { version: "0003_retention_cleanup" }
       ]);
     } finally {
       await adapter.close();
@@ -106,7 +108,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("2");
+      expect(applied.rows[0]?.count).toBe("3");
     } finally {
       await adapter.close();
     }

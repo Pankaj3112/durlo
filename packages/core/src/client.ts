@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ValidationError } from "./errors.js";
 import { normalizeRetryPolicy } from "./retry.js";
 import { serialize } from "./serialization.js";
 import {
@@ -15,6 +16,8 @@ import type {
   DurloOptions,
   Logger,
   NormalizedRetryPolicy,
+  RetentionCleanupOptions,
+  RetentionCleanupResult,
   RunHandle,
   RunOptions,
   RunRecord,
@@ -57,6 +60,7 @@ export class Durlo {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
     cancel: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     retry: (handleOrId: RunHandle | string) => Promise<RunRecord>;
+    cleanup: (options: RetentionCleanupOptions) => Promise<RetentionCleanupResult>;
   };
   private readonly defaultRetry: NormalizedRetryPolicy;
   private readonly defaultTimeout?: number;
@@ -79,7 +83,8 @@ export class Durlo {
     this.runs = {
       get: (value) => this.adapter.getRun({ appId: this.id, runId: getId(value) }),
       cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
-      retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) })
+      retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) }),
+      cleanup: (cleanupOptions) => this.cleanupRuns(cleanupOptions)
     };
   }
 
@@ -280,6 +285,24 @@ export class Durlo {
       throw new Error(`${kind} '${id}' version '${version}' is already defined`);
     }
     this.resourceKeys.add(key);
+  }
+
+  private async cleanupRuns(options: RetentionCleanupOptions): Promise<RetentionCleanupResult> {
+    const olderThan = parseDuration(options.olderThan, "retention age");
+    if (olderThan <= 0) throw new ValidationError("retention age must be greater than zero");
+    const limit = options.limit ?? 1_000;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new ValidationError("retention cleanup limit must be an integer from 1 to 10000");
+    }
+    const statuses = options.statuses ?? ["completed", "failed", "dead_letter", "cancelled"];
+    if (statuses.length === 0 || new Set(statuses).size !== statuses.length) {
+      throw new ValidationError("retention statuses must be a non-empty list without duplicates");
+    }
+    const allowed = new Set(["completed", "failed", "dead_letter", "cancelled"]);
+    if (statuses.some((status) => !allowed.has(status))) {
+      throw new ValidationError("retention cleanup accepts only terminal run statuses");
+    }
+    return this.adapter.cleanupRuns({ appId: this.id, olderThan, limit, statuses });
   }
 
   private async createRun<TInput, TOutput>(

@@ -48,6 +48,8 @@ Idempotency does not mean the run body executes once. It only prevents duplicate
 
 Rows retained in Durlo storage define the deduplication window. V1 has no idempotency TTL or reset API.
 
+Manual retention cleanup is the only v1 operation that releases an idempotency key. A key remains reserved until its terminal run row is actually deleted. After deletion, the same scoped key may create a new run. See [Retention Cleanup](RETENTION.md).
+
 Failed, dead-letter, completed, and cancelled runs keep their idempotency key. Starting new work with the same logical business key after terminal status requires a different idempotency key until a future reset API exists.
 
 ## Transactions

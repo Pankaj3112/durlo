@@ -8,6 +8,8 @@ import type {
   JsonValue,
   OwnedRunInput,
   RegisteredResource,
+  RetentionCleanupInput,
+  RetentionCleanupResult,
   RunKind,
   RunRecord,
   RunStatus,
@@ -247,6 +249,54 @@ export class PostgresAdapter implements DurloAdapter {
       [input.appId, input.runId]
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
+  }
+
+  async cleanupRuns(input: RetentionCleanupInput): Promise<RetentionCleanupResult> {
+    if (!Number.isFinite(input.olderThan) || input.olderThan <= 0) {
+      throw new ValidationError("retention age must be a finite number greater than zero");
+    }
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 10_000) {
+      throw new ValidationError("retention cleanup limit must be an integer from 1 to 10000");
+    }
+    const allowedStatuses = new Set(["completed", "failed", "dead_letter", "cancelled"]);
+    if (
+      input.statuses.length === 0 ||
+      new Set(input.statuses).size !== input.statuses.length ||
+      input.statuses.some((status) => !allowedStatuses.has(status))
+    ) {
+      throw new ValidationError("retention cleanup accepts unique terminal statuses");
+    }
+    const result = await this.query()<QueryResultRow & { id: string }>(
+      `
+        with candidates as materialized (
+          select id, updated_at
+          from durlo_runs
+          where app_id = $1
+            and status in ('completed', 'failed', 'dead_letter', 'cancelled')
+            and status = any($2::text[])
+            and updated_at < now() - ($3 * interval '1 millisecond')
+          order by updated_at, id
+          for update skip locked
+          limit $4
+        ), deleted as (
+          delete from durlo_runs r
+          using candidates c
+          where r.id = c.id
+          returning r.id
+        )
+        select c.id
+        from candidates c
+        join deleted d on d.id = c.id
+        order by c.updated_at, c.id
+      `,
+      [input.appId, input.statuses, input.olderThan, input.limit]
+    );
+    const deletedRunIds = result.rows.map(({ id }) => id);
+    return {
+      deletedRuns: deletedRunIds.length,
+      deletedRunIds,
+      limitReached: deletedRunIds.length === input.limit
+    };
   }
 
   async claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]> {
