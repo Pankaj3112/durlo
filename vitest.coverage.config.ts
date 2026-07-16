@@ -21,7 +21,11 @@ export default defineConfig({
         lines: 96
       }
     },
-    exclude: ["test/postgres/**/*.privileged.test.ts", "test/postgres/**/*.stress.test.ts"],
+    exclude: [
+      "test/postgres/**/*.benchmark.test.ts",
+      "test/postgres/**/*.privileged.test.ts",
+      "test/postgres/**/*.stress.test.ts"
+    ],
     fileParallelism: false,
     include: ["test/**/*.test.ts"]
   }

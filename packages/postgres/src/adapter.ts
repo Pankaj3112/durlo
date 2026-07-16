@@ -307,7 +307,7 @@ export class PostgresAdapter implements DurloAdapter {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const candidates = await client.query<RunRow>(
+      const expired = await client.query<RunRow>(
         `
           select ${RUN_COLUMNS}
           from durlo_runs
@@ -320,12 +320,8 @@ export class PostgresAdapter implements DurloAdapter {
                 and resource.resource_id = durlo_runs.resource_id
                 and resource.resource_version = durlo_runs.resource_version
             )
-            and (
-              (status = 'pending' and scheduled_at <= now())
-              or (status = 'running' and locked_until < now())
-            )
+            and status = 'running' and locked_until < now()
           order by
-            case when status = 'running' then 0 else 1 end,
             priority desc,
             scheduled_at asc,
             created_at asc
@@ -334,8 +330,33 @@ export class PostgresAdapter implements DurloAdapter {
         `,
         [input.appId, resourceKinds, resourceIds, resourceVersions, input.limit]
       );
+      const remaining = input.limit - expired.rows.length;
+      const pending =
+        remaining > 0
+          ? await client.query<RunRow>(
+              `
+                select ${RUN_COLUMNS}
+                from durlo_runs
+                where app_id = $1
+                  and exists (
+                    select 1
+                    from unnest($2::text[], $3::text[], $4::text[])
+                      as resource(kind, resource_id, resource_version)
+                    where resource.kind = durlo_runs.kind
+                      and resource.resource_id = durlo_runs.resource_id
+                      and resource.resource_version = durlo_runs.resource_version
+                  )
+                  and status = 'pending' and scheduled_at <= now()
+                order by priority desc, scheduled_at asc, created_at asc
+                for update skip locked
+                limit $5
+              `,
+              [input.appId, resourceKinds, resourceIds, resourceVersions, remaining]
+            )
+          : { rows: [] as RunRow[] };
+      const candidates = [...expired.rows, ...pending.rows];
       const claimed: ClaimedRun[] = [];
-      for (const candidate of candidates.rows) {
+      for (const candidate of candidates) {
         if (candidate.status === "running") {
           await client.query(
             `

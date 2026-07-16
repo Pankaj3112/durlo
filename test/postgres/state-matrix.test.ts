@@ -106,6 +106,35 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     expect(second.some(({ id }) => id === future.id)).toBe(false);
   });
 
+  it("claims expired leases before pending work after splitting queue scans", async () => {
+    const durlo = new Durlo({ id: "matrix-tests", adapter });
+    const task = durlo.task({ id: "claim-order", run: async () => undefined });
+    const resources = [{ kind: "task" as const, resourceId: task.id }];
+    const expired = await task.enqueue({ name: "expired" }, { priority: -100 });
+    await adapter.claimRuns({
+      appId: "matrix-tests",
+      workerId: "old-worker",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources
+    });
+    await adapter.pool.query(
+      "update durlo_runs set locked_until = now() - interval '1 second' where id = $1",
+      [expired.id]
+    );
+    const pending = await task.enqueue({ name: "pending" }, { priority: 100 });
+
+    const claims = await adapter.claimRuns({
+      appId: "matrix-tests",
+      workerId: "new-worker",
+      limit: 2,
+      leaseDuration: 10_000,
+      resources
+    });
+
+    expect(claims.map(({ id }) => id)).toEqual([expired.id, pending.id]);
+  });
+
   it("rolls back every row when a database error occurs inside a batch", async () => {
     const valid = createRunInput();
     const invalid = createRunInput({ maxAttempts: 0 });

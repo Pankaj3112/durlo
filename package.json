@@ -17,6 +17,8 @@
     "test:all": "pnpm test:unit && pnpm test:integration",
     "test:audit": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test:package && pnpm test:mutations:core && pnpm test:local:release",
     "test:local": "node scripts/test-local.mjs",
+    "benchmark:local": "node scripts/test-local.mjs benchmark:postgres",
+    "benchmark:postgres": "vitest run --config vitest.benchmark.config.ts",
     "test:local:coverage": "node scripts/test-local.mjs test:coverage",
     "test:local:mutations": "node scripts/test-local.mjs test:persistence-mutations",
     "test:local:privileged": "node scripts/test-local.mjs test:privileged",

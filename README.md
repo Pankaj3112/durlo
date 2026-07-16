@@ -21,6 +21,7 @@ Start here:
 - [Deployment compatibility](docs/DEPLOYMENT_COMPATIBILITY.md)
 - [Storage limits](docs/STORAGE_LIMITS.md)
 - [Retention cleanup](docs/RETENTION.md)
+- [Postgres performance envelope](docs/PERFORMANCE.md)
 
 ## Current Status
 
@@ -51,6 +52,12 @@ pnpm test:local:stress
 pnpm test:local:mutations
 pnpm test:local:privileged
 pnpm test:package
+```
+
+Run the reproducible Postgres query benchmark with:
+
+```bash
+pnpm benchmark:local
 ```
 
 Run the complete release-candidate audit—including package consumers, core and persistence
