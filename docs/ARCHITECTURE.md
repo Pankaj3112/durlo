@@ -141,7 +141,7 @@ The schema is defined by `packages/postgres/src/migrations.ts` and currently con
 
 Postgres `now()` decides eligibility, lease expiry, and timer due checks. Partial indexes support pending runs, expired leases, resource lookup, and due timers.
 
-The same run table currently holds active queue state and retained history. Retention and payload limits are roadmap work before production release.
+The same run table currently holds active queue state and retained history. Retention remains roadmap work before production release. Public core APIs enforce the payload and batch limits documented in [Storage Limits](STORAGE_LIMITS.md); the Postgres adapter enforces the durable workflow-step count under the owning run lock.
 
 `worker.getCompatibilityReport()` performs a bounded read for pending, sleeping, and expired-running work that does not match that worker's registrations. The report is worker-relative and does not mutate run state. The complete policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 

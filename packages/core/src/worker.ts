@@ -6,11 +6,18 @@ import {
   WorkflowSleepError
 } from "./errors.js";
 import { calculateRetryDelay } from "./retry.js";
-import { deserialize, serialize, serializeError } from "./serialization.js";
+import { deserialize, serialize } from "./serialization.js";
 import { createStepTools } from "./steps.js";
+import {
+  DEFAULT_DURLO_LIMITS,
+  assertByteLimit,
+  normalizeDurloLimits,
+  serializeErrorWithinLimit
+} from "./limits.js";
 import type {
   ClaimedRun,
   DurloAdapter,
+  DurloLimits,
   Logger,
   NormalizedRetryPolicy,
   RegisteredResource,
@@ -70,6 +77,7 @@ export class Worker {
   private readonly pollInterval: number;
   private readonly leaseDuration: number;
   private readonly logger: Logger | undefined;
+  private readonly defaultLimits: DurloLimits;
   private readonly activeRuns = new Set<Promise<void>>();
   private stopController: AbortController | undefined;
   private claimFailures = 0;
@@ -79,10 +87,17 @@ export class Worker {
   private lastError: WorkerHealth["database"]["lastError"] = null;
   private started = false;
 
-  constructor(appId: string, adapter: DurloAdapter, options: WorkerOptions, logger?: Logger) {
+  constructor(
+    appId: string,
+    adapter: DurloAdapter,
+    options: WorkerOptions,
+    logger?: Logger,
+    limits: DurloLimits = DEFAULT_DURLO_LIMITS
+  ) {
     this.appId = appId;
     this.adapter = adapter;
     this.logger = logger;
+    this.defaultLimits = normalizeDurloLimits(limits);
     this.id = options.workerId ?? randomUUID();
     this.concurrency = options.concurrency ?? 10;
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 1_000) {
@@ -363,8 +378,10 @@ export class Worker {
       heartbeatController.abort();
       await heartbeat;
     };
+    let limits = this.defaultLimits;
 
     try {
+      limits = this.limitsFor(run);
       const definition = task ?? workflow!;
       const input = await definition._durlo.validate(deserialize(run.input));
       const context = {
@@ -381,7 +398,7 @@ export class Worker {
         ? task._durlo.run(input, context)
         : workflow!._durlo.run({
             input,
-            step: createStepTools(this.adapter, run),
+            step: createStepTools(this.adapter, run, limits),
             ...context
           });
       const timeout = this.timeoutFor(run);
@@ -391,11 +408,13 @@ export class Worker {
           : await this.withTimeout(execution, timeout, abortController);
       await stopHeartbeat();
       if (!ownsLease) return;
+      const serializedOutput = serialize(output === undefined ? null : output);
+      assertByteLimit(serializedOutput, "maxOutputBytes", limits.maxOutputBytes, "run output");
       await this.adapter.completeRun({
         runId: run.id,
         workerId: this.id,
         leaseToken: run.leaseToken,
-        output: serialize(output === undefined ? null : output)
+        output: serializedOutput
       });
       this.log("info", "run.completed", {
         runId: run.id,
@@ -424,7 +443,7 @@ export class Worker {
           runId: run.id,
           workerId: this.id,
           leaseToken: run.leaseToken,
-          error: serializeError(error),
+          error: serializeErrorWithinLimit(error, limits.maxErrorBytes),
           ...(error instanceof AttemptTimeoutError ? { attemptStatus: "timed_out" } : {}),
           outcome
         });
@@ -475,6 +494,15 @@ export class Worker {
     const options = run.options as { retry?: NormalizedRetryPolicy };
     if (!options.retry) throw new Error(`run ${run.id} is missing its retry policy`);
     return options.retry;
+  }
+
+  private limitsFor(run: ClaimedRun): DurloLimits {
+    const options = run.options as { limits?: unknown };
+    if (options.limits === undefined) return this.defaultLimits;
+    if (!options.limits || typeof options.limits !== "object" || Array.isArray(options.limits)) {
+      throw new ValidationError(`run ${run.id} has invalid storage limits`);
+    }
+    return normalizeDurloLimits(options.limits as Partial<DurloLimits>, this.defaultLimits);
   }
 
   private timeoutFor(run: ClaimedRun): number | undefined {

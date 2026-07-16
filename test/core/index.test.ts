@@ -114,7 +114,15 @@ describe("Durlo core API", () => {
       idempotencyKey: "email:1",
       priority: 10,
       input: { email: "a@example.com" },
-      options: { retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } } }
+      options: {
+        retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } },
+        limits: {
+          maxOutputBytes: 1_048_576,
+          maxErrorBytes: 65_536,
+          maxStepResultBytes: 1_048_576,
+          maxWorkflowSteps: 1_000
+        }
+      }
     });
     expect(adapter.created[0]!.scheduledAt.getTime()).toBeGreaterThan(Date.now() + 9_000);
   });

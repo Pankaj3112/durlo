@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_DURLO_LIMITS,
   Durlo,
   SerializationError,
+  StorageLimitError,
   ValidationError,
   calculateRetryDelay,
   deserialize,
+  jsonByteSize,
   normalizeBackoff,
   normalizeRetryPolicy,
   parseDuration,
@@ -248,5 +251,73 @@ describe("serialization boundaries", () => {
       message: "Unknown error",
       cause: "[object Object]"
     });
+  });
+});
+
+describe("storage limit boundaries", () => {
+  it("publishes defaults and validates every configurable limit", () => {
+    expect(DEFAULT_DURLO_LIMITS).toEqual({
+      maxInputBytes: 1_048_576,
+      maxOutputBytes: 1_048_576,
+      maxErrorBytes: 65_536,
+      maxBatchItems: 1_000,
+      maxBatchBytes: 10_485_760,
+      maxStepResultBytes: 1_048_576,
+      maxWorkflowSteps: 1_000
+    });
+    const adapter = validationAdapter();
+    for (const limits of [
+      { maxInputBytes: 0 },
+      { maxOutputBytes: 1.5 },
+      { maxErrorBytes: 127 },
+      { maxBatchItems: Number.MAX_SAFE_INTEGER + 1 },
+      { maxBatchBytes: -1 },
+      { maxStepResultBytes: Number.NaN },
+      { maxWorkflowSteps: 0 }
+    ]) {
+      expect(() => new Durlo({ id: "limit-tests", adapter, limits })).toThrow(ValidationError);
+    }
+  });
+
+  it("measures serialized UTF-8 input before persistence", async () => {
+    const input = { value: "é" };
+    const bytes = jsonByteSize(serialize(input));
+    const acceptedAdapter = validationAdapter();
+    const accepted = new Durlo({
+      id: "input-limit-accepted",
+      adapter: acceptedAdapter,
+      limits: { maxInputBytes: bytes }
+    }).task({ id: "input", run: async () => undefined });
+    await expect(accepted.enqueue(input)).resolves.toBeDefined();
+
+    const rejectedAdapter = validationAdapter();
+    const rejected = new Durlo({
+      id: "input-limit-rejected",
+      adapter: rejectedAdapter,
+      limits: { maxInputBytes: bytes - 1 }
+    }).task({ id: "input", run: async () => undefined });
+    await expect(rejected.enqueue(input)).rejects.toMatchObject({
+      name: "StorageLimitError",
+      limitName: "maxInputBytes",
+      actual: bytes,
+      limit: bytes - 1
+    });
+    expect(rejectedAdapter.created).toHaveLength(0);
+  });
+
+  it("bounds batch item count and aggregate serialized input bytes atomically", async () => {
+    const adapter = validationAdapter();
+    const task = new Durlo({
+      id: "batch-limit-tests",
+      adapter,
+      limits: { maxBatchItems: 2, maxBatchBytes: jsonByteSize([1, 2]) }
+    }).task({ id: "batch", run: async (input: number) => input });
+
+    await expect(task.batchEnqueue([1, 2])).resolves.toHaveLength(2);
+    await expect(task.batchEnqueue([1, 2, 3])).rejects.toBeInstanceOf(StorageLimitError);
+    await expect(task.batchEnqueue([1, 20])).rejects.toMatchObject({
+      limitName: "maxBatchBytes"
+    });
+    expect(adapter.created).toHaveLength(2);
   });
 });

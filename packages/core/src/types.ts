@@ -54,6 +54,21 @@ export type SerializedError = {
   cause?: JsonValue;
 };
 
+export type DurloLimits = {
+  maxInputBytes: number;
+  maxOutputBytes: number;
+  maxErrorBytes: number;
+  maxBatchItems: number;
+  maxBatchBytes: number;
+  maxStepResultBytes: number;
+  maxWorkflowSteps: number;
+};
+
+export type PersistedRunLimits = Pick<
+  DurloLimits,
+  "maxOutputBytes" | "maxErrorBytes" | "maxStepResultBytes" | "maxWorkflowSteps"
+>;
+
 export type RunRecord = {
   id: string;
   appId: string;
@@ -210,11 +225,11 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   failRun(input: FailRunInput): Promise<void>;
   releaseRun(input: OwnedRunInput): Promise<boolean>;
   getStep(runId: string, stepId: string): Promise<StepRecord | null>;
-  startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord>;
+  startStep(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
   completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
   failStep(input: StepInput & { error: SerializedError }): Promise<void>;
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
-  sleepRun(input: StepInput & { fireAt: Date }): Promise<TimerRecord>;
+  sleepRun(input: StepInput & { fireAt: Date; maxSteps: number }): Promise<TimerRecord>;
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
   withTransaction(client: unknown): TransactionalDurloAdapter;
 }
@@ -342,6 +357,7 @@ export type DurloOptions = {
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;
+  limits?: Partial<DurloLimits>;
 };
 
 export type WorkerOptions = {

@@ -1,9 +1,14 @@
 import { LostLeaseError, ValidationError, WorkflowSleepError } from "./errors.js";
-import { deserialize, serialize, serializeError } from "./serialization.js";
-import type { ClaimedRun, DurloAdapter, StepTools } from "./types.js";
+import { deserialize, serialize } from "./serialization.js";
+import { assertByteLimit, serializeErrorWithinLimit } from "./limits.js";
+import type { ClaimedRun, DurloAdapter, PersistedRunLimits, StepTools } from "./types.js";
 import { parseDuration, validateId } from "./validation.js";
 
-export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepTools {
+export function createStepTools(
+  adapter: DurloAdapter,
+  run: ClaimedRun,
+  limits: PersistedRunLimits
+): StepTools {
   const seen = new Set<string>();
   let activeStepId: string | null = null;
   let insideStepCallback = false;
@@ -42,7 +47,8 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
         const step = await adapter.startStep({
           ...ownership,
           stepId,
-          maxAttempts: run.maxAttempts
+          maxAttempts: run.maxAttempts,
+          maxSteps: limits.maxWorkflowSteps
         });
         if (step.status === "completed") return deserialize(step.result!) as T;
 
@@ -50,16 +56,27 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
         try {
           const result = await fn();
           insideStepCallback = false;
+          const serializedResult = serialize(result === undefined ? null : result);
+          assertByteLimit(
+            serializedResult,
+            "maxStepResultBytes",
+            limits.maxStepResultBytes,
+            `workflow step '${stepId}' result`
+          );
           await adapter.completeStep({
             ...ownership,
             stepId,
-            result: serialize(result === undefined ? null : result)
+            result: serializedResult
           });
           return result;
         } catch (error) {
           insideStepCallback = false;
           try {
-            await adapter.failStep({ ...ownership, stepId, error: serializeError(error) });
+            await adapter.failStep({
+              ...ownership,
+              stepId,
+              error: serializeErrorWithinLimit(error, limits.maxErrorBytes)
+            });
           } catch (writeError) {
             if (writeError instanceof LostLeaseError) throw writeError;
             throw writeError;
@@ -96,7 +113,12 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
     if (await adapter.getStep(run.id, stepId)) {
       throw new ValidationError(`step '${stepId}' is already used by step.run`);
     }
-    const timer = await adapter.sleepRun({ ...ownership, stepId, fireAt });
+    const timer = await adapter.sleepRun({
+      ...ownership,
+      stepId,
+      fireAt,
+      maxSteps: limits.maxWorkflowSteps
+    });
     if (timer.status === "pending")
       throw new WorkflowSleepError(`workflow sleeping until ${timer.fireAt.toISOString()}`);
   }

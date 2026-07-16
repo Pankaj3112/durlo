@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { normalizeRetryPolicy } from "./retry.js";
 import { serialize } from "./serialization.js";
+import {
+  assertByteLimit,
+  assertCountLimit,
+  normalizeDurloLimits,
+  persistedRunLimits
+} from "./limits.js";
 import type {
   BatchItem,
   CreateRunInput,
   DurloAdapter,
+  DurloLimits,
   DurloOptions,
   Logger,
   NormalizedRetryPolicy,
@@ -54,6 +61,7 @@ export class Durlo {
   private readonly defaultRetry: NormalizedRetryPolicy;
   private readonly defaultTimeout?: number;
   private readonly logger: Logger | undefined;
+  private readonly limits: DurloLimits;
   private readonly resourceKeys = new Set<string>();
 
   constructor(options: DurloOptions) {
@@ -62,6 +70,7 @@ export class Durlo {
     this.id = options.id;
     this.adapter = options.adapter;
     this.logger = options.logger === false ? undefined : options.logger;
+    this.limits = normalizeDurloLimits(options.limits);
     this.defaultRetry = normalizeRetryPolicy(options.defaultRetry);
     if (options.defaultTimeout !== undefined)
       this.defaultTimeout = parseDuration(options.defaultTimeout, "default timeout");
@@ -108,6 +117,7 @@ export class Durlo {
       },
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
+        this.assertBatchCount(items.length);
         const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
         const prepared = await Promise.all(
           normalized.map(({ input, options: runOptions }) =>
@@ -123,6 +133,7 @@ export class Durlo {
             )
           )
         );
+        this.assertBatchBytes(prepared);
         const keys = prepared
           .map((item) => item.idempotencyKey)
           .filter((key): key is string => key !== null);
@@ -226,6 +237,7 @@ export class Durlo {
         task: TaskDefinition<TInput, TOutput>,
         items: Array<TInput | BatchItem<TInput>>
       ) => {
+        this.assertBatchCount(items.length);
         const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
         const timeout =
           task.options.timeout === undefined
@@ -246,6 +258,7 @@ export class Durlo {
             )
           )
         );
+        this.assertBatchBytes(prepared);
         const keys = prepared
           .map((item) => item.idempotencyKey)
           .filter((key): key is string => key !== null);
@@ -257,7 +270,7 @@ export class Durlo {
   }
 
   worker(options: WorkerOptions): Worker {
-    return new Worker(this.id, this.adapter, options, this.logger);
+    return new Worker(this.id, this.adapter, options, this.logger, this.limits);
   }
 
   private register(kind: "task" | "workflow", id: string, version: string): void {
@@ -327,19 +340,39 @@ export class Durlo {
         : new Date(
             now + (runOptions.delay === undefined ? 0 : parseDuration(runOptions.delay, "delay"))
           );
-    const storedOptions = serialize({ retry, ...(timeout === undefined ? {} : { timeout }) });
+    const serializedInput = serialize(validatedInput);
+    assertByteLimit(serializedInput, "maxInputBytes", this.limits.maxInputBytes, "run input");
+    const storedOptions = serialize({
+      retry,
+      ...(timeout === undefined ? {} : { timeout }),
+      limits: persistedRunLimits(this.limits)
+    });
     return {
       id: randomUUID(),
       appId: this.id,
       kind,
       resourceId,
       resourceVersion,
-      input: serialize(validatedInput),
+      input: serializedInput,
       options: storedOptions,
       idempotencyKey: runOptions.idempotencyKey ?? null,
       priority: runOptions.priority ?? 0,
       scheduledAt,
       maxAttempts: retry.attempts
     };
+  }
+
+  private assertBatchCount(count: number): void {
+    assertCountLimit(count, "maxBatchItems", this.limits.maxBatchItems, "batch item count");
+  }
+
+  private assertBatchBytes(inputs: CreateRunInput[]): void {
+    if (inputs.length === 0) return;
+    assertByteLimit(
+      inputs.map(({ input }) => input),
+      "maxBatchBytes",
+      this.limits.maxBatchBytes,
+      "batch inputs"
+    );
   }
 }

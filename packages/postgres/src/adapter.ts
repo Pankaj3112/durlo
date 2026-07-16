@@ -20,7 +20,7 @@ import type {
   TransactionalDurloAdapter,
   UnavailableRun
 } from "@durlo/core";
-import { LostLeaseError, RunStateError } from "@durlo/core";
+import { LostLeaseError, RunStateError, StorageLimitError, ValidationError } from "@durlo/core";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
@@ -554,23 +554,31 @@ export class PostgresAdapter implements DurloAdapter {
     return result.rows[0] ? mapStep(result.rows[0]) : null;
   }
 
-  async startStep(input: StepInput & { maxAttempts: number }): Promise<StepRecord> {
+  async startStep(
+    input: StepInput & { maxAttempts: number; maxSteps: number }
+  ): Promise<StepRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       await this.assertOwnedRun(client, input);
-      await client.query(
-        `
-          insert into durlo_steps (id, run_id, step_id, status, max_attempts)
-          values ($1, $2, $3, 'pending', $4)
-          on conflict (run_id, step_id) do nothing
-        `,
-        [randomUUID(), input.runId, input.stepId, input.maxAttempts]
-      );
-      const selected = await client.query<StepRow>(
+      let selected = await client.query<StepRow>(
         `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2 for update`,
         [input.runId, input.stepId]
       );
+      if (!selected.rows[0]) {
+        await this.assertStepCapacity(client, input.runId, input.maxSteps);
+        await client.query(
+          `
+            insert into durlo_steps (id, run_id, step_id, status, max_attempts)
+            values ($1, $2, $3, 'pending', $4)
+          `,
+          [randomUUID(), input.runId, input.stepId, input.maxAttempts]
+        );
+        selected = await client.query<StepRow>(
+          `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2 for update`,
+          [input.runId, input.stepId]
+        );
+      }
       const current = selected.rows[0];
       if (!current) throw new Error(`step '${input.stepId}' could not be created`);
       if (current.status === "completed") {
@@ -671,23 +679,29 @@ export class PostgresAdapter implements DurloAdapter {
     return result.rows[0] ? mapTimer(result.rows[0]) : null;
   }
 
-  async sleepRun(input: StepInput & { fireAt: Date }): Promise<TimerRecord> {
+  async sleepRun(input: StepInput & { fireAt: Date; maxSteps: number }): Promise<TimerRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       await this.assertOwnedRun(client, input);
-      await client.query(
-        `
-          insert into durlo_timers (id, run_id, step_id, fire_at, status)
-          values ($1, $2, $3, $4, 'pending')
-          on conflict (run_id, step_id) do nothing
-        `,
-        [randomUUID(), input.runId, input.stepId, input.fireAt]
-      );
-      const selected = await client.query<TimerRow>(
+      let selected = await client.query<TimerRow>(
         `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2 for update`,
         [input.runId, input.stepId]
       );
+      if (!selected.rows[0]) {
+        await this.assertStepCapacity(client, input.runId, input.maxSteps);
+        await client.query(
+          `
+            insert into durlo_timers (id, run_id, step_id, fire_at, status)
+            values ($1, $2, $3, $4, 'pending')
+          `,
+          [randomUUID(), input.runId, input.stepId, input.fireAt]
+        );
+        selected = await client.query<TimerRow>(
+          `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 and step_id = $2 for update`,
+          [input.runId, input.stepId]
+        );
+      }
       const timer = selected.rows[0];
       if (!timer) throw new Error(`timer '${input.stepId}' could not be created`);
       if (timer.status === "fired") {
@@ -926,6 +940,34 @@ export class PostgresAdapter implements DurloAdapter {
       [input.runId, input.workerId, input.leaseToken]
     );
     if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+  }
+
+  private async assertStepCapacity(
+    client: PoolClient,
+    runId: string,
+    maxSteps: number
+  ): Promise<void> {
+    if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) {
+      throw new ValidationError("maxSteps must be a positive safe integer");
+    }
+    const result = await client.query<{ count: string }>(
+      `
+        select (
+          (select count(*) from durlo_steps where run_id = $1) +
+          (select count(*) from durlo_timers where run_id = $1)
+        )::text as count
+      `,
+      [runId]
+    );
+    const actual = Number(result.rows[0]?.count ?? 0) + 1;
+    if (actual > maxSteps) {
+      throw new StorageLimitError(
+        `workflow step count would be ${actual}; maxWorkflowSteps is ${maxSteps}`,
+        "maxWorkflowSteps",
+        actual,
+        maxSteps
+      );
+    }
   }
 }
 

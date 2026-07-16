@@ -257,6 +257,8 @@ V1 should reject unsupported values before persistence where possible:
 
 Values read back from storage are plain data. Class prototypes and methods are not preserved.
 
+Serialized inputs, outputs, errors, batch inputs, and workflow step results have explicit UTF-8 byte limits. Workflow runs also limit the total durable step and sleep records they can create. Input and batch violations reject creation atomically. Output, error, and step violations follow normal attempt failure and retry semantics without persisting the oversized value. Defaults and configuration are defined in [Storage Limits](STORAGE_LIMITS.md).
+
 ## Timeouts
 
 Timeouts are attempt-level limits.

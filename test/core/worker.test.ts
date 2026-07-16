@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AttemptTimeoutError, Durlo, LostLeaseError } from "@durlo/core";
+import { AttemptTimeoutError, Durlo, LostLeaseError, jsonByteSize } from "@durlo/core";
 import type { ClaimedRun, DurloAdapter, TaskContext, TransactionalDurloAdapter } from "@durlo/core";
 
 function createWorkerAdapter(): DurloAdapter {
@@ -615,5 +615,60 @@ describe("worker timeouts", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("worker storage limits", () => {
+  it("turns an oversized output into an actionable run failure", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({
+      id: "worker-tests",
+      adapter,
+      limits: { maxOutputBytes: 5 }
+    });
+    const task = durlo.task({ id: "large-output", run: async () => "too large" });
+    const claim = claimedTask(task.id);
+    claim.maxAttempts = 1;
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await durlo.worker({ tasks: [task], workerId: "worker-1" }).runOnce();
+
+    expect(adapter.completeRun).not.toHaveBeenCalled();
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "StorageLimitError",
+          message: expect.stringContaining("maxOutputBytes")
+        }),
+        outcome: { status: "dead_letter" }
+      })
+    );
+  });
+
+  it("replaces an oversized thrown error with a bounded durable error", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({
+      id: "worker-tests",
+      adapter,
+      limits: { maxErrorBytes: 128 }
+    });
+    const task = durlo.task({
+      id: "large-error",
+      run: async () => {
+        throw new Error("x".repeat(10_000));
+      }
+    });
+    const claim = claimedTask(task.id);
+    claim.maxAttempts = 1;
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await durlo.worker({ tasks: [task], workerId: "worker-1" }).runOnce();
+
+    const failure = vi.mocked(adapter.failRun).mock.calls[0]![0];
+    expect(failure.error).toMatchObject({
+      name: "StorageLimitError",
+      message: expect.stringContaining("maxErrorBytes")
+    });
+    expect(jsonByteSize(failure.error)).toBeLessThanOrEqual(128);
   });
 });

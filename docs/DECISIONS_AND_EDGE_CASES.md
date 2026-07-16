@@ -284,6 +284,14 @@ V1 should reject unsupported values before persistence where possible:
 
 Dates and Errors need explicit serializer behavior. Values read from storage are plain data, not original class instances.
 
+### Storage Limits
+
+Decision: v1 uses configurable per-`Durlo` limits with safe defaults for input, output, errors, batch item count, batch aggregate bytes, step results, and total workflow step/sleep records.
+
+Byte limits use compact serialized JSON in UTF-8. Runtime limits that affect a run after creation are persisted in its options so deployments do not silently change them. Oversized thrown errors are replaced by a bounded `StorageLimitError`; Durlo does not write a truncated or invalid JSON value.
+
+The defaults and exact failure behavior are defined in [Storage Limits](STORAGE_LIMITS.md).
+
 ### Resource Registration
 
 Workers claim only resource kinds, ids, and compatibility versions they registered at startup.

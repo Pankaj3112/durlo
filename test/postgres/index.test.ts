@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { AttemptTimeoutError, Durlo, LostLeaseError, RunStateError } from "@durlo/core";
+import {
+  AttemptTimeoutError,
+  Durlo,
+  LostLeaseError,
+  RunStateError,
+  jsonByteSize
+} from "@durlo/core";
 import type { StepTools } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
@@ -141,6 +147,123 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       input: { value: 1 },
       resourceVersion: "1"
     });
+  });
+
+  it("rejects oversized inputs and batches before any row is persisted", async () => {
+    const durlo = new Durlo({
+      id: "integration",
+      adapter,
+      limits: { maxInputBytes: 10, maxBatchItems: 2, maxBatchBytes: 5 }
+    });
+    const task = durlo.task({ id: "limited-creation", run: async (input: unknown) => input });
+
+    await expect(task.enqueue({ value: "too large" })).rejects.toMatchObject({
+      name: "StorageLimitError",
+      limitName: "maxInputBytes"
+    });
+    await expect(task.batchEnqueue([1, 2, 3])).rejects.toMatchObject({
+      limitName: "maxBatchItems"
+    });
+    await expect(task.batchEnqueue([1, 20])).rejects.toMatchObject({
+      limitName: "maxBatchBytes"
+    });
+
+    const count = await adapter.pool.query<{ count: string }>(
+      "select count(*)::text as count from durlo_runs where app_id = 'integration'"
+    );
+    expect(count.rows[0]?.count).toBe("0");
+  });
+
+  it("fails oversized outputs and stores bounded thrown errors", async () => {
+    const outputDurlo = new Durlo({
+      id: "integration",
+      adapter,
+      limits: { maxOutputBytes: 5 }
+    });
+    const outputTask = outputDurlo.task({
+      id: "limited-output",
+      retry: { attempts: 1 },
+      run: async () => "too large"
+    });
+    const outputHandle = await outputTask.enqueue({});
+    await outputDurlo.worker({ tasks: [outputTask] }).runOnce();
+    expect(await outputDurlo.runs.get(outputHandle)).toMatchObject({
+      status: "dead_letter",
+      output: null,
+      error: { name: "StorageLimitError", message: expect.stringContaining("maxOutputBytes") }
+    });
+
+    const errorDurlo = new Durlo({
+      id: "integration",
+      adapter,
+      limits: { maxErrorBytes: 128 }
+    });
+    const errorTask = errorDurlo.task({
+      id: "limited-error",
+      retry: { attempts: 1 },
+      run: async () => {
+        throw new Error("x".repeat(10_000));
+      }
+    });
+    const errorHandle = await errorTask.enqueue({});
+    await errorDurlo.worker({ tasks: [errorTask] }).runOnce();
+    const errorRun = await errorDurlo.runs.get(errorHandle);
+    expect(errorRun).toMatchObject({
+      status: "dead_letter",
+      error: { name: "StorageLimitError", message: expect.stringContaining("maxErrorBytes") }
+    });
+    expect(jsonByteSize(errorRun?.error)).toBeLessThanOrEqual(128);
+  });
+
+  it("bounds durable step results and total workflow step storage", async () => {
+    const resultDurlo = new Durlo({
+      id: "integration",
+      adapter,
+      limits: { maxStepResultBytes: 5 }
+    });
+    const resultWorkflow = resultDurlo.workflow({
+      id: "limited-step-result",
+      retry: { attempts: 1 },
+      run: async ({ step }) => step.run("large-result", async () => "too large")
+    });
+    const resultHandle = await resultWorkflow.start({});
+    await resultDurlo.worker({ workflows: [resultWorkflow] }).runOnce();
+    expect(await resultDurlo.runs.get(resultHandle)).toMatchObject({
+      status: "failed",
+      error: { name: "StorageLimitError", message: expect.stringContaining("maxStepResultBytes") }
+    });
+    expect(await adapter.getStep(resultHandle.id, "large-result")).toMatchObject({
+      status: "failed",
+      result: null,
+      error: { name: "StorageLimitError" }
+    });
+
+    const countDurlo = new Durlo({
+      id: "integration",
+      adapter,
+      limits: { maxWorkflowSteps: 1 }
+    });
+    const countWorkflow = countDurlo.workflow({
+      id: "limited-step-count",
+      retry: { attempts: 1 },
+      run: async ({ step }) => {
+        await step.run("first", async () => 1);
+        await step.sleep("second", "1d");
+      }
+    });
+    const countHandle = await countWorkflow.start({});
+    await countDurlo.worker({ workflows: [countWorkflow] }).runOnce();
+    expect(await countDurlo.runs.get(countHandle)).toMatchObject({
+      status: "failed",
+      error: { name: "StorageLimitError", message: expect.stringContaining("maxWorkflowSteps") }
+    });
+    const stored = await adapter.pool.query<{ steps: string; timers: string }>(
+      `select
+         (select count(*)::text from durlo_steps where run_id = $1) as steps,
+         (select count(*)::text from durlo_timers where run_id = $1) as timers`,
+      [countHandle.id]
+    );
+    expect(stored.rows[0]).toEqual({ steps: "1", timers: "0" });
   });
 
   it("deduplicates concurrent run creation atomically", async () => {

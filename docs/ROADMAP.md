@@ -85,6 +85,7 @@ Status: In Progress
 - `worker.getCompatibilityReport()` provides a bounded, read-only view of active runs unavailable to that worker's registrations.
 - The rolling-deployment, rollback, workflow-compatibility, and idempotency interaction policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 - Additive migration `0002_resource_versions` preserves `0001_initial` and has a tested upgrade path that backfills existing runs to version `"1"`.
+- Inputs, outputs, errors, batches, step results, and total workflow step/sleep records now have documented configurable limits that fail before oversized JSON is persisted.
 
 ### Outcomes
 

@@ -10,6 +10,19 @@ export class SerializationError extends DurloError {
   override readonly name = "SerializationError";
 }
 
+export class StorageLimitError extends DurloError {
+  override readonly name = "StorageLimitError";
+
+  constructor(
+    message: string,
+    readonly limitName: string,
+    readonly actual: number,
+    readonly limit: number
+  ) {
+    super(message);
+  }
+}
+
 export class LostLeaseError extends DurloError {
   override readonly name = "LostLeaseError";
 }
