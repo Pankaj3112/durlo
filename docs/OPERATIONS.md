@@ -99,6 +99,8 @@ Run migrations before starting new-version workers. Migrations are serialized wi
 At minimum, observe:
 
 - `worker.getHealth()` claim/timer failures and last successful poll times
+- `durlo.runs.getBacklogHealth()` ready-run lag, expired leases, due timers, and timer lag
+- `worker.getCompatibilityReport()` for bounded worker-relative unregistered resources and incompatible versions
 - structured lease-loss, stalled-attempt, and database-retry logs
 - `pool.totalCount`, `pool.idleCount`, and sustained `pool.waitingCount`
 - Postgres query latency, CPU, I/O, active connections, and lock waits
@@ -106,3 +108,5 @@ At minimum, observe:
 - cleanup batch duration and retained terminal-row growth
 
 Pool waiting alone is not failure; brief bursts are expected. Sustained waiting combined with heartbeat loss or increasing timer lag is the signal that the current concurrency, pool, or database budget is too small.
+
+Backlog health aggregates the active rows for one app. Poll it at an operator or dashboard cadence rather than at the worker's claim interval. Run detail and compatibility reads are bounded; run list pages are limited to 200 summaries. See [Observability](OBSERVABILITY.md) for field definitions and scope.

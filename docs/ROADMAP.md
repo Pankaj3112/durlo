@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phase 1 execution hardening and Phase 2 deployment and storage safety are complete. Phase 3 observability is next before the product UI.
+Phase 1 execution hardening, Phase 2 deployment and storage safety, and Phase 3 observability are complete. Phase 4 is next: the CLI, local dashboard, and quickstart can now build on the stable read model.
 
 ## Phase 1: Execution Hardening
 
@@ -113,7 +113,19 @@ Status: Complete
 
 ## Phase 3: Observability
 
-Status: Planned
+Status: Complete
+
+### Progress
+
+- `durlo.runs.list()` provides app-scoped, newest-first keyset pagination with status, kind, resource, version, and creation-time filters.
+- Payload-free list summaries and opaque versioned cursors give the CLI and dashboard a bounded stable contract.
+- `durlo.runs.getDetails()` reads one consistent run, step, attempt, and timer snapshot without taking row locks.
+- The core read model builds a deterministic chronological timeline from durable records without adding an event-history subsystem.
+- Detail diagnostics expose retries, failures, timeouts, stalls, durable lease loss, expired current leases, and timer lag.
+- `durlo.runs.getBacklogHealth()` reports app-scoped ready/delayed work, running and sleeping work, expired leases, due timers, and database-clocked lag.
+- Existing `worker.getHealth()` and `worker.getCompatibilityReport()` complete the local operational view, including bounded unregistered-resource and incompatible-version diagnosis.
+- Additive migration `0004_observability_reads` indexes list filters, active backlog reads, and timer detail; its upgrade path and immutable checksum are tested.
+- The reproducible 50,000-run benchmark now enforces the intended list, detail, and backlog query indexes and latency envelope.
 
 ### Outcomes
 

@@ -160,6 +160,119 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres query benchmark
       }
     }
   });
+
+  it("keeps indexed observability reads inside the measured envelope", async () => {
+    const listQuery = `
+      select
+        id, kind, resource_id, resource_version, status, priority, scheduled_at,
+        attempt_count, max_attempts, stalled_count, created_at, updated_at, started_at,
+        completed_at, cancelled_at
+      from durlo_runs
+      where app_id = $1
+        and (cardinality($2::text[]) = 0 or status = any($2::text[]))
+        and (cardinality($3::text[]) = 0 or kind = any($3::text[]))
+        and ($4::text is null or resource_id = $4)
+        and ($5::text is null or resource_version = $5)
+        and ($6::timestamptz is null or created_at > $6)
+        and ($7::timestamptz is null or created_at < $7)
+        and ($8::timestamptz is null or (created_at, id) < ($8::timestamptz, $9::text))
+      order by created_at desc, id desc
+      limit $10
+    `;
+    const results = await Promise.all([
+      benchmarkQuery(adapter, "list newest runs", listQuery, [
+        "benchmark",
+        [],
+        [],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        51
+      ]),
+      benchmarkQuery(adapter, "list runs by status and kind", listQuery, [
+        "benchmark",
+        ["pending"],
+        ["workflow"],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        51
+      ]),
+      benchmarkQuery(adapter, "list runs by resource", listQuery, [
+        "benchmark",
+        [],
+        ["task"],
+        "missing-task",
+        "1",
+        null,
+        null,
+        null,
+        null,
+        51
+      ]),
+      benchmarkQuery(
+        adapter,
+        "run detail attempts",
+        `select
+           id, run_id, step_id, kind, attempt_number, status, worker_id, error_json,
+           started_at, completed_at
+         from durlo_attempts
+         where run_id = $1
+         order by started_at, id`,
+        ["benchmark-run-1"]
+      ),
+      benchmarkQuery(
+        adapter,
+        "run detail timers",
+        `select id, run_id, step_id, fire_at, status, created_at, fired_at, cancelled_at
+         from durlo_timers
+         where run_id = $1
+         order by created_at, id`,
+        ["benchmark-run-1"]
+      ),
+      benchmarkQuery(
+        adapter,
+        "active backlog health",
+        `select
+           count(*) filter (where status = 'pending'),
+           count(*) filter (where status = 'pending' and scheduled_at <= now()),
+           count(*) filter (where status = 'running'),
+           count(*) filter (where status = 'sleeping'),
+           count(*) filter (where status = 'running' and locked_until <= now()),
+           min(scheduled_at) filter (where status = 'pending' and scheduled_at <= now())
+         from durlo_runs
+         where app_id = $1 and status in ('pending', 'running', 'sleeping')`,
+        ["benchmark"]
+      )
+    ]);
+
+    process.stdout.write(
+      `DURLO_OBSERVABILITY_BENCHMARK ${JSON.stringify({ datasetRuns: runCount, results })}\n`
+    );
+
+    const requiredIndexes: Record<string, string> = {
+      "list newest runs": "durlo_runs_list_idx",
+      "list runs by status and kind": "durlo_runs_status_list_idx",
+      "list runs by resource": "durlo_runs_resource_list_idx",
+      "run detail attempts": "durlo_attempts_run_idx",
+      "run detail timers": "durlo_timers_run_idx",
+      "active backlog health": "durlo_runs_active_health_idx"
+    };
+    for (const result of results) {
+      expect(result.maximumMilliseconds, result.query).toBeLessThanOrEqual(
+        maximumQueryMilliseconds
+      );
+      if (runCount >= 50_000) {
+        expect(result.indexes, result.query).toContain(requiredIndexes[result.query]);
+      }
+    }
+  });
 });
 
 async function benchmarkQuery(

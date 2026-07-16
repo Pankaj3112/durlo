@@ -3,7 +3,7 @@
 Status: Current
 Updated: 2026-07-16
 
-Durlo ships an opt-in query benchmark for the worker's latency-sensitive Postgres paths. It is a regression envelope, not a production throughput SLA.
+Durlo ships an opt-in query benchmark for latency-sensitive worker and observability Postgres paths. It is a regression envelope, not a production throughput SLA.
 
 ## Reproduce It
 
@@ -27,7 +27,7 @@ These environment variables control the workload:
 - `DURLO_BENCHMARK_SAMPLES` sets measured samples after one warm-up; the default is 5.
 - `DURLO_BENCHMARK_MAX_MS` sets the maximum accepted execution time for any measured query; the default is 250 ms.
 
-At 50,000 runs, the seed contains 40,002 attempt rows and 42,000 timer rows. Runs are a fixed mix of retained terminal history, due and future pending work, sleeping workflows, and expired running leases. The four selectors are measured concurrently with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and a claim/timer batch size of 25.
+At 50,000 runs, the seed contains 40,002 attempt rows and 42,000 timer rows. Runs are a fixed mix of retained terminal history, due and future pending work, sleeping workflows, and expired running leases. The four worker selectors and six observability reads are measured in separate concurrent groups with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and a claim/timer batch size of 25.
 
 The default acceptance envelope requires every measured execution to remain at or below 250 ms and, at 50,000 or more runs, requires these intended indexes to appear in the plans:
 
@@ -37,6 +37,12 @@ The default acceptance envelope requires every measured execution to remain at o
 | Pending claim | `durlo_runs_due_idx` |
 | Run-attempt failure count | `durlo_attempts_run_idx` |
 | Due-timer selection | `durlo_timers_due_idx` |
+| Newest-run list | `durlo_runs_list_idx` |
+| Status/kind list | `durlo_runs_status_list_idx` |
+| Resource/version list | `durlo_runs_resource_list_idx` |
+| Run-detail attempts | `durlo_attempts_run_idx` |
+| Run-detail timers | `durlo_timers_run_idx` |
+| Active backlog health | `durlo_runs_active_health_idx` |
 
 ## Reference Measurements
 
@@ -44,10 +50,16 @@ Measurements below were collected on 2026-07-16 from an Apple M4 host with 16 Gi
 
 | Seed | Query | Median | Maximum |
 | ---: | --- | ---: | ---: |
-| 50,000 runs | Expired-lease claim | 4.896 ms | 5.304 ms |
-| 50,000 runs | Pending claim | 0.127 ms | 0.154 ms |
-| 50,000 runs | Attempt failure count | 0.029 ms | 0.033 ms |
-| 50,000 runs | Due timers | 8.483 ms | 9.404 ms |
+| 50,000 runs | Expired-lease claim | 4.815 ms | 5.230 ms |
+| 50,000 runs | Pending claim | 0.137 ms | 0.145 ms |
+| 50,000 runs | Attempt failure count | 0.025 ms | 0.049 ms |
+| 50,000 runs | Due timers | 3.578 ms | 4.006 ms |
+| 50,000 runs | Newest-run list | 0.039 ms | 0.068 ms |
+| 50,000 runs | Status/kind list | 0.032 ms | 0.099 ms |
+| 50,000 runs | Resource/version list | 0.034 ms | 0.051 ms |
+| 50,000 runs | Run-detail attempts | 0.032 ms | 0.076 ms |
+| 50,000 runs | Run-detail timers | 0.022 ms | 0.026 ms |
+| 50,000 runs | Active backlog health | 4.145 ms | 4.251 ms |
 | 500,000 runs | Expired-lease claim | 57.928 ms | 60.436 ms |
 | 500,000 runs | Pending claim | 0.169 ms | 0.201 ms |
 | 500,000 runs | Attempt failure count | 0.026 ms | 0.067 ms |

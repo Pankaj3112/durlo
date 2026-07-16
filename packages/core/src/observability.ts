@@ -11,6 +11,8 @@ const FAILURE_STATUSES = new Set<AttemptStatus>(["failed", "timed_out", "stalled
 
 const EVENT_ORDER: Record<RunTimelineEventType, number> = {
   run_created: 0,
+  run_retry_started: 9,
+  run_manual_retry_started: 9,
   run_retry_scheduled: 75,
   run_manual_retry_scheduled: 75,
   run_released: 75,
@@ -149,9 +151,30 @@ export function buildRunDetails(records: StoredRunDetails): RunDetails {
     .filter((attempt) => attempt.kind === "run")
     .sort(
       (left, right) =>
-        left.startedAt.getTime() - right.startedAt.getTime() || left.id.localeCompare(right.id)
+        left.attemptNumber - right.attemptNumber ||
+        left.startedAt.getTime() - right.startedAt.getTime() ||
+        left.id.localeCompare(right.id)
     );
   const failedRunAttempts = runAttempts.filter((attempt) => FAILURE_STATUSES.has(attempt.status));
+  let priorFailures = 0;
+  for (let index = 1; index < runAttempts.length; index += 1) {
+    const previous = runAttempts[index - 1]!;
+    if (!FAILURE_STATUSES.has(previous.status)) continue;
+    priorFailures += 1;
+    const attempt = runAttempts[index]!;
+    const manual = priorFailures >= run.maxAttempts;
+    const type = manual ? "run_manual_retry_started" : "run_retry_started";
+    timeline.push({
+      id: `${type}:${attempt.id}`,
+      type,
+      at: attempt.startedAt,
+      runId: run.id,
+      recordId: attempt.id,
+      attemptNumber: attempt.attemptNumber,
+      ...(attempt.workerId === null ? {} : { workerId: attempt.workerId }),
+      status: "running"
+    });
+  }
   const lastRunAttempt = runAttempts.at(-1);
   if (run.status === "pending" && lastRunAttempt?.completedAt) {
     if (FAILURE_STATUSES.has(lastRunAttempt.status)) {

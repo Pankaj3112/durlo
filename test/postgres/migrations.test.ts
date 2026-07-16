@@ -8,7 +8,8 @@ const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 const releasedMigrationChecksums = {
   "0001_initial": "133725b6760c494097d1d04d3ffd372c8f994a4dbdc06affe3cf761c55acd2cf",
   "0002_resource_versions": "fa54ae3a3ccae6526a96151871bef1768b0f75dbf4ef1a8ca973d2e0c41a79fa",
-  "0003_retention_cleanup": "031e38f84bfaa30a93e58fc87de0b626dcd74603db82034bed49bacab87288f8"
+  "0003_retention_cleanup": "031e38f84bfaa30a93e58fc87de0b626dcd74603db82034bed49bacab87288f8",
+  "0004_observability_reads": "bfd9dd7605c9a2997bef6c568ab0f355c2f1779dddbc58fd910ed3a4c7a612cb"
 } as const;
 
 describe("@durlo/postgres migration immutability", () => {

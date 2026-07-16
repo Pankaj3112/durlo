@@ -315,6 +315,20 @@ Missing matches remain non-terminal. `worker.getCompatibilityReport()` diagnoses
 
 The rollout and compatibility criteria are defined in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 
+### Observability Is A Derived Read Model
+
+Decision:
+
+- run lists use bounded newest-first keyset pagination on `(created_at, id)`
+- list rows omit JSON payloads and lease ownership fields
+- run detail reads the run, steps, attempts, and timers in one short repeatable-read transaction without row locks
+- chronological timelines and diagnostics are derived from those durable records in core
+- v1 does not add an event stream or event-history table for observability
+- backlog and timer lag use the Postgres clock
+- unregistered-resource diagnosis remains relative to one worker's registrations
+
+Reason: the CLI and dashboard need a stable explanation surface without creating a second state-transition system. Attempts, checkpoints, timers, and the current run row already contain the durable evidence v1 promises. Historical values overwritten on the run row, such as an old retry deadline, are not recreated or presented as a Temporal-style replay history.
+
 ## Operational Edge Cases
 
 ### Process-Local Concurrency

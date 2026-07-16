@@ -288,6 +288,8 @@ export type RunTimelineEventType =
   | "run_attempt_timed_out"
   | "run_attempt_stalled"
   | "run_attempt_cancelled"
+  | "run_retry_started"
+  | "run_manual_retry_started"
   | "run_retry_scheduled"
   | "run_manual_retry_scheduled"
   | "run_released"

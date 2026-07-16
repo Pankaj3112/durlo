@@ -141,9 +141,13 @@ The schema is defined by `packages/postgres/src/migrations.ts` and currently con
 
 Postgres `now()` decides eligibility, lease expiry, and timer due checks. Partial indexes support pending runs, expired leases, resource lookup, and due timers.
 
+The observability read model remains on the same durable records. `durlo.runs.list()` reads payload-free summaries through bounded `(created_at, id)` keyset pages. `durlo.runs.getDetails()` reads the owning run plus steps, attempts, and timers in a short repeatable-read transaction without row locks, then core derives a deterministic timeline and diagnostics. `durlo.runs.getBacklogHealth()` aggregates active rows and pending timers using the Postgres clock. Dedicated indexes serve list filters, active backlog reads, and timer detail; no event-history table is introduced.
+
 The same run table holds active queue state and retained history. `durlo.runs.cleanup()` performs manual, bounded terminal-row deletion using a terminal-only partial index and row locking; Durlo does not schedule retention. The full contract is documented in [Retention Cleanup](RETENTION.md). Public core APIs enforce the payload and batch limits documented in [Storage Limits](STORAGE_LIMITS.md); the Postgres adapter enforces the durable workflow-step count under the owning run lock.
 
 `worker.getCompatibilityReport()` performs a bounded read for pending, sleeping, and expired-running work that does not match that worker's registrations. The report is worker-relative and does not mutate run state. The complete policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
+
+The combined local operational view is intentionally split by scope: `worker.getHealth()` describes one process, `durlo.runs.getBacklogHealth()` describes one app's stored backlog, and `worker.getCompatibilityReport()` compares stored active work with one worker's registrations. The public contract and timeline semantics are documented in [Observability](OBSERVABILITY.md).
 
 ## Transaction Boundary
 
@@ -182,6 +186,7 @@ To prevent documentation drift:
 - public types and adapter contracts: `packages/core/src/types.ts`
 - worker behavior: `packages/core/src/worker.ts`
 - workflow checkpoints: `packages/core/src/steps.ts`
+- timeline and run diagnostics: `packages/core/src/observability.ts`
 - Postgres transitions: `packages/postgres/src/adapter.ts`
 - database schema: `packages/postgres/src/migrations.ts`
 - behavioral guarantees: `docs/EXECUTION_SEMANTICS.md`

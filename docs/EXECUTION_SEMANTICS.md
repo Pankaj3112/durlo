@@ -222,6 +222,18 @@ Manual retry schedules one new claim without resetting the automatic retry budge
 
 Manual retry is allowed for `failed` workflow runs and `dead_letter` task runs. V1 does not manually retry `completed`, `cancelled`, `pending`, `running`, or `sleeping` runs.
 
+## Observability Reads
+
+Run reads are always scoped to the `Durlo` instance's app id.
+
+`durlo.runs.list(options?)` returns bounded payload-free summaries in descending `(created_at, id)` order. Pagination is keyset-based with an opaque cursor; it does not hold a database snapshot between pages. Status, kind, resource id, resource version, and exclusive creation-time filters are supported.
+
+`durlo.runs.getDetails(handleOrId)` returns a short repeatable-read snapshot of the run, its steps, attempts, and timers, plus a timeline and diagnostics derived in core. It takes no row locks. The timeline is an explanation of durable state transitions, not a replay log and not an additional source of truth.
+
+`durlo.runs.getBacklogHealth()` returns an app-scoped database-clocked snapshot of ready and delayed work, running and sleeping work, expired leases, pending/due timers, and lag. It does not claim, fire, cancel, retry, or otherwise mutate work.
+
+`worker.getHealth()` remains process-local. `worker.getCompatibilityReport()` remains worker-relative: an unregistered or incompatible run in one report may still be serviceable by a different worker. See [Observability](OBSERVABILITY.md).
+
 ## Batch Enqueue
 
 `task.batchEnqueue(items)` should be atomic by default.

@@ -286,8 +286,9 @@ describe("Durlo core API", () => {
       maxAttempts: 3
     });
     run.createdAt = new Date("2026-07-16T09:00:00.000Z");
-    run.updatedAt = new Date("2026-07-16T09:01:00.000Z");
-    run.attemptCount = 1;
+    run.updatedAt = new Date("2026-07-16T09:02:00.000Z");
+    run.scheduledAt = new Date("2026-07-16T09:03:00.000Z");
+    run.attemptCount = 2;
     run.stalledCount = 1;
     const stored = {
       run,
@@ -304,10 +305,22 @@ describe("Durlo core API", () => {
           error: { name: "StalledError", message: "worker lease expired" },
           startedAt: new Date("2026-07-16T09:00:10.000Z"),
           completedAt: new Date("2026-07-16T09:01:00.000Z")
+        },
+        {
+          id: "attempt-2",
+          runId: run.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 2,
+          status: "timed_out",
+          workerId: "worker-2",
+          error: { name: "AttemptTimeoutError", message: "attempt timed out" },
+          startedAt: new Date("2026-07-16T09:01:10.000Z"),
+          completedAt: new Date("2026-07-16T09:02:00.000Z")
         }
       ],
       timers: [],
-      checkedAt: new Date("2026-07-16T09:01:30.000Z")
+      checkedAt: new Date("2026-07-16T09:02:30.000Z")
     } satisfies StoredRunDetails;
     vi.spyOn(adapter, "getRunDetails").mockResolvedValue(stored);
     const durlo = new Durlo({ id: "details-app", adapter });
@@ -319,14 +332,17 @@ describe("Durlo core API", () => {
       "run_created",
       "run_attempt_started",
       "run_attempt_stalled",
+      "run_retry_started",
+      "run_attempt_started",
+      "run_attempt_timed_out",
       "run_retry_scheduled"
     ]);
     expect(details?.diagnostics).toEqual({
-      failureCount: 1,
+      failureCount: 2,
       failedAttempts: 0,
-      timedOutAttempts: 0,
+      timedOutAttempts: 1,
       stalledAttempts: 1,
-      retryCount: 1,
+      retryCount: 2,
       leaseLossCount: 1,
       hasExpiredLease: false,
       timerLagMs: 0
