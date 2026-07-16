@@ -1,9 +1,25 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { migrations, postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
+
+const releasedMigrationChecksums = {
+  "0001_initial": "133725b6760c494097d1d04d3ffd372c8f994a4dbdc06affe3cf761c55acd2cf",
+  "0002_resource_versions": "fa54ae3a3ccae6526a96151871bef1768b0f75dbf4ef1a8ca973d2e0c41a79fa",
+  "0003_retention_cleanup": "031e38f84bfaa30a93e58fc87de0b626dcd74603db82034bed49bacab87288f8"
+} as const;
+
+describe("@durlo/postgres migration immutability", () => {
+  it("keeps every released migration byte-for-byte unchanged", () => {
+    for (const [version, expected] of Object.entries(releasedMigrationChecksums)) {
+      const migration = migrations.find((candidate) => candidate.version === version);
+      expect(migration, `${version} must remain available`).toBeDefined();
+      expect(createHash("sha256").update(migration!.sql).digest("hex"), version).toBe(expected);
+    }
+  });
+});
 
 describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", () => {
   let admin: PostgresAdapter;
@@ -77,6 +93,42 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         "select resource_version from durlo_runs where id = 'legacy-run'"
       );
       expect(run.rows).toEqual([{ resource_version: "1" }]);
+      const versions = await adapter.pool.query<{ version: string }>(
+        "select version from durlo_schema_migrations order by version"
+      );
+      expect(versions.rows).toEqual([
+        { version: "0001_initial" },
+        { version: "0002_resource_versions" },
+        { version: "0003_retention_cleanup" }
+      ]);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("upgrades a 0002 schema by adding the retention index", async () => {
+    const schema = await createSchema();
+    const adapter = schemaAdapter(schema);
+    try {
+      await adapter.pool.query(migrations[0]!.sql);
+      await adapter.pool.query(migrations[1]!.sql);
+      await adapter.pool.query(`
+        create table durlo_schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
+      await adapter.pool.query(
+        `insert into durlo_schema_migrations (version)
+         values ('0001_initial'), ('0002_resource_versions')`
+      );
+
+      await adapter.migrate();
+
+      const retentionIndex = await adapter.pool.query<{ index_name: string | null }>(
+        "select to_regclass('durlo_runs_retention_idx')::text as index_name"
+      );
+      expect(retentionIndex.rows[0]?.index_name).toBe("durlo_runs_retention_idx");
       const versions = await adapter.pool.query<{ version: string }>(
         "select version from durlo_schema_migrations order by version"
       );
