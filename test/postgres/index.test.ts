@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo, LostLeaseError, RunStateError } from "@durlo/core";
+import { AttemptTimeoutError, Durlo, LostLeaseError, RunStateError } from "@durlo/core";
 import type { StepTools } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
@@ -567,6 +567,32 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(await adapter.getStep(handle.id, "outer")).toMatchObject({ status: "failed" });
   });
 
+  it("rejects concurrent workflow step calls predictably", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const workflow = durlo.workflow({
+      id: "concurrent-step-workflow",
+      retry: { attempts: 1 },
+      run: async ({ step }) => {
+        await Promise.all([
+          step.run("first", async () => "first"),
+          step.run("second", async () => "second")
+        ]);
+      }
+    });
+    const handle = await workflow.start({});
+
+    await durlo.worker({ workflows: [workflow] }).runOnce();
+
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "failed",
+      error: {
+        name: "ValidationError",
+        message: "workflow steps must be sequential; cannot start 'second' while 'first' is active"
+      }
+    });
+    expect(await adapter.getStep(handle.id, "second")).toBeNull();
+  });
+
   it("sleeps and resumes workflows without consuming the failure retry budget", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     let firstStepExecutions = 0;
@@ -696,6 +722,53 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(attempt.rows).toEqual([{ status: "cancelled" }]);
   });
 
+  it("delivers running cancellation cooperatively through lease loss", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    let markStarted!: () => void;
+    let markAborted!: () => void;
+    let abortReason: unknown;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const aborted = new Promise<void>((resolve) => {
+      markAborted = resolve;
+    });
+    const task = durlo.task({
+      id: "cooperative-cancellation",
+      run: async (_input: unknown, { signal }) => {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              abortReason = signal.reason;
+              markAborted();
+              resolve();
+            },
+            { once: true }
+          );
+        });
+        return "late completion";
+      }
+    });
+    const handle = await task.enqueue({});
+    const execution = durlo
+      .worker({ tasks: [task], workerId: "cooperative-worker", leaseDuration: 30 })
+      .runOnce();
+
+    await started;
+    await durlo.runs.cancel(handle);
+    await aborted;
+    await execution;
+
+    expect(abortReason).toBeInstanceOf(LostLeaseError);
+    expect(await durlo.runs.get(handle)).toMatchObject({
+      status: "cancelled",
+      output: null,
+      error: null
+    });
+  });
+
   it("manually retries only failed workflows and dead-letter tasks while preserving history", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     let executions = 0;
@@ -767,6 +840,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
   it("records cooperative attempt timeouts and aborts the task signal", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     let aborted = false;
+    let abortReason: unknown;
     const task = durlo.task({
       id: "timeout-task",
       retry: { attempts: 1 },
@@ -774,6 +848,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       run: async (_input: unknown, { signal }) => {
         signal.addEventListener("abort", () => {
           aborted = true;
+          abortReason = signal.reason;
         });
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -783,9 +858,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     await durlo.worker({ tasks: [task], leaseDuration: "1s" }).runOnce();
 
     expect(aborted).toBe(true);
+    expect(abortReason).toBeInstanceOf(AttemptTimeoutError);
     expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "dead_letter",
-      error: { name: "TimeoutError" }
+      error: { name: "AttemptTimeoutError" }
     });
     const attempt = await adapter.pool.query<{ status: string }>(
       "select status from durlo_attempts where run_id = $1 and kind = 'run'",

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { LostLeaseError, ValidationError, WorkflowSleepError } from "./errors.js";
+import {
+  AttemptTimeoutError,
+  LostLeaseError,
+  ValidationError,
+  WorkflowSleepError
+} from "./errors.js";
 import { calculateRetryDelay } from "./retry.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
 import { createStepTools } from "./steps.js";
@@ -15,10 +20,6 @@ import type {
   WorkerOptions
 } from "./types.js";
 import { parseDuration } from "./validation.js";
-
-class TimeoutError extends Error {
-  override readonly name = "TimeoutError";
-}
 
 const OPERATIONAL_BACKOFF_INITIAL = 100;
 const OPERATIONAL_BACKOFF_MAX = 30_000;
@@ -368,14 +369,14 @@ export class Worker {
           workerId: this.id,
           leaseToken: run.leaseToken,
           error: serializeError(error),
-          ...(error instanceof TimeoutError ? { attemptStatus: "timed_out" } : {}),
+          ...(error instanceof AttemptTimeoutError ? { attemptStatus: "timed_out" } : {}),
           outcome
         });
         this.log(outcome.status === "pending" ? "warn" : "error", "run.failed", {
           runId: run.id,
           kind: run.kind,
           resourceId: run.resourceId,
-          attemptStatus: error instanceof TimeoutError ? "timed_out" : "failed",
+          attemptStatus: error instanceof AttemptTimeoutError ? "timed_out" : "failed",
           outcome: outcome.status,
           error: errorMessage(error)
         });
@@ -433,7 +434,7 @@ export class Worker {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
-        const error = new TimeoutError(`attempt timed out after ${milliseconds}ms`);
+        const error = new AttemptTimeoutError(`attempt timed out after ${milliseconds}ms`);
         controller.abort(error);
         reject(error);
       }, milliseconds);

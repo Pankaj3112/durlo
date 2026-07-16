@@ -126,7 +126,17 @@ Decision:
 - cancellation is best-effort
 - cancellation prevents future execution
 - cancellation does not safely interrupt arbitrary JavaScript
+- a running worker observes cancellation as lease loss and aborts its signal with `LostLeaseError`
 - a stale completion after cancellation must be rejected
+
+### Attempt Timeout
+
+Decision:
+
+- timeout limits are attempt-level
+- timeout aborts the attempt signal with the exported `AttemptTimeoutError`
+- timeout persistence and retry do not wait for arbitrary JavaScript to terminate
+- a late return cannot complete the concluded attempt, but late external side effects remain possible
 
 ### Timer Race
 

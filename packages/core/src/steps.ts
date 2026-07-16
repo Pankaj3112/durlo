@@ -5,16 +5,27 @@ import { parseDuration, validateId } from "./validation.js";
 
 export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepTools {
   const seen = new Set<string>();
-  let insideStep = false;
+  let activeStepId: string | null = null;
+  let insideStepCallback = false;
 
   const begin = (stepId: string): void => {
     validateId(stepId, "step id");
-    if (insideStep) throw new ValidationError("nested step calls are not allowed");
+    if (activeStepId !== null) {
+      if (insideStepCallback) throw new ValidationError("nested step calls are not allowed");
+      throw new ValidationError(
+        `workflow steps must be sequential; cannot start '${stepId}' while '${activeStepId}' is active`
+      );
+    }
     if (seen.has(stepId))
       throw new ValidationError(
         `step '${stepId}' was called more than once in this workflow execution`
       );
     seen.add(stepId);
+    activeStepId = stepId;
+  };
+
+  const finish = (stepId: string): void => {
+    if (activeStepId === stepId) activeStepId = null;
   };
 
   const ownership = { runId: run.id, workerId: run.lockedBy, leaseToken: run.leaseToken };
@@ -22,44 +33,60 @@ export function createStepTools(adapter: DurloAdapter, run: ClaimedRun): StepToo
   return {
     async run<T>(stepId: string, fn: () => Promise<T> | T): Promise<T> {
       begin(stepId);
-      if (await adapter.getTimer(run.id, stepId)) {
-        throw new ValidationError(`step '${stepId}' is already used by a sleep`);
-      }
-      const existing = await adapter.getStep(run.id, stepId);
-      if (existing?.status === "completed") return deserialize(existing.result!) as T;
-      const step = await adapter.startStep({ ...ownership, stepId, maxAttempts: run.maxAttempts });
-      if (step.status === "completed") return deserialize(step.result!) as T;
-
-      insideStep = true;
       try {
-        const result = await fn();
-        insideStep = false;
-        await adapter.completeStep({
+        if (await adapter.getTimer(run.id, stepId)) {
+          throw new ValidationError(`step '${stepId}' is already used by a sleep`);
+        }
+        const existing = await adapter.getStep(run.id, stepId);
+        if (existing?.status === "completed") return deserialize(existing.result!) as T;
+        const step = await adapter.startStep({
           ...ownership,
           stepId,
-          result: serialize(result === undefined ? null : result)
+          maxAttempts: run.maxAttempts
         });
-        return result;
-      } catch (error) {
-        insideStep = false;
+        if (step.status === "completed") return deserialize(step.result!) as T;
+
+        insideStepCallback = true;
         try {
-          await adapter.failStep({ ...ownership, stepId, error: serializeError(error) });
-        } catch (writeError) {
-          if (writeError instanceof LostLeaseError) throw writeError;
-          throw writeError;
+          const result = await fn();
+          insideStepCallback = false;
+          await adapter.completeStep({
+            ...ownership,
+            stepId,
+            result: serialize(result === undefined ? null : result)
+          });
+          return result;
+        } catch (error) {
+          insideStepCallback = false;
+          try {
+            await adapter.failStep({ ...ownership, stepId, error: serializeError(error) });
+          } catch (writeError) {
+            if (writeError instanceof LostLeaseError) throw writeError;
+            throw writeError;
+          }
+          throw error;
+        } finally {
+          insideStepCallback = false;
         }
-        throw error;
       } finally {
-        insideStep = false;
+        finish(stepId);
       }
     },
     async sleep(stepId, duration): Promise<void> {
       begin(stepId);
-      await sleepUntil(stepId, new Date(Date.now() + parseDuration(duration, "sleep duration")));
+      try {
+        await sleepUntil(stepId, new Date(Date.now() + parseDuration(duration, "sleep duration")));
+      } finally {
+        finish(stepId);
+      }
     },
     async sleepUntil(stepId, date): Promise<void> {
       begin(stepId);
-      await sleepUntil(stepId, new Date(date));
+      try {
+        await sleepUntil(stepId, new Date(date));
+      } finally {
+        finish(stepId);
+      }
     }
   };
 

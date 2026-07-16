@@ -14,6 +14,10 @@ export class LostLeaseError extends DurloError {
   override readonly name = "LostLeaseError";
 }
 
+export class AttemptTimeoutError extends DurloError {
+  override readonly name = "AttemptTimeoutError";
+}
+
 export class RunStateError extends DurloError {
   override readonly name = "RunStateError";
 }

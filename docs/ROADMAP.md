@@ -50,7 +50,8 @@ Status: In Progress
 - `worker.getHealth()` exposes lifecycle, active-slot, polling-success, and database-failure state.
 - Configured loggers receive structured worker lifecycle, database recovery, and run transition records.
 - Public run reads, cancellation, and manual retry are scoped by both app id and run id.
-- Sequential-step enforcement and cooperative termination finalization remain open.
+- Workflow step and sleep calls are runtime-enforced as sequential boundaries; nested and concurrent calls fail predictably.
+- Attempt timeout, running cancellation, shutdown draining, and late completion behavior are documented and covered by deterministic tests.
 
 ### Outcomes
 

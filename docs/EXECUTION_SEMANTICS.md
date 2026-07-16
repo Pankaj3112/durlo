@@ -139,6 +139,7 @@ V1 step rules:
 
 - Duplicate step ids in one workflow run are runtime errors.
 - `step.*` calls inside a `step.run(...)` callback are runtime errors.
+- Concurrent or otherwise overlapping `step.*` calls are runtime errors; workflow durable boundaries must be awaited sequentially.
 - Step-level retry overrides are not public in v1; step failures use the workflow run retry policy.
 - Completed steps return the stored result without calling `fn`.
 
@@ -196,6 +197,8 @@ Cancellation may not interrupt JavaScript already executing. If a running attemp
 
 For running runs, cancellation changes the run to `cancelled` and clears the lease only if the adapter can do so atomically. A stale worker completion after cancellation must not move the run back to `completed`.
 
+Running cancellation is cooperative at the worker boundary. The worker observes the invalidated lease on a heartbeat, aborts the attempt signal with `LostLeaseError`, and suppresses final writes. If user code ignores the signal, the durable run remains cancelled but the local worker slot stays occupied until that JavaScript settles.
+
 ## Manual Retry
 
 `durlo.runs.retry(handleOrId)` creates a new attempt for a failed or dead-letter run.
@@ -251,7 +254,9 @@ Timeouts are attempt-level limits.
 
 If an attempt exceeds its timeout, Durlo records a timeout failure and applies retry policy.
 
-Timeouts are cooperative where possible. Durlo cannot safely terminate all arbitrary JavaScript in-process without runtime support.
+At the limit, Durlo aborts the attempt signal with the exported `AttemptTimeoutError`, persists a timed-out attempt, and applies the retry policy. Durlo does not wait for arbitrary JavaScript to terminate before releasing the execution slot or scheduling a retry.
+
+Timeouts are cooperative. Durlo cannot safely terminate arbitrary JavaScript in-process. Code that ignores the signal may finish late, but that late return cannot write run completion through the concluded attempt. External side effects can still happen late and must be idempotent.
 
 Timeout failure consumes an attempt and follows the same retry/exhaustion rules as thrown errors.
 

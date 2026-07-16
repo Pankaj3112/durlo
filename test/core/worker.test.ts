@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { Durlo, LostLeaseError } from "@durlo/core";
+import { AttemptTimeoutError, Durlo, LostLeaseError } from "@durlo/core";
 import type { ClaimedRun, DurloAdapter, TaskContext, TransactionalDurloAdapter } from "@durlo/core";
 
 function createWorkerAdapter(): DurloAdapter {
@@ -433,7 +433,7 @@ describe("worker heartbeats", () => {
 });
 
 describe("worker logging", () => {
-  it("emits structured run transition records without requiring a logger", async () => {
+  it("emits structured run transition records when a logger is configured", async () => {
     const adapter = createWorkerAdapter();
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const durlo = new Durlo({ id: "worker-tests", adapter, logger });
@@ -455,5 +455,68 @@ describe("worker logging", () => {
       "run.completed",
       expect.objectContaining({ runId: "run-1", kind: "task" })
     );
+  });
+});
+
+describe("worker timeouts", () => {
+  it("records a cooperative timeout and ignores a late user-code completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createWorkerAdapter();
+      let finishExecution!: (value: string) => void;
+      let markStarted!: () => void;
+      let signal: AbortSignal | undefined;
+      const execution = new Promise<string>((resolve) => {
+        finishExecution = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const durlo = new Durlo({ id: "worker-tests", adapter });
+      const task = durlo.task({
+        id: "timeout-task",
+        retry: { attempts: 1 },
+        run: async (_input: unknown, context) => {
+          signal = context.signal;
+          markStarted();
+          return execution;
+        }
+      });
+      const claim = claimedTask(task.id);
+      claim.maxAttempts = 1;
+      claim.options = {
+        retry: { attempts: 1, backoff: { type: "fixed", delay: 0, jitter: 0 } },
+        timeout: 5
+      };
+      adapter.claimRuns = vi.fn(async () => [claim]);
+
+      const run = durlo
+        .worker({ tasks: [task], workerId: "timeout-worker", leaseDuration: 30 })
+        .runOnce();
+      await started;
+      await vi.advanceTimersByTimeAsync(5);
+      await expect(run).resolves.toBe(1);
+
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBeInstanceOf(AttemptTimeoutError);
+      expect(signal?.reason).toMatchObject({
+        name: "AttemptTimeoutError",
+        message: "attempt timed out after 5ms"
+      });
+      expect(adapter.failRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-1",
+          attemptStatus: "timed_out",
+          outcome: { status: "dead_letter" }
+        })
+      );
+
+      finishExecution("late result");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(adapter.completeRun).not.toHaveBeenCalled();
+      expect(adapter.failRun).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

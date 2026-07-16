@@ -102,7 +102,7 @@ workflow completes, fails, retries, or sleeps
 
 Durlo does not reconstruct local variables from an event history. Workflow code re-enters after retry, crash recovery, or sleep. Durable branching must depend on input or stored step results.
 
-V1 workflows are intended to use sequential steps. Parallel step execution is not a v1 guarantee.
+V1 workflows require sequential step and sleep calls. A step boundary is reserved before its first storage read, so nested or concurrent `step.*` calls fail with a validation error instead of racing durable state.
 
 ## Sleep And Resume
 
@@ -171,7 +171,7 @@ Cancellation prevents future Durlo state transitions and invalidates a running l
 
 Public run reads and controls always pass both the owning app id and run id to storage. A run id from another app is treated as missing, including for cancellation and manual retry.
 
-Attempt timeouts use the same cooperative model. External effects must remain idempotent because timed-out or lease-lost code may finish late.
+Attempt timeouts use the same cooperative model. The signal reason is the exported `AttemptTimeoutError`. A running cancellation is detected by the worker's next failed lease renewal, so its signal reason is `LostLeaseError`. External effects must remain idempotent because timed-out or lease-lost code may finish late.
 
 ## Source Of Truth
 
