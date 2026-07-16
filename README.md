@@ -18,10 +18,11 @@ Start here:
 - [Architecture](docs/ARCHITECTURE.md)
 - [Execution semantics](docs/EXECUTION_SEMANTICS.md)
 - [Decisions and edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
+- [Deployment compatibility](docs/DEPLOYMENT_COMPATIBILITY.md)
 
 ## Current Status
 
-The execution foundation and Phase 1 hardening are implemented: core APIs, Postgres persistence, continuously replenished lease-safe workers, transient database recovery, task retries, sequential workflow checkpoints, durable timers, app-scoped controls, cooperative cancellation and timeouts, worker health, and structured logging. Deployment and storage safety are next, followed by observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
+The execution foundation and Phase 1 hardening are implemented. Phase 2 is in progress: runs now persist task/workflow compatibility versions, workers claim exact versions, missing matches have bounded diagnostics, and the initial-schema upgrade path is tested. Payload limits, retention, query benchmarks, and operational sizing guidance remain before observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
 
 Run the complete suite with a disposable local PostgreSQL 17 container:
 

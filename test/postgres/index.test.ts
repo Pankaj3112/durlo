@@ -38,6 +38,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       appId: "integration",
       kind: "task",
       resourceId: "email",
+      resourceVersion: "1",
       status: "pending",
       input: { email: "test@example.com" },
       maxAttempts: 5,
@@ -45,6 +46,59 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       attemptCount: 0
     });
     expect(record?.scheduledAt.toISOString()).toBe("2030-01-01T00:00:00.000Z");
+  });
+
+  it("resumes a sleeping workflow only on its exact compatible version", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const oldWorkflow = durlo.workflow({
+      id: "versioned-workflow",
+      version: "1",
+      run: async ({ step }) => {
+        await step.sleep("deployment-boundary", "1d");
+        return "completed by version 1";
+      }
+    });
+    const newWorkflow = durlo.workflow({
+      id: "versioned-workflow",
+      version: "2",
+      run: async () => {
+        throw new Error("version 2 must not execute a version 1 run");
+      }
+    });
+    const handle = await oldWorkflow.start({});
+    const oldWorker = durlo.worker({ workflows: [oldWorkflow], workerId: "version-1-worker" });
+    const newWorker = durlo.worker({ workflows: [newWorkflow], workerId: "version-2-worker" });
+
+    expect(await oldWorker.runOnce()).toBe(1);
+    expect(await newWorker.getCompatibilityReport()).toMatchObject({
+      unavailableRuns: [
+        {
+          id: handle.id,
+          status: "sleeping",
+          resourceVersion: "1",
+          reason: "incompatible_version"
+        }
+      ]
+    });
+
+    await adapter.pool.query(
+      "update durlo_timers set fire_at = now() - interval '1 second' where run_id = $1",
+      [handle.id]
+    );
+    expect(await newWorker.runOnce()).toBe(0);
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "pending",
+      resourceVersion: "1",
+      attemptCount: 1
+    });
+
+    expect(await oldWorker.runOnce()).toBe(1);
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "completed",
+      output: "completed by version 1",
+      resourceVersion: "1",
+      attemptCount: 2
+    });
   });
 
   it("prevents cross-app reads, cancellation, and manual retry", async () => {
@@ -75,14 +129,17 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
 
   it("deduplicates run creation for the full row lifetime", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
-    const task = durlo.task({ id: "email", run: async () => undefined });
+    const task = durlo.task({ id: "email", version: "1", run: async () => undefined });
+    const nextTask = durlo.task({ id: "email", version: "2", run: async () => undefined });
 
     const first = await task.enqueue({ value: 1 }, { idempotencyKey: "business-key" });
-    const duplicate = await task.enqueue({ value: 2 }, { idempotencyKey: "business-key" });
+    const duplicate = await nextTask.enqueue({ value: 2 }, { idempotencyKey: "business-key" });
 
     expect(duplicate.id).toBe(first.id);
-    expect((await adapter.getRun({ appId: "integration", runId: first.id }))?.input).toEqual({
-      value: 1
+    expect(duplicate.resourceVersion).toBe("1");
+    expect(await adapter.getRun({ appId: "integration", runId: first.id })).toMatchObject({
+      input: { value: 1 },
+      resourceVersion: "1"
     });
   });
 

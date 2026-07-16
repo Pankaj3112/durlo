@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { postgresAdapter } from "@durlo/postgres";
+import { migrations, postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
@@ -34,7 +34,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
          from ${quoteIdentifier(schema)}.durlo_schema_migrations
          group by version order by version`
       );
-      expect(versions.rows).toEqual([{ version: "0001_initial", count: "1" }]);
+      expect(versions.rows).toEqual([
+        { version: "0001_initial", count: "1" },
+        { version: "0002_resource_versions", count: "1" }
+      ]);
 
       const tables = await admin.pool.query<{ count: string }>(
         `select count(*)::text as count from information_schema.tables
@@ -44,6 +47,44 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       expect(tables.rows[0]?.count).toBe("5");
     } finally {
       await Promise.all(adapters.map((adapter) => adapter.close()));
+    }
+  });
+
+  it("upgrades a 0001 schema without changing existing run compatibility", async () => {
+    const schema = await createSchema();
+    const adapter = schemaAdapter(schema);
+    try {
+      await adapter.pool.query(migrations[0]!.sql);
+      await adapter.pool.query(`
+        create table durlo_schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
+      await adapter.pool.query(
+        "insert into durlo_schema_migrations (version) values ('0001_initial')"
+      );
+      await adapter.pool.query(`
+        insert into durlo_runs (
+          id, app_id, kind, resource_id, status, input_json, options_json
+        ) values ('legacy-run', 'legacy-app', 'workflow', 'legacy-workflow', 'pending', '{}', '{}')
+      `);
+
+      await adapter.migrate();
+
+      const run = await adapter.pool.query<{ resource_version: string }>(
+        "select resource_version from durlo_runs where id = 'legacy-run'"
+      );
+      expect(run.rows).toEqual([{ resource_version: "1" }]);
+      const versions = await adapter.pool.query<{ version: string }>(
+        "select version from durlo_schema_migrations order by version"
+      );
+      expect(versions.rows).toEqual([
+        { version: "0001_initial" },
+        { version: "0002_resource_versions" }
+      ]);
+    } finally {
+      await adapter.close();
     }
   });
 
@@ -65,7 +106,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("1");
+      expect(applied.rows[0]?.count).toBe("2");
     } finally {
       await adapter.close();
     }

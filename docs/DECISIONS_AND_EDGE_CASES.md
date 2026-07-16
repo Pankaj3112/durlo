@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
 Status: Current
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 Purpose: record product and architecture decisions that came out of auditing the docs against Trigger.dev, Inngest, BullMQ, and Temporal. This file is the implementation risk register for v1.
 
@@ -286,9 +286,24 @@ Dates and Errors need explicit serializer behavior. Values read from storage are
 
 ### Resource Registration
 
-Workers claim only resource ids they registered at startup.
+Workers claim only resource kinds, ids, and compatibility versions they registered at startup.
 
 If storage has a task/workflow id that the worker does not know, the worker skips it. This allows multiple worker processes to own different subsets of work.
+
+### Resource Compatibility Versions
+
+Decision:
+
+- every task and workflow definition has an opaque version, defaulting to `"1"`
+- run creation persists that version
+- workers claim only exact kind, resource-id, and resource-version matches
+- retries, sleeps, lease recovery, and manual retry keep the original version
+- compatible code changes keep a version; breaking changes use a new version
+- a version bump does not change idempotency scope or reset an existing idempotency key
+
+Missing matches remain non-terminal. `worker.getCompatibilityReport()` diagnoses them relative to one worker without mutating their state. Operators must consider the registrations of the complete worker fleet before declaring code globally unavailable.
+
+The rollout and compatibility criteria are defined in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 
 ## Operational Edge Cases
 

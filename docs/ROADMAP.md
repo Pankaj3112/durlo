@@ -1,7 +1,7 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 This is the canonical forward-looking plan for Durlo. It targets a strong TypeScript and Postgres alternative for direct tasks and workflows; it does not target feature parity with Inngest or Temporal.
 
@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phase 1 execution hardening is complete. The project is moving into deployment and storage safety work before observability and product UI.
+Phase 1 execution hardening is complete. Phase 2 deployment and storage safety is in progress before observability and product UI.
 
 ## Phase 1: Execution Hardening
 
@@ -76,7 +76,15 @@ Status: Complete
 
 ## Phase 2: Deployment And Storage Safety
 
-Status: Next
+Status: In Progress
+
+### Progress
+
+- Task and workflow definitions now carry an opaque compatibility version, defaulting to `"1"`.
+- Runs persist their resource version and workers claim only exact kind, resource-id, and version matches.
+- `worker.getCompatibilityReport()` provides a bounded, read-only view of active runs unavailable to that worker's registrations.
+- The rolling-deployment, rollback, workflow-compatibility, and idempotency interaction policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
+- Additive migration `0002_resource_versions` preserves `0001_initial` and has a tested upgrade path that backfills existing runs to version `"1"`.
 
 ### Outcomes
 

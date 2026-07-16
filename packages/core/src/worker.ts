@@ -9,13 +9,14 @@ import { calculateRetryDelay } from "./retry.js";
 import { deserialize, serialize, serializeError } from "./serialization.js";
 import { createStepTools } from "./steps.js";
 import type {
-  ClaimRunsInput,
   ClaimedRun,
   DurloAdapter,
   Logger,
   NormalizedRetryPolicy,
+  RegisteredResource,
   RegisteredTaskDefinition,
   RegisteredWorkflowDefinition,
+  WorkerCompatibilityReport,
   WorkerHealth,
   WorkerOptions
 } from "./types.js";
@@ -24,6 +25,10 @@ import { parseDuration } from "./validation.js";
 const OPERATIONAL_BACKOFF_INITIAL = 100;
 const OPERATIONAL_BACKOFF_MAX = 30_000;
 const OPERATIONAL_BACKOFF_JITTER = 0.2;
+
+function resourceKey(resourceId: string, resourceVersion?: string): string {
+  return `${resourceId}\u0000${resourceVersion ?? "1"}`;
+}
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
@@ -88,15 +93,22 @@ export class Worker {
     if (this.leaseDuration <= 0)
       throw new ValidationError("lease duration must be greater than zero");
     for (const task of options.tasks ?? []) {
-      if (this.tasks.has(task.id))
-        throw new ValidationError(`task '${task.id}' is registered more than once`);
-      this.tasks.set(task.id, task);
+      const key = resourceKey(task.id, task.version);
+      if (this.tasks.has(key)) {
+        throw new ValidationError(
+          `task '${task.id}' version '${task.version}' is registered more than once`
+        );
+      }
+      this.tasks.set(key, task);
     }
     for (const workflow of options.workflows ?? []) {
-      if (this.workflows.has(workflow.id)) {
-        throw new ValidationError(`workflow '${workflow.id}' is registered more than once`);
+      const key = resourceKey(workflow.id, workflow.version);
+      if (this.workflows.has(key)) {
+        throw new ValidationError(
+          `workflow '${workflow.id}' version '${workflow.version}' is registered more than once`
+        );
       }
-      this.workflows.set(workflow.id, workflow);
+      this.workflows.set(key, workflow);
     }
   }
 
@@ -149,6 +161,29 @@ export class Worker {
     };
   }
 
+  async getCompatibilityReport(
+    options: { limit?: number } = {}
+  ): Promise<WorkerCompatibilityReport> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new ValidationError("compatibility report limit must be an integer from 1 to 1000");
+    }
+    const registeredResources = this.resources();
+    const unavailableRuns = await this.adapter.findUnavailableRuns({
+      appId: this.appId,
+      resources: registeredResources,
+      limit: limit + 1
+    });
+    return {
+      workerId: this.id,
+      appId: this.appId,
+      checkedAt: new Date(),
+      registeredResources,
+      unavailableRuns: unavailableRuns.slice(0, limit),
+      truncated: unavailableRuns.length > limit
+    };
+  }
+
   async runOnce(): Promise<number> {
     await this.adapter.fireDueTimers({ appId: this.appId, limit: this.concurrency });
     const runs = await this.adapter.claimRuns({
@@ -156,13 +191,7 @@ export class Worker {
       workerId: this.id,
       limit: this.concurrency,
       leaseDuration: this.leaseDuration,
-      resources: [
-        ...[...this.tasks.keys()].map((resourceId) => ({ kind: "task" as const, resourceId })),
-        ...[...this.workflows.keys()].map((resourceId) => ({
-          kind: "workflow" as const,
-          resourceId
-        }))
-      ]
+      resources: this.resources()
     });
     await Promise.all(runs.map((run) => this.executeRun(run)));
     return runs.length;
@@ -277,24 +306,45 @@ export class Worker {
     this.activeRuns.add(tracked);
   }
 
-  private resources(): ClaimRunsInput["resources"] {
+  private resources(): Array<Required<RegisteredResource>> {
     return [
-      ...[...this.tasks.keys()].map((resourceId) => ({ kind: "task" as const, resourceId })),
-      ...[...this.workflows.keys()].map((resourceId) => ({
+      ...[...this.tasks.values()].map(({ id: resourceId, version: resourceVersion }) => ({
+        kind: "task" as const,
+        resourceId,
+        resourceVersion
+      })),
+      ...[...this.workflows.values()].map(({ id: resourceId, version: resourceVersion }) => ({
         kind: "workflow" as const,
-        resourceId
+        resourceId,
+        resourceVersion
       }))
     ];
   }
 
   private async executeRun(run: ClaimedRun): Promise<void> {
-    const task = run.kind === "task" ? this.tasks.get(run.resourceId) : undefined;
-    const workflow = run.kind === "workflow" ? this.workflows.get(run.resourceId) : undefined;
-    if (!task && !workflow) return;
+    const key = resourceKey(run.resourceId, run.resourceVersion);
+    const task = run.kind === "task" ? this.tasks.get(key) : undefined;
+    const workflow = run.kind === "workflow" ? this.workflows.get(key) : undefined;
+    if (!task && !workflow) {
+      const released = await this.adapter.releaseRun({
+        runId: run.id,
+        workerId: this.id,
+        leaseToken: run.leaseToken
+      });
+      this.log("error", "run.incompatible_claim", {
+        runId: run.id,
+        kind: run.kind,
+        resourceId: run.resourceId,
+        resourceVersion: run.resourceVersion,
+        released
+      });
+      return;
+    }
     this.log("debug", "run.started", {
       runId: run.id,
       kind: run.kind,
       resourceId: run.resourceId,
+      resourceVersion: run.resourceVersion,
       attempt: run.attemptCount
     });
     const abortController = new AbortController();
@@ -318,7 +368,12 @@ export class Worker {
       const definition = task ?? workflow!;
       const input = await definition._durlo.validate(deserialize(run.input));
       const context = {
-        run: { id: run.id, kind: run.kind, resourceId: run.resourceId },
+        run: {
+          id: run.id,
+          kind: run.kind,
+          resourceId: run.resourceId,
+          resourceVersion: run.resourceVersion
+        },
         attempt: { number: run.attemptCount, maxAttempts: run.maxAttempts },
         signal: abortController.signal
       };
@@ -345,7 +400,8 @@ export class Worker {
       this.log("info", "run.completed", {
         runId: run.id,
         kind: run.kind,
-        resourceId: run.resourceId
+        resourceId: run.resourceId,
+        resourceVersion: run.resourceVersion
       });
     } catch (error) {
       await stopHeartbeat();

@@ -7,6 +7,7 @@ import type {
   FailRunInput,
   JsonValue,
   OwnedRunInput,
+  RegisteredResource,
   RunKind,
   RunRecord,
   RunStatus,
@@ -16,7 +17,8 @@ import type {
   StepStatus,
   TimerRecord,
   TimerStatus,
-  TransactionalDurloAdapter
+  TransactionalDurloAdapter,
+  UnavailableRun
 } from "@durlo/core";
 import { LostLeaseError, RunStateError } from "@durlo/core";
 import { randomUUID } from "node:crypto";
@@ -33,6 +35,7 @@ type RunRow = QueryResultRow & {
   app_id: string;
   kind: RunKind;
   resource_id: string;
+  resource_version: string;
   status: RunStatus;
   input_json: JsonValue;
   output_json: JsonValue | null;
@@ -92,6 +95,7 @@ function mapRun(row: RunRow): RunRecord {
     appId: row.app_id,
     kind: row.kind,
     resourceId: row.resource_id,
+    resourceVersion: row.resource_version,
     status: row.status,
     input: row.input_json,
     output: row.output_json,
@@ -146,7 +150,7 @@ function mapTimer(row: TimerRow): TimerRecord {
 }
 
 const RUN_COLUMNS = `
-  id, app_id, kind, resource_id, status, input_json, output_json, error_json, options_json,
+  id, app_id, kind, resource_id, resource_version, status, input_json, output_json, error_json, options_json,
   idempotency_key, priority, scheduled_at, attempt_count, max_attempts, locked_by,
   lease_token, locked_until, stalled_count, created_at, updated_at, started_at,
   completed_at, cancelled_at
@@ -247,7 +251,9 @@ export class PostgresAdapter implements DurloAdapter {
 
   async claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]> {
     if (input.resources.length === 0 || input.limit <= 0) return [];
-    const resources = input.resources.map(({ kind, resourceId }) => `${kind}:${resourceId}`);
+    const resourceKinds = input.resources.map(({ kind }) => kind);
+    const resourceIds = input.resources.map(({ resourceId }) => resourceId);
+    const resourceVersions = input.resources.map(({ resourceVersion }) => resourceVersion ?? "1");
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -256,7 +262,14 @@ export class PostgresAdapter implements DurloAdapter {
           select ${RUN_COLUMNS}
           from durlo_runs
           where app_id = $1
-            and (kind || ':' || resource_id) = any($2::text[])
+            and exists (
+              select 1
+              from unnest($2::text[], $3::text[], $4::text[])
+                as resource(kind, resource_id, resource_version)
+              where resource.kind = durlo_runs.kind
+                and resource.resource_id = durlo_runs.resource_id
+                and resource.resource_version = durlo_runs.resource_version
+            )
             and (
               (status = 'pending' and scheduled_at <= now())
               or (status = 'running' and locked_until < now())
@@ -267,9 +280,9 @@ export class PostgresAdapter implements DurloAdapter {
             scheduled_at asc,
             created_at asc
           for update skip locked
-          limit $3
+          limit $5
         `,
-        [input.appId, resources, input.limit]
+        [input.appId, resourceKinds, resourceIds, resourceVersions, input.limit]
       );
       const claimed: ClaimedRun[] = [];
       for (const candidate of candidates.rows) {
@@ -367,6 +380,60 @@ export class PostgresAdapter implements DurloAdapter {
     } finally {
       client.release();
     }
+  }
+
+  async findUnavailableRuns(input: {
+    appId: string;
+    resources: RegisteredResource[];
+    limit: number;
+  }): Promise<UnavailableRun[]> {
+    if (input.limit <= 0) return [];
+    const resourceKinds = input.resources.map(({ kind }) => kind);
+    const resourceIds = input.resources.map(({ resourceId }) => resourceId);
+    const resourceVersions = input.resources.map(({ resourceVersion }) => resourceVersion ?? "1");
+    const result = await this.query()<RunRow>(
+      `
+        select ${RUN_COLUMNS}
+        from durlo_runs
+        where app_id = $1
+          and (
+            status in ('pending', 'sleeping')
+            or (status = 'running' and locked_until < now())
+          )
+          and not exists (
+            select 1
+            from unnest($2::text[], $3::text[], $4::text[])
+              as resource(kind, resource_id, resource_version)
+            where resource.kind = durlo_runs.kind
+              and resource.resource_id = durlo_runs.resource_id
+              and resource.resource_version = durlo_runs.resource_version
+          )
+        order by
+          case status when 'running' then 0 when 'pending' then 1 else 2 end,
+          scheduled_at,
+          created_at
+        limit $5
+      `,
+      [input.appId, resourceKinds, resourceIds, resourceVersions, input.limit]
+    );
+    const registeredIds = new Set(
+      input.resources.map(({ kind, resourceId }) => `${kind}\u0000${resourceId}`)
+    );
+    return result.rows.map((row) => {
+      const run = mapRun(row);
+      return {
+        id: run.id,
+        kind: run.kind,
+        resourceId: run.resourceId,
+        resourceVersion: run.resourceVersion,
+        status: run.status,
+        scheduledAt: run.scheduledAt,
+        createdAt: run.createdAt,
+        reason: registeredIds.has(`${run.kind}\u0000${run.resourceId}`)
+          ? "incompatible_version"
+          : "unregistered_resource"
+      };
+    });
   }
 
   async extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean> {
@@ -808,9 +875,9 @@ export class PostgresAdapter implements DurloAdapter {
     const result = await query<RunRow>(
       `
         insert into durlo_runs (
-          id, app_id, kind, resource_id, status, input_json, options_json, idempotency_key,
-          priority, scheduled_at, max_attempts
-        ) values ($1, $2, $3, $4, 'pending', $5::jsonb, $6::jsonb, $7, $8, $9, $10)
+          id, app_id, kind, resource_id, resource_version, status, input_json, options_json,
+          idempotency_key, priority, scheduled_at, max_attempts
+        ) values ($1, $2, $3, $4, $5, 'pending', $6::jsonb, $7::jsonb, $8, $9, $10, $11)
         on conflict (app_id, kind, resource_id, idempotency_key)
           where idempotency_key is not null
         do update set id = durlo_runs.id
@@ -821,6 +888,7 @@ export class PostgresAdapter implements DurloAdapter {
         input.appId,
         input.kind,
         input.resourceId,
+        input.resourceVersion,
         JSON.stringify(input.input),
         JSON.stringify(input.options),
         input.idempotencyKey,

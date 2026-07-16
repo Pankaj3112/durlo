@@ -16,6 +16,7 @@ function createWorkerAdapter(): DurloAdapter {
     cancelRun: unsupported,
     retryRun: unsupported,
     claimRuns: vi.fn(async () => []),
+    findUnavailableRuns: vi.fn(async () => []),
     extendRunLease: vi.fn(async () => true),
     completeRun: vi.fn(async () => undefined),
     failRun: vi.fn(async () => undefined),
@@ -38,6 +39,7 @@ function claimedTask(resourceId: string, id = "run-1"): ClaimedRun {
     appId: "worker-tests",
     kind: "task",
     resourceId,
+    resourceVersion: "1",
     status: "running",
     input: {},
     output: null,
@@ -114,6 +116,83 @@ describe("worker lifecycle", () => {
     expect(() => durlo.worker({ tasks: [task, task] })).toThrow("registered more than once");
     expect(() => durlo.worker({ workflows: [workflow, workflow] })).toThrow(
       "registered more than once"
+    );
+  });
+
+  it("reports active runs that do not match this worker's registered versions", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "versioned-task",
+      version: "2",
+      run: async () => undefined
+    });
+    const unavailable = {
+      id: "old-run",
+      kind: "task" as const,
+      resourceId: task.id,
+      resourceVersion: "1",
+      status: "pending" as const,
+      scheduledAt: new Date(),
+      createdAt: new Date(),
+      reason: "incompatible_version" as const
+    };
+    adapter.findUnavailableRuns = vi.fn(async () => [unavailable]);
+    const worker = durlo.worker({ tasks: [task], workerId: "version-2-worker" });
+
+    await expect(worker.getCompatibilityReport({ limit: 10 })).resolves.toMatchObject({
+      workerId: "version-2-worker",
+      appId: "worker-tests",
+      registeredResources: [{ kind: "task", resourceId: "versioned-task", resourceVersion: "2" }],
+      unavailableRuns: [unavailable],
+      truncated: false
+    });
+    expect(adapter.findUnavailableRuns).toHaveBeenCalledWith({
+      appId: "worker-tests",
+      resources: [{ kind: "task", resourceId: "versioned-task", resourceVersion: "2" }],
+      limit: 11
+    });
+    adapter.findUnavailableRuns = vi.fn(async () => [
+      unavailable,
+      { ...unavailable, id: "another-old-run" }
+    ]);
+    await expect(worker.getCompatibilityReport({ limit: 1 })).resolves.toMatchObject({
+      unavailableRuns: [{ id: "old-run" }],
+      truncated: true
+    });
+    await expect(worker.getCompatibilityReport({ limit: 0 })).rejects.toThrow(
+      "compatibility report limit"
+    );
+  });
+
+  it("dispatches definitions by exact resource version", async () => {
+    const adapter = createWorkerAdapter();
+    const executions: string[] = [];
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const v1 = durlo.task({
+      id: "same-task",
+      version: "1",
+      run: async () => executions.push("1")
+    });
+    const v2 = durlo.task({
+      id: "same-task",
+      version: "2",
+      run: async () => executions.push("2")
+    });
+    const claim = claimedTask("same-task");
+    claim.resourceVersion = "2";
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await durlo.worker({ tasks: [v1, v2], workerId: "worker-1" }).runOnce();
+
+    expect(executions).toEqual(["2"]);
+    expect(adapter.claimRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resources: [
+          { kind: "task", resourceId: "same-task", resourceVersion: "1" },
+          { kind: "task", resourceId: "same-task", resourceVersion: "2" }
+        ]
+      })
     );
   });
 

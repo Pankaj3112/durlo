@@ -1,7 +1,7 @@
 # Durlo Execution Semantics
 
 Status: Current
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 Answers: **What guarantees do the public calls provide?**
 
@@ -22,6 +22,7 @@ The v1 guarantee model:
 - Transactions can commit business rows and Durlo runs together.
 - Expired running leases are reclaimed or terminally failed; they must not remain stranded forever.
 - Stale workers cannot complete or fail a run after losing the current lease token.
+- Workers execute only runs whose stored resource version exactly matches registered code.
 
 ## Run Creation
 
@@ -115,6 +116,14 @@ Workflow code may be re-entered after worker crash, retry, or sleep resume. Dura
 Top-level workflow code outside `step.run(...)` can run more than once.
 
 Durlo does not replay workflow history like Temporal. It re-enters the workflow function and uses stored step/timer records to skip completed durable boundaries. Workflow code should therefore be deterministic with respect to the original input and persisted step results.
+
+## Deployment Compatibility
+
+Task and workflow definitions have an opaque `version`, defaulting to `"1"`. Run creation persists that version. Claiming requires an exact match across resource kind, resource id, and resource version.
+
+Retries, delays, lease recovery, manual retries, and workflow sleep/resume do not change the stored version. A code change may retain a version only if it remains compatible with all active runs under that version. Breaking changes require a new version and continued worker availability for older active versions.
+
+`worker.getCompatibilityReport()` is a bounded, read-only diagnostic relative to that worker's registrations. It does not prove that code is unavailable across a fleet of specialized workers. See [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md) for the rollout, rollback, workflow checkpoint, and idempotency policy.
 
 Unsafe examples:
 

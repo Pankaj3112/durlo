@@ -1,7 +1,7 @@
 # Durlo Architecture
 
 Status: Current
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 This document explains how Durlo is built today. Public guarantees belong in [EXECUTION_SEMANTICS.md](EXECUTION_SEMANTICS.md), product decisions belong in [DECISIONS_AND_EDGE_CASES.md](DECISIONS_AND_EDGE_CASES.md), and future work belongs in [ROADMAP.md](ROADMAP.md).
 
@@ -55,11 +55,11 @@ The application and worker may be separate processes. Multiple worker processes 
 
 ### Definition
 
-A task or workflow definition is TypeScript code registered under a stable resource id.
+A task or workflow definition is TypeScript code registered under a stable resource id and an opaque compatibility version. The default version is `"1"`.
 
 ### Run
 
-A run is a durable task or workflow instance stored in `durlo_runs`. The run row is both the scheduling record and the current state summary.
+A run is a durable task or workflow instance stored in `durlo_runs`. The run row is both the scheduling record and the current state summary. It retains the resource version selected at creation for its entire lifetime.
 
 ### Worker
 
@@ -87,7 +87,7 @@ worker persists completion or failure
 failure schedules retry or moves the task to dead_letter
 ```
 
-User code is never executed inside an open Durlo database transaction.
+User code is never executed inside an open Durlo database transaction. A worker claims a task only when its registered kind, resource id, and resource version exactly match the run.
 
 ## Workflow Execution
 
@@ -100,7 +100,7 @@ new step callbacks execute and checkpoint results
 workflow completes, fails, retries, or sleeps
 ```
 
-Durlo does not reconstruct local variables from an event history. Workflow code re-enters after retry, crash recovery, or sleep. Durable branching must depend on input or stored step results.
+Durlo does not reconstruct local variables from an event history. Workflow code re-enters after retry, crash recovery, or sleep. Durable branching must depend on input or stored step results. Sleep and resume preserve the run's resource version, so incompatible deployments cannot claim it accidentally.
 
 V1 workflows require sequential step and sleep calls. A step boundary is reserved before its first storage read, so nested or concurrent `step.*` calls fail with a validation error instead of racing durable state.
 
@@ -142,6 +142,8 @@ The schema is defined by `packages/postgres/src/migrations.ts` and currently con
 Postgres `now()` decides eligibility, lease expiry, and timer due checks. Partial indexes support pending runs, expired leases, resource lookup, and due timers.
 
 The same run table currently holds active queue state and retained history. Retention and payload limits are roadmap work before production release.
+
+`worker.getCompatibilityReport()` performs a bounded read for pending, sleeping, and expired-running work that does not match that worker's registrations. The report is worker-relative and does not mutate run state. The complete policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
 
 ## Transaction Boundary
 

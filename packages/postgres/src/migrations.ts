@@ -96,5 +96,19 @@ export const migrations: readonly Migration[] = [
       create index durlo_attempts_run_idx on durlo_attempts (run_id, started_at);
       create index durlo_attempts_step_idx on durlo_attempts (run_id, step_id, started_at) where step_id is not null;
     `
+  },
+  {
+    version: "0002_resource_versions",
+    sql: `
+      alter table durlo_runs
+        add column resource_version text not null default '1';
+      alter table durlo_runs
+        add constraint durlo_runs_resource_version_check
+        check (char_length(resource_version) >= 1 and char_length(resource_version) <= 128 and resource_version = btrim(resource_version));
+
+      drop index durlo_runs_resource_idx;
+      create index durlo_runs_resource_idx
+        on durlo_runs (app_id, kind, resource_id, resource_version, status, scheduled_at);
+    `
   }
 ];

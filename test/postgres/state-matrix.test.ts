@@ -13,6 +13,7 @@ function createRunInput(overrides: Partial<CreateRunInput> = {}): CreateRunInput
     appId: "matrix-tests",
     kind: "task",
     resourceId: "atomic-batch",
+    resourceVersion: "1",
     input: {},
     options: {
       retry: { attempts: 3, backoff: { type: "fixed", delay: 0, jitter: 0 } }
@@ -48,7 +49,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const low = await registered.enqueue({ name: "low" }, { priority: -10 });
     const high = await registered.enqueue({ name: "high" }, { priority: 50 });
     const future = await registered.enqueue({ name: "future" }, { runAt: "2030-01-01" });
-    await unregistered.enqueue({ name: "wrong-resource" }, { priority: 100 });
+    const unavailable = await unregistered.enqueue({ name: "wrong-resource" }, { priority: 100 });
     const otherApp = new Durlo({ id: "other-app", adapter }).task({
       id: "registered",
       run: async () => undefined
@@ -56,6 +57,16 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     await otherApp.enqueue({ name: "wrong-app" }, { priority: 100 });
 
     const resources = [{ kind: "task" as const, resourceId: registered.id }];
+    await expect(
+      adapter.findUnavailableRuns({ appId: "matrix-tests", resources, limit: 10 })
+    ).resolves.toMatchObject([
+      {
+        id: unavailable.id,
+        resourceId: "unregistered",
+        resourceVersion: "1",
+        reason: "unregistered_resource"
+      }
+    ]);
     expect(
       await adapter.claimRuns({
         appId: "matrix-tests",

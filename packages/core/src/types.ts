@@ -59,6 +59,7 @@ export type RunRecord = {
   appId: string;
   kind: RunKind;
   resourceId: string;
+  resourceVersion: string;
   status: RunStatus;
   input: JsonValue;
   output: JsonValue | null;
@@ -82,7 +83,7 @@ export type RunRecord = {
 
 export type RunHandle<TOutput = unknown> = Pick<
   RunRecord,
-  "id" | "kind" | "resourceId" | "status" | "createdAt"
+  "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
 
 export type ClaimedRun = RunRecord & {
@@ -98,7 +99,31 @@ export type ClaimRunsInput = {
   workerId: string;
   limit: number;
   leaseDuration: number;
-  resources: Array<{ kind: RunKind; resourceId: string }>;
+  resources: RegisteredResource[];
+};
+
+export type RegisteredResource = {
+  kind: RunKind;
+  resourceId: string;
+  resourceVersion?: string;
+};
+
+export type UnavailableRunReason = "unregistered_resource" | "incompatible_version";
+
+export type UnavailableRun = Pick<
+  RunRecord,
+  "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "scheduledAt" | "createdAt"
+> & {
+  reason: UnavailableRunReason;
+};
+
+export type WorkerCompatibilityReport = {
+  workerId: string;
+  appId: string;
+  checkedAt: Date;
+  registeredResources: Array<Required<RegisteredResource>>;
+  unavailableRuns: UnavailableRun[];
+  truncated: boolean;
 };
 
 export type OwnedRunInput = {
@@ -156,6 +181,7 @@ export type CreateRunInput = {
   appId: string;
   kind: RunKind;
   resourceId: string;
+  resourceVersion: string;
   input: JsonValue;
   options: JsonValue;
   idempotencyKey: string | null;
@@ -174,6 +200,11 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   cancelRun(input: AppRunInput): Promise<RunRecord>;
   retryRun(input: AppRunInput): Promise<RunRecord>;
   claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]>;
+  findUnavailableRuns(input: {
+    appId: string;
+    resources: RegisteredResource[];
+    limit: number;
+  }): Promise<UnavailableRun[]>;
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
   completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
@@ -209,6 +240,7 @@ export type RunContext = {
   id: string;
   kind: RunKind;
   resourceId: string;
+  resourceVersion: string;
 };
 
 export type AttemptContext = {
@@ -238,6 +270,7 @@ export type WorkflowContext<TInput> = {
 
 export type TaskDefinitionOptions<TInput, TOutput> = {
   id: string;
+  version?: string;
   name?: string;
   schema?: StandardSchema<TInput>;
   retry?: RetryPolicy;
@@ -247,6 +280,7 @@ export type TaskDefinitionOptions<TInput, TOutput> = {
 
 export type WorkflowDefinitionOptions<TInput, TOutput> = {
   id: string;
+  version?: string;
   name?: string;
   schema?: StandardSchema<TInput>;
   retry?: RetryPolicy;
@@ -258,6 +292,7 @@ export type BatchItem<TInput> = { input: TInput; options?: RunOptions };
 
 export interface RegisteredTaskDefinition {
   readonly id: string;
+  readonly version: string;
   readonly kind: "task";
   readonly _durlo: {
     validate(input: unknown): Promise<unknown>;
@@ -267,6 +302,7 @@ export interface RegisteredTaskDefinition {
 
 export interface TaskDefinition<TInput, TOutput> extends RegisteredTaskDefinition {
   readonly id: string;
+  readonly version: string;
   readonly name?: string;
   readonly kind: "task";
   readonly options: TaskDefinitionOptions<TInput, TOutput>;
@@ -276,6 +312,7 @@ export interface TaskDefinition<TInput, TOutput> extends RegisteredTaskDefinitio
 
 export interface RegisteredWorkflowDefinition {
   readonly id: string;
+  readonly version: string;
   readonly kind: "workflow";
   readonly _durlo: {
     validate(input: unknown): Promise<unknown>;
@@ -285,6 +322,7 @@ export interface RegisteredWorkflowDefinition {
 
 export interface WorkflowDefinition<TInput, TOutput> extends RegisteredWorkflowDefinition {
   readonly id: string;
+  readonly version: string;
   readonly name?: string;
   readonly kind: "workflow";
   readonly options: WorkflowDefinitionOptions<TInput, TOutput>;

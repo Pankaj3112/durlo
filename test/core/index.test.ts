@@ -62,6 +62,7 @@ function createAdapter(): DurloAdapter & {
       throw new Error("not implemented by test adapter");
     },
     claimRuns: async () => [],
+    findUnavailableRuns: async () => [],
     extendRunLease: async () => false,
     completeRun: async () => undefined,
     failRun: async () => undefined,
@@ -90,6 +91,7 @@ describe("Durlo core API", () => {
     const durlo = new Durlo({ id: "test-app", adapter, defaultRetry: { attempts: 4 } });
     const task = durlo.task<{ email: string }, { sent: boolean }>({
       id: "send-email",
+      version: "2026-07",
       retry: { backoff: { type: "fixed", delay: "5s" } },
       run: async () => ({ sent: true })
     });
@@ -99,9 +101,15 @@ describe("Durlo core API", () => {
       { delay: "10s", attempts: 2, idempotencyKey: "email:1", priority: 10 }
     );
 
-    expect(handle).toMatchObject({ kind: "task", resourceId: "send-email", status: "pending" });
+    expect(handle).toMatchObject({
+      kind: "task",
+      resourceId: "send-email",
+      resourceVersion: "2026-07",
+      status: "pending"
+    });
     expect(adapter.created[0]).toMatchObject({
       appId: "test-app",
+      resourceVersion: "2026-07",
       maxAttempts: 2,
       idempotencyKey: "email:1",
       priority: 10,
@@ -128,6 +136,7 @@ describe("Durlo core API", () => {
     await expect(workflow.start({ userId: "user_1" })).resolves.toMatchObject({ kind: "workflow" });
     await expect(workflow.start({} as { userId: string })).rejects.toThrow("userId is required");
     expect(validate).toHaveBeenCalledTimes(2);
+    expect(workflow.version).toBe("1");
   });
 
   it("atomically prepares batches and rejects duplicate in-batch idempotency keys", async () => {
@@ -175,6 +184,24 @@ describe("Durlo core API", () => {
     await expect(task.enqueue({}, { priority: 1001 })).rejects.toBeInstanceOf(ValidationError);
     await expect(task.enqueue({}, { idempotencyKey: "" })).rejects.toBeInstanceOf(ValidationError);
     expect(adapter.created).toHaveLength(0);
+  });
+
+  it("allows explicit compatibility versions and rejects ambiguous version strings", () => {
+    const adapter = createAdapter();
+    const durlo = new Durlo({ id: "test-app", adapter });
+    const v1 = durlo.task({ id: "versioned", version: "1", run: async () => undefined });
+    const v2 = durlo.task({ id: "versioned", version: "2", run: async () => undefined });
+
+    expect([v1.version, v2.version]).toEqual(["1", "2"]);
+    expect(() =>
+      durlo.task({ id: "empty-version", version: "", run: async () => undefined })
+    ).toThrow(ValidationError);
+    expect(() =>
+      durlo.workflow({ id: "spaced-version", version: " 2", run: async () => undefined })
+    ).toThrow("without surrounding whitespace");
+    expect(() =>
+      durlo.task({ id: "long-version", version: "v".repeat(129), run: async () => undefined })
+    ).toThrow("at most 128");
   });
 
   it("passes the owning app id to every public run control", async () => {

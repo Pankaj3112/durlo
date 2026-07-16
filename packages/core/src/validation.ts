@@ -30,6 +30,17 @@ export function validateId(value: string, label: string): void {
   }
 }
 
+export function normalizeResourceVersion(value: string | undefined, label: string): string {
+  const version = value ?? "1";
+  if (typeof version !== "string" || version.length === 0 || version.trim() !== version) {
+    throw new ValidationError(`${label} must be a non-empty string without surrounding whitespace`);
+  }
+  if (version.length > 128) {
+    throw new ValidationError(`${label} must be at most 128 characters`);
+  }
+  return version;
+}
+
 function validateAttempts(attempts: number): void {
   if (!Number.isInteger(attempts) || attempts < 1 || attempts > 100) {
     throw new ValidationError("attempts must be an integer from 1 to 100");

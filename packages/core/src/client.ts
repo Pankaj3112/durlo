@@ -17,7 +17,13 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionOptions
 } from "./types.js";
-import { parseDuration, validateId, validateRunOptions, validateSchema } from "./validation.js";
+import {
+  normalizeResourceVersion,
+  parseDuration,
+  validateId,
+  validateRunOptions,
+  validateSchema
+} from "./validation.js";
 import { Worker } from "./worker.js";
 import type { WorkerOptions } from "./types.js";
 
@@ -26,6 +32,7 @@ function toHandle<TOutput>(record: RunRecord): RunHandle<TOutput> {
     id: record.id,
     kind: record.kind,
     resourceId: record.resourceId,
+    resourceVersion: record.resourceVersion,
     status: record.status,
     createdAt: record.createdAt
   };
@@ -70,7 +77,8 @@ export class Durlo {
   task<TInput, TOutput = void>(
     options: TaskDefinitionOptions<TInput, TOutput>
   ): TaskDefinition<TInput, TOutput> {
-    this.register("task", options.id);
+    const version = normalizeResourceVersion(options.version, "task version");
+    this.register("task", options.id, version);
     const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
     const definitionTimeout =
       options.timeout === undefined
@@ -81,6 +89,7 @@ export class Durlo {
         adapter,
         "task",
         options.id,
+        version,
         options.schema,
         input,
         runOptions,
@@ -89,6 +98,7 @@ export class Durlo {
       );
     return {
       id: options.id,
+      version,
       ...(options.name === undefined ? {} : { name: options.name }),
       kind: "task",
       options,
@@ -104,6 +114,7 @@ export class Durlo {
             this.prepareRun(
               "task",
               options.id,
+              version,
               options.schema,
               input,
               runOptions,
@@ -125,7 +136,8 @@ export class Durlo {
   workflow<TInput, TOutput = void>(
     options: WorkflowDefinitionOptions<TInput, TOutput>
   ): WorkflowDefinition<TInput, TOutput> {
-    this.register("workflow", options.id);
+    const version = normalizeResourceVersion(options.version, "workflow version");
+    this.register("workflow", options.id, version);
     const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
     const definitionTimeout =
       options.timeout === undefined
@@ -133,6 +145,7 @@ export class Durlo {
         : parseDuration(options.timeout, "workflow timeout");
     return {
       id: options.id,
+      version,
       ...(options.name === undefined ? {} : { name: options.name }),
       kind: "workflow",
       options,
@@ -145,6 +158,7 @@ export class Durlo {
           this.adapter,
           "workflow",
           options.id,
+          version,
           options.schema,
           input,
           runOptions,
@@ -182,6 +196,7 @@ export class Durlo {
           adapter,
           "task",
           task.id,
+          task.version,
           task.options.schema,
           input,
           options,
@@ -199,6 +214,7 @@ export class Durlo {
           adapter,
           "workflow",
           workflow.id,
+          workflow.version,
           workflow.options.schema,
           input,
           options,
@@ -218,7 +234,16 @@ export class Durlo {
         const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
         const prepared = await Promise.all(
           normalized.map(({ input, options }) =>
-            this.prepareRun("task", task.id, task.options.schema, input, options, retry, timeout)
+            this.prepareRun(
+              "task",
+              task.id,
+              task.version,
+              task.options.schema,
+              input,
+              options,
+              retry,
+              timeout
+            )
           )
         );
         const keys = prepared
@@ -235,10 +260,12 @@ export class Durlo {
     return new Worker(this.id, this.adapter, options, this.logger);
   }
 
-  private register(kind: "task" | "workflow", id: string): void {
+  private register(kind: "task" | "workflow", id: string, version: string): void {
     validateId(id, `${kind} id`);
-    const key = `${kind}:${id}`;
-    if (this.resourceKeys.has(key)) throw new Error(`${kind} '${id}' is already defined`);
+    const key = `${kind}\u0000${id}\u0000${version}`;
+    if (this.resourceKeys.has(key)) {
+      throw new Error(`${kind} '${id}' version '${version}' is already defined`);
+    }
     this.resourceKeys.add(key);
   }
 
@@ -246,6 +273,7 @@ export class Durlo {
     adapter: TransactionalDurloAdapter,
     kind: "task" | "workflow",
     resourceId: string,
+    resourceVersion: string,
     schema: TaskDefinitionOptions<TInput, TOutput>["schema"],
     input: TInput,
     options: RunOptions | undefined,
@@ -254,7 +282,16 @@ export class Durlo {
   ): Promise<RunHandle<TOutput>> {
     return toHandle<TOutput>(
       await adapter.createRun(
-        await this.prepareRun(kind, resourceId, schema, input, options, retry, timeout)
+        await this.prepareRun(
+          kind,
+          resourceId,
+          resourceVersion,
+          schema,
+          input,
+          options,
+          retry,
+          timeout
+        )
       )
     );
   }
@@ -262,6 +299,7 @@ export class Durlo {
   private async prepareRun<TInput>(
     kind: "task" | "workflow",
     resourceId: string,
+    resourceVersion: string,
     schema: TaskDefinitionOptions<TInput, unknown>["schema"],
     input: TInput,
     options: RunOptions | undefined,
@@ -295,6 +333,7 @@ export class Durlo {
       appId: this.id,
       kind,
       resourceId,
+      resourceVersion,
       input: serialize(validatedInput),
       options: storedOptions,
       idempotencyKey: runOptions.idempotencyKey ?? null,
