@@ -43,8 +43,8 @@ describe("local dashboard", () => {
 
       const health = await json(`${server.url}/api/health`);
       expect(health.body.appId).toBe("app<unsafe>");
-      expect(health.body.worker.status).toBe("running");
-      expect(health.body.compatibility.unavailableRuns).toEqual([]);
+      expect(health.body.worker?.status).toBe("running");
+      expect(health.body.compatibility?.unavailableRuns).toEqual([]);
     } finally {
       await server.close();
     }
@@ -93,6 +93,60 @@ describe("local dashboard", () => {
       await server.close();
     }
   });
+
+  it("covers default filters, workerless health, retry, error mapping, and server boundaries", async () => {
+    await expect(startDashboard(fakeConfig([]), undefined, { host: " ", port: 0 })).rejects.toThrow(
+      /host/
+    );
+    await expect(startDashboard(fakeConfig([]), undefined, { port: 65_536 })).rejects.toThrow(
+      /port/
+    );
+
+    const calls: Array<{ operation: string; value?: unknown }> = [];
+    const config = fakeConfig(calls);
+    config.dashboard = { host: "127.0.0.1", port: 0 };
+    const server = await startDashboard(config);
+    try {
+      const list = await json(
+        `${server.url}/api/runs?status=running,completed&kind=task,workflow&cursor=next&resourceVersion=2`
+      );
+      expect(list.response.status).toBe(200);
+      expect(calls).toContainEqual({
+        operation: "list",
+        value: {
+          limit: 50,
+          statuses: ["running", "completed"],
+          kinds: ["task", "workflow"],
+          cursor: "next",
+          resourceVersion: "2"
+        }
+      });
+
+      const health = await json(`${server.url}/api/health`);
+      expect(health.body.worker).toBeNull();
+      expect(health.body.compatibility).toBeNull();
+
+      const retried = await json(`${server.url}/api/runs/run-1/retry`, { method: "POST" });
+      expect(retried.response.status).toBe(200);
+      expect(calls).toContainEqual({ operation: "retry", value: "run-1" });
+
+      const invalidOrigin = await json(`${server.url}/api/runs/run-1/cancel`, {
+        method: "POST",
+        headers: { Origin: "://invalid" }
+      });
+      expect(invalidOrigin.response.status).toBe(400);
+      expect((await fetch(`${server.url}/api/runs?limit=1.5`)).status).toBe(400);
+      expect((await fetch(`${server.url}/api/runs/structural-validation`)).status).toBe(400);
+      expect((await fetch(`${server.url}/api/runs/unexpected-error`)).status).toBe(500);
+
+      await expect(
+        startDashboard(fakeConfig([]), undefined, { host: server.host, port: server.port })
+      ).rejects.toThrow();
+    } finally {
+      await server.close();
+      await server.close();
+    }
+  });
 });
 
 function fakeConfig(calls: Array<{ operation: string; value?: unknown }>): DurloConfig {
@@ -129,6 +183,8 @@ function fakeConfig(calls: Array<{ operation: string; value?: unknown }>): Durlo
         getDetails: async (id: string) => {
           calls.push({ operation: "details", value: id });
           if (id === "missing") return null;
+          if (id === "structural-validation") throw { name: "ValidationError" };
+          if (id === "unexpected-error") throw "unexpected failure";
           return {
             run,
             checkedAt: now,
@@ -193,7 +249,7 @@ type ApiBody = {
   runs: unknown[];
   run: { id: string };
   appId: string;
-  worker: { status: string };
-  compatibility: { unavailableRuns: unknown[] };
+  worker: { status: string } | null;
+  compatibility: { unavailableRuns: unknown[] } | null;
   error: string;
 };
