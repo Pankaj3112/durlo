@@ -49,7 +49,8 @@ Status: In Progress
 - Claim and timer polling recover independently from transient Postgres failures with bounded exponential backoff and jitter.
 - `worker.getHealth()` exposes lifecycle, active-slot, polling-success, and database-failure state.
 - Configured loggers receive structured worker lifecycle, database recovery, and run transition records.
-- App-scoped controls, sequential-step enforcement, and cooperative termination finalization remain open.
+- Public run reads, cancellation, and manual retry are scoped by both app id and run id.
+- Sequential-step enforcement and cooperative termination finalization remain open.
 
 ### Outcomes
 

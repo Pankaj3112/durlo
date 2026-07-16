@@ -71,7 +71,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
           await completion();
           return;
         }
-        const results = await Promise.allSettled([adapter.cancelRun(claim.id), completion()]);
+        const results = await Promise.allSettled([
+          adapter.cancelRun({ appId: "stress-tests", runId: claim.id }),
+          completion()
+        ]);
         expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
       })
     );

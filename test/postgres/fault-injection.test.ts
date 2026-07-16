@@ -76,7 +76,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
     const handle = await task.enqueue({});
     const child = startFaultWorker("after-claim", task.id);
     await waitForLine(child, "CLAIMED");
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
       status: "running",
       lockedBy: "crashed-worker"
     });
@@ -86,7 +86,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
     await expireLease(handle.id);
     expect(await durlo.worker({ tasks: [task], workerId: "recovery-worker" }).runOnce()).toBe(1);
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "recovered",
       stalledCount: 1
@@ -128,7 +128,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
       [handle.id]
     );
     expect(effects.rows[0]?.count).toBe("2");
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "recovered",
       stalledCount: 1
@@ -176,7 +176,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
       [handle.id]
     );
     expect(effects.rows[0]?.count).toBe("1");
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "checkpointed",
       stalledCount: 1

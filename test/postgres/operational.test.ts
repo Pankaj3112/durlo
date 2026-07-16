@@ -68,7 +68,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres operational gua
 
       finish();
       await execution;
-      expect(await workerAdapter.getRun(handle.id)).toMatchObject({
+      expect(
+        await workerAdapter.getRun({ appId: "transaction-check", runId: handle.id })
+      ).toMatchObject({
         status: "completed",
         output: "done"
       });

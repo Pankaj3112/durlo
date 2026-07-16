@@ -34,7 +34,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     });
 
     const [cancel, complete] = await Promise.allSettled([
-      adapter.cancelRun(handle.id),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
       adapter.completeRun({
         runId: handle.id,
         workerId: "worker",
@@ -44,7 +44,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     ]);
 
     expect([cancel.status, complete.status].sort()).toEqual(["fulfilled", "rejected"]);
-    const run = await adapter.getRun(handle.id);
+    const run = await adapter.getRun({ appId: "race-tests", runId: handle.id });
     expect(["cancelled", "completed"]).toContain(run?.status);
     expect(run).toMatchObject({ lockedBy: null, leaseToken: null, lockedUntil: null });
     if (run?.status === "cancelled") {
@@ -78,7 +78,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     });
 
     const [cancel, fail] = await Promise.allSettled([
-      adapter.cancelRun(handle.id),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
       adapter.failRun({
         runId: handle.id,
         workerId: "worker",
@@ -89,7 +89,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     ]);
 
     expect([cancel.status, fail.status].sort()).toEqual(["fulfilled", "rejected"]);
-    const run = await adapter.getRun(handle.id);
+    const run = await adapter.getRun({ appId: "race-tests", runId: handle.id });
     expect(["cancelled", "dead_letter"]).toContain(run?.status);
     expect(run).toMatchObject({ lockedBy: null, leaseToken: null, lockedUntil: null });
     if (run?.status === "cancelled") {
@@ -121,13 +121,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     );
 
     const [cancel, fired] = await Promise.all([
-      adapter.cancelRun(handle.id),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
       adapter.fireDueTimers({ appId: "race-tests", limit: 1 })
     ]);
 
     expect(cancel.status).toBe("cancelled");
     expect([0, 1]).toContain(fired.length);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "race-tests", runId: handle.id })).toMatchObject({
       status: "cancelled",
       output: null,
       lockedBy: null,

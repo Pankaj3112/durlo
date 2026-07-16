@@ -45,7 +45,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres restricted role
       const handle = await task.enqueue({});
       await durlo.worker({ tasks: [task], workerId: "restricted-worker" }).runOnce();
 
-      expect(await roleAdapter.getRun(handle.id)).toMatchObject({
+      expect(
+        await roleAdapter.getRun({ appId: "restricted-role", runId: handle.id })
+      ).toMatchObject({
         status: "completed",
         output: "completed"
       });

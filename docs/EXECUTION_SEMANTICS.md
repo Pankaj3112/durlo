@@ -188,6 +188,8 @@ Task exhaustion moves the run to `dead_letter`. Workflow exhaustion moves the ru
 
 `durlo.runs.cancel(handleOrId)` is best-effort.
 
+The lookup and mutation are scoped to the `Durlo` instance's app id. A run belonging to another app is not visible or cancellable through that instance.
+
 Cancellation must prevent future execution for pending, sleeping, delayed, and retry-scheduled runs.
 
 Cancellation may not interrupt JavaScript already executing. If a running attempt finishes after cancellation, Durlo should avoid scheduling further work for that run.
@@ -197,6 +199,8 @@ For running runs, cancellation changes the run to `cancelled` and clears the lea
 ## Manual Retry
 
 `durlo.runs.retry(handleOrId)` creates a new attempt for a failed or dead-letter run.
+
+The lookup and mutation are scoped to the `Durlo` instance's app id. A run belonging to another app is treated as missing.
 
 Manual retry does not clear history. Attempts remain visible for debugging.
 

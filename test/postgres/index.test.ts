@@ -31,7 +31,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       { email: "test@example.com" },
       { attempts: 5, priority: 20, runAt: "2030-01-01T00:00:00.000Z" }
     );
-    const record = await adapter.getRun(handle.id);
+    const record = await adapter.getRun({ appId: "integration", runId: handle.id });
 
     expect(record).toMatchObject({
       id: handle.id,
@@ -47,6 +47,32 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(record?.scheduledAt.toISOString()).toBe("2030-01-01T00:00:00.000Z");
   });
 
+  it("prevents cross-app reads, cancellation, and manual retry", async () => {
+    const owner = new Durlo({ id: "scope-owner", adapter });
+    const otherApp = new Durlo({ id: "scope-other", adapter });
+    const pendingTask = owner.task({ id: "scoped-pending", run: async () => undefined });
+    const pending = await pendingTask.enqueue({});
+
+    await expect(otherApp.runs.get(pending)).resolves.toBeNull();
+    await expect(otherApp.runs.cancel(pending)).rejects.toBeInstanceOf(RunStateError);
+    await expect(owner.runs.get(pending)).resolves.toMatchObject({ status: "pending" });
+
+    const failingTask = owner.task({
+      id: "scoped-failure",
+      retry: { attempts: 1 },
+      run: async () => {
+        throw new Error("expected failure");
+      }
+    });
+    const failed = await failingTask.enqueue({});
+    await owner.worker({ tasks: [failingTask] }).runOnce();
+    await expect(owner.runs.get(failed)).resolves.toMatchObject({ status: "dead_letter" });
+
+    await expect(otherApp.runs.retry(failed)).rejects.toBeInstanceOf(RunStateError);
+    await expect(owner.runs.get(failed)).resolves.toMatchObject({ status: "dead_letter" });
+    await expect(owner.runs.retry(failed)).resolves.toMatchObject({ status: "pending" });
+  });
+
   it("deduplicates run creation for the full row lifetime", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "email", run: async () => undefined });
@@ -55,7 +81,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const duplicate = await task.enqueue({ value: 2 }, { idempotencyKey: "business-key" });
 
     expect(duplicate.id).toBe(first.id);
-    expect((await adapter.getRun(first.id))?.input).toEqual({ value: 1 });
+    expect((await adapter.getRun({ appId: "integration", runId: first.id }))?.input).toEqual({
+      value: 1
+    });
   });
 
   it("deduplicates concurrent run creation atomically", async () => {
@@ -102,7 +130,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       client.release();
     }
 
-    expect(await adapter.getRun(runId)).toBeNull();
+    expect(await adapter.getRun({ appId: "integration", runId: runId })).toBeNull();
     const count = await adapter.pool.query<{ count: string }>(
       "select count(*)::text as count from durlo_runs where resource_id = 'transactional'"
     );
@@ -127,7 +155,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ tasks: [task], workerId: "worker-a", leaseDuration: "5s" });
     expect(await worker.runOnce()).toBe(1);
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: { doubled: 42, attempt: 1 },
       attemptCount: 1,
@@ -249,7 +277,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       ).rejects.toBeInstanceOf(LostLeaseError);
     }
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "running",
       lockedBy: "owner",
       leaseToken: claim!.leaseToken
@@ -266,7 +294,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       leaseToken: claim!.leaseToken,
       output: "current"
     });
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "current"
     });
@@ -287,9 +315,12 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ tasks: [task], workerId: "worker-retry" });
 
     expect(await worker.runOnce()).toBe(1);
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "pending", attemptCount: 1 });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "pending",
+      attemptCount: 1
+    });
     expect(await worker.runOnce()).toBe(1);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "dead_letter",
       attemptCount: 2,
       error: { name: "Error", message: "failure 2" }
@@ -342,7 +373,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       output: "current"
     });
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "current",
       attemptCount: 2,
@@ -377,7 +408,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       [handle.id]
     );
     expect(await adapter.claimRuns(claimInput)).toHaveLength(0);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "dead_letter",
       stalledCount: 1,
       error: { name: "StalledError" }
@@ -411,7 +442,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
         leaseToken: claim!.leaseToken
       })
     ).toBe(false);
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "pending" });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "pending"
+    });
     const attempts = await adapter.pool.query<{ status: string }>(
       "select status from durlo_attempts where run_id = $1 and kind = 'run'",
       [handle.id]
@@ -432,7 +465,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ workflows: [workflow], workerId: "workflow-worker" });
 
     expect(await worker.runOnce()).toBe(1);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: { doubled: 42 }
     });
@@ -470,10 +503,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ workflows: [workflow], workerId: "workflow-retry" });
 
     expect(await worker.runOnce()).toBe(1);
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "pending", attemptCount: 1 });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "pending",
+      attemptCount: 1
+    });
     expect(await worker.runOnce()).toBe(1);
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: 11,
       attemptCount: 2
@@ -504,7 +540,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
 
     await durlo.worker({ workflows: [workflow] }).runOnce();
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: expect.stringContaining("more than once") }
     });
@@ -523,7 +559,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
 
     await durlo.worker({ workflows: [workflow] }).runOnce();
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: "nested step calls are not allowed" }
     });
@@ -552,11 +588,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
 
     for (let index = 0; index < 4; index += 1) {
       expect(await worker.runOnce()).toBe(1);
-      expect(await adapter.getRun(handle.id)).toMatchObject({ status: "sleeping" });
+      expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+        status: "sleeping"
+      });
     }
     expect(await worker.runOnce()).toBe(1);
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "awake",
       attemptCount: 5
@@ -597,7 +635,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       [handle.id]
     );
     expect(await worker.runOnce()).toBe(1);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "resumed"
     });
@@ -615,12 +653,16 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ workflows: [workflow] });
 
     await worker.runOnce();
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "sleeping" });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "sleeping"
+    });
     expect(await durlo.runs.cancel(handle)).toMatchObject({ status: "cancelled" });
     expect(await durlo.runs.cancel(handle)).toMatchObject({ status: "cancelled" });
     expect(await adapter.getTimer(handle.id, "long-wait")).toMatchObject({ status: "cancelled" });
     expect(await worker.runOnce()).toBe(0);
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "cancelled" });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "cancelled"
+    });
   });
 
   it("cancels running work by invalidating its lease token", async () => {
@@ -644,7 +686,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
         output: "late"
       })
     ).rejects.toBeInstanceOf(LostLeaseError);
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "cancelled" });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "cancelled"
+    });
     const attempt = await adapter.pool.query<{ status: string }>(
       "select status from durlo_attempts where run_id = $1 and kind = 'run'",
       [handle.id]
@@ -668,7 +712,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ tasks: [task] });
 
     await worker.runOnce();
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "dead_letter",
       attemptCount: 1
     });
@@ -678,7 +722,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       attemptCount: 1
     });
     await worker.runOnce();
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "recovered",
       attemptCount: 2,
@@ -709,10 +753,12 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const worker = durlo.worker({ workflows: [workflow] });
 
     await worker.runOnce();
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "failed" });
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
+      status: "failed"
+    });
     expect(await durlo.runs.retry(handle)).toMatchObject({ status: "pending" });
     await worker.runOnce();
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "completed",
       output: "workflow recovered"
     });
@@ -737,7 +783,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     await durlo.worker({ tasks: [task], leaseDuration: "1s" }).runOnce();
 
     expect(aborted).toBe(true);
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "integration", runId: handle.id })).toMatchObject({
       status: "dead_letter",
       error: { name: "TimeoutError" }
     });

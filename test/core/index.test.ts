@@ -176,6 +176,27 @@ describe("Durlo core API", () => {
     await expect(task.enqueue({}, { idempotencyKey: "" })).rejects.toBeInstanceOf(ValidationError);
     expect(adapter.created).toHaveLength(0);
   });
+
+  it("passes the owning app id to every public run control", async () => {
+    const adapter = createAdapter();
+    const getRun = vi.spyOn(adapter, "getRun").mockResolvedValue(null);
+    const cancelRun = vi
+      .spyOn(adapter, "cancelRun")
+      .mockRejectedValue(new Error("cancel not implemented"));
+    const retryRun = vi
+      .spyOn(adapter, "retryRun")
+      .mockRejectedValue(new Error("retry not implemented"));
+    const durlo = new Durlo({ id: "scoped-app", adapter });
+
+    await expect(durlo.runs.get("run-1")).resolves.toBeNull();
+    await expect(durlo.runs.cancel("run-1")).rejects.toThrow("cancel not implemented");
+    await expect(durlo.runs.retry("run-1")).rejects.toThrow("retry not implemented");
+
+    const expected = { appId: "scoped-app", runId: "run-1" };
+    expect(getRun).toHaveBeenCalledWith(expected);
+    expect(cancelRun).toHaveBeenCalledWith(expected);
+    expect(retryRun).toHaveBeenCalledWith(expected);
+  });
 });
 
 describe("durations and retries", () => {

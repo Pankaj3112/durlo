@@ -1,4 +1,5 @@
 import type {
+  AppRunInput,
   ClaimedRun,
   ClaimRunsInput,
   CreateRunInput,
@@ -236,10 +237,10 @@ export class PostgresAdapter implements DurloAdapter {
     }
   }
 
-  async getRun(id: string): Promise<RunRecord | null> {
+  async getRun(input: AppRunInput): Promise<RunRecord | null> {
     const result = await this.query()<RunRow>(
-      `select ${RUN_COLUMNS} from durlo_runs where id = $1`,
-      [id]
+      `select ${RUN_COLUMNS} from durlo_runs where app_id = $1 and id = $2`,
+      [input.appId, input.runId]
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
   }
@@ -706,16 +707,16 @@ export class PostgresAdapter implements DurloAdapter {
     }
   }
 
-  async cancelRun(id: string): Promise<RunRecord> {
+  async cancelRun(input: AppRunInput): Promise<RunRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const selected = await client.query<RunRow>(
-        `select ${RUN_COLUMNS} from durlo_runs where id = $1 for update`,
-        [id]
+        `select ${RUN_COLUMNS} from durlo_runs where app_id = $1 and id = $2 for update`,
+        [input.appId, input.runId]
       );
       const current = selected.rows[0];
-      if (!current) throw new RunStateError(`run '${id}' was not found`);
+      if (!current) throw new RunStateError(`run '${input.runId}' was not found`);
       if (current.status === "cancelled") {
         await client.query("commit");
         return mapRun(current);
@@ -729,14 +730,14 @@ export class PostgresAdapter implements DurloAdapter {
             update durlo_attempts set status = 'cancelled', completed_at = now()
             where run_id = $1 and kind = 'run' and lease_token = $2 and status = 'running'
           `,
-          [id, current.lease_token]
+          [input.runId, current.lease_token]
         );
         await client.query(
           `
             update durlo_attempts set status = 'cancelled', completed_at = now()
             where run_id = $1 and kind = 'step' and lease_token = $2 and status = 'running'
           `,
-          [id, current.lease_token]
+          [input.runId, current.lease_token]
         );
       }
       await client.query(
@@ -744,17 +745,17 @@ export class PostgresAdapter implements DurloAdapter {
           update durlo_timers set status = 'cancelled', cancelled_at = now()
           where run_id = $1 and status = 'pending'
         `,
-        [id]
+        [input.runId]
       );
       const updated = await client.query<RunRow>(
         `
           update durlo_runs
           set status = 'cancelled', locked_by = null, lease_token = null, locked_until = null,
               updated_at = now(), cancelled_at = now()
-          where id = $1
+          where app_id = $1 and id = $2
           returning ${RUN_COLUMNS}
         `,
-        [id]
+        [input.appId, input.runId]
       );
       await client.query("commit");
       return mapRun(updated.rows[0]!);
@@ -766,23 +767,23 @@ export class PostgresAdapter implements DurloAdapter {
     }
   }
 
-  async retryRun(id: string): Promise<RunRecord> {
+  async retryRun(input: AppRunInput): Promise<RunRecord> {
     const result = await this.query()<RunRow>(
       `
         update durlo_runs
         set status = 'pending', scheduled_at = now(), error_json = null,
             locked_by = null, lease_token = null, locked_until = null,
             updated_at = now(), completed_at = null
-        where id = $1
+        where app_id = $1 and id = $2
           and ((kind = 'task' and status = 'dead_letter') or (kind = 'workflow' and status = 'failed'))
         returning ${RUN_COLUMNS}
       `,
-      [id]
+      [input.appId, input.runId]
     );
     const row = result.rows[0];
     if (row) return mapRun(row);
-    const current = await this.getRun(id);
-    if (!current) throw new RunStateError(`run '${id}' was not found`);
+    const current = await this.getRun(input);
+    if (!current) throw new RunStateError(`run '${input.runId}' was not found`);
     throw new RunStateError(`cannot manually retry a ${current.status} ${current.kind} run`);
   }
 

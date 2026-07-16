@@ -100,8 +100,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const invalid = createRunInput({ maxAttempts: 0 });
 
     await expect(adapter.createRuns([valid, invalid])).rejects.toThrow();
-    expect(await adapter.getRun(valid.id)).toBeNull();
-    expect(await adapter.getRun(invalid.id)).toBeNull();
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: valid.id })).toBeNull();
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: invalid.id })).toBeNull();
     await expect(adapter.createRuns([])).resolves.toEqual([]);
   });
 
@@ -113,13 +113,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     try {
       await client.query("begin");
       runId = (await durlo.tx(client).enqueue(task, { committed: true })).id;
-      expect(await adapter.getRun(runId)).toBeNull();
+      expect(await adapter.getRun({ appId: "matrix-tests", runId: runId })).toBeNull();
       await client.query("commit");
     } finally {
       client.release();
     }
 
-    expect(await adapter.getRun(runId)).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: runId })).toMatchObject({
       status: "pending",
       input: { committed: true }
     });
@@ -130,13 +130,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const pendingTask = durlo.task({ id: "pending-controls", run: async () => undefined });
     const pending = await pendingTask.enqueue({});
 
-    await expect(adapter.retryRun(pending.id)).rejects.toBeInstanceOf(RunStateError);
-    await expect(adapter.retryRun("missing-run")).rejects.toBeInstanceOf(RunStateError);
-    await expect(adapter.cancelRun("missing-run")).rejects.toBeInstanceOf(RunStateError);
+    await expect(
+      adapter.retryRun({ appId: "matrix-tests", runId: pending.id })
+    ).rejects.toBeInstanceOf(RunStateError);
+    await expect(
+      adapter.retryRun({ appId: "matrix-tests", runId: "missing-run" })
+    ).rejects.toBeInstanceOf(RunStateError);
+    await expect(
+      adapter.cancelRun({ appId: "matrix-tests", runId: "missing-run" })
+    ).rejects.toBeInstanceOf(RunStateError);
 
-    await adapter.cancelRun(pending.id);
-    await expect(adapter.retryRun(pending.id)).rejects.toBeInstanceOf(RunStateError);
-    await expect(adapter.cancelRun(pending.id)).resolves.toMatchObject({ status: "cancelled" });
+    await adapter.cancelRun({ appId: "matrix-tests", runId: pending.id });
+    await expect(
+      adapter.retryRun({ appId: "matrix-tests", runId: pending.id })
+    ).rejects.toBeInstanceOf(RunStateError);
+    await expect(
+      adapter.cancelRun({ appId: "matrix-tests", runId: pending.id })
+    ).resolves.toMatchObject({ status: "cancelled" });
   });
 
   it("rejects step and timer namespace collisions across workflow re-entry", async () => {
@@ -156,7 +166,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const firstWorker = durlo.worker({ workflows: [stepThenTimer], workerId: "step-first" });
     await firstWorker.runOnce();
     await firstWorker.runOnce();
-    expect(await adapter.getRun(first.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: first.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: expect.stringContaining("used by step.run") }
     });
@@ -174,7 +184,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const secondWorker = durlo.worker({ workflows: [timerThenStep], workerId: "timer-first" });
     await secondWorker.runOnce();
     await secondWorker.runOnce();
-    expect(await adapter.getRun(second.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: second.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: expect.stringContaining("used by a sleep") }
     });
@@ -190,7 +200,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const handle = await workflow.start({});
     await durlo.worker({ workflows: [workflow] }).runOnce();
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: "sleepUntil date must be valid" }
     });
@@ -221,11 +231,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       .worker({ workflows: [workflow], workerId: "step-owner", leaseDuration: "30s" })
       .runOnce();
     await started;
-    await adapter.cancelRun(handle.id);
+    await adapter.cancelRun({ appId: "matrix-tests", runId: handle.id });
     finishStep();
     await execution;
 
-    expect(await adapter.getRun(handle.id)).toMatchObject({ status: "cancelled", output: null });
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.id })).toMatchObject({
+      status: "cancelled",
+      output: null
+    });
     expect(await adapter.getStep(handle.id, "blocked")).toMatchObject({
       status: "running",
       result: null

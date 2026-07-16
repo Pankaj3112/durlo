@@ -107,6 +107,11 @@ export type OwnedRunInput = {
   leaseToken: string;
 };
 
+export type AppRunInput = {
+  appId: string;
+  runId: string;
+};
+
 export type FailRunInput = OwnedRunInput & {
   error: SerializedError;
   attemptStatus?: "failed" | "timed_out";
@@ -165,9 +170,9 @@ export interface TransactionalDurloAdapter {
 }
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
-  getRun(id: string): Promise<RunRecord | null>;
-  cancelRun(id: string): Promise<RunRecord>;
-  retryRun(id: string): Promise<RunRecord>;
+  getRun(input: AppRunInput): Promise<RunRecord | null>;
+  cancelRun(input: AppRunInput): Promise<RunRecord>;
+  retryRun(input: AppRunInput): Promise<RunRecord>;
   claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]>;
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
   completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;

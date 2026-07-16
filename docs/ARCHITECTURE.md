@@ -169,6 +169,8 @@ Claim and timer polling recover independently from transient database errors. Ea
 
 Cancellation prevents future Durlo state transitions and invalidates a running lease. It cannot forcibly terminate arbitrary JavaScript. Task and workflow code receives an `AbortSignal` and should stop cooperatively.
 
+Public run reads and controls always pass both the owning app id and run id to storage. A run id from another app is treated as missing, including for cancellation and manual retry.
+
 Attempt timeouts use the same cooperative model. External effects must remain idempotent because timed-out or lease-lost code may finish late.
 
 ## Source Of Truth

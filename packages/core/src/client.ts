@@ -61,9 +61,9 @@ export class Durlo {
     const getId = (value: RunHandle | string): string =>
       typeof value === "string" ? value : value.id;
     this.runs = {
-      get: (value) => this.adapter.getRun(getId(value)),
-      cancel: (value) => this.adapter.cancelRun(getId(value)),
-      retry: (value) => this.adapter.retryRun(getId(value))
+      get: (value) => this.adapter.getRun({ appId: this.id, runId: getId(value) }),
+      cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
+      retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) })
     };
   }
 
