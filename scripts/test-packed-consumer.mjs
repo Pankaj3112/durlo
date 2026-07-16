@@ -18,6 +18,13 @@ try {
 
   const packageDirs = ["packages/core", "packages/postgres", "packages/cli"];
   for (const packageDir of packageDirs) {
+    const inventory = run(
+      pnpm,
+      ["pack", "--dry-run", "--json"],
+      resolve(workspaceRoot, packageDir),
+      `inspecting ${packageDir}`
+    );
+    inspectPackage(packageDir, JSON.parse(inventory.stdout));
     run(
       pnpm,
       ["pack", "--pack-destination", tarballs],
@@ -39,38 +46,39 @@ try {
   await writeFile(
     join(consumer, "esm.mjs"),
     `
-      import { Durlo } from "@durlo/core";
-      import { postgresAdapter } from "@durlo/postgres";
-      import { cliPackageName } from "@durlo/cli";
-      if (typeof Durlo !== "function") throw new Error("missing ESM Durlo export");
-      if (typeof postgresAdapter !== "function") throw new Error("missing ESM postgres export");
-      if (cliPackageName !== "@durlo/cli") throw new Error("missing ESM CLI export");
-      const adapter = postgresAdapter({ connectionString: "postgres://unused" });
+      import * as core from "@durlo/core";
+      import * as postgres from "@durlo/postgres";
+      import * as cli from "@durlo/cli";
+      ${exportAssertions("ESM")}
+      const adapter = postgres.postgresAdapter({ connectionString: "postgres://unused" });
       await adapter.close();
     `
   );
   await writeFile(
     join(consumer, "cjs.cjs"),
     `
-      const { Durlo } = require("@durlo/core");
-      const { postgresAdapter } = require("@durlo/postgres");
-      const { cliPackageName } = require("@durlo/cli");
-      if (typeof Durlo !== "function") throw new Error("missing CJS Durlo export");
-      if (typeof postgresAdapter !== "function") throw new Error("missing CJS postgres export");
-      if (cliPackageName !== "@durlo/cli") throw new Error("missing CJS CLI export");
-      const adapter = postgresAdapter({ connectionString: "postgres://unused" });
-      adapter.close();
+      const core = require("@durlo/core");
+      const postgres = require("@durlo/postgres");
+      const cli = require("@durlo/cli");
+      ${exportAssertions("CommonJS")}
+      const adapter = postgres.postgresAdapter({ connectionString: "postgres://unused" });
+      adapter.close().catch((error) => {
+        process.stderr.write(String(error));
+        process.exitCode = 1;
+      });
     `
   );
   await writeFile(
     join(consumer, "typecheck.ts"),
     `
       import { Durlo, type DurloAdapter } from "@durlo/core";
-      import { postgresAdapter, type PostgresAdapter } from "@durlo/postgres";
+      import { migrations, postgresAdapter, type PostgresAdapter } from "@durlo/postgres";
       import { cliPackageName } from "@durlo/cli";
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
       const durlo: Durlo = new Durlo({ id: cliPackageName, adapter: contract });
+      const migrationVersions: string[] = migrations.map(({ version }) => version);
+      void migrationVersions;
       void durlo;
     `
   );
@@ -121,8 +129,90 @@ try {
 
 function run(executable, args, cwd, description) {
   const result = spawnSync(executable, args, { cwd, encoding: "utf8", stdio: "pipe" });
-  if (result.status === 0) return;
+  if (result.status === 0) return result;
   throw new Error(
     `${description} failed (${result.status}):\n${result.stdout ?? ""}\n${result.stderr ?? ""}`
   );
+}
+
+function inspectPackage(packageDir, inventory) {
+  if (!inventory || typeof inventory !== "object" || !Array.isArray(inventory.files)) {
+    throw new Error(`${packageDir} returned an invalid pack inventory`);
+  }
+  const paths = inventory.files.map(({ path }) => path);
+  for (const required of ["package.json", "dist/index.js", "dist/index.cjs", "dist/index.d.ts"]) {
+    if (!paths.includes(required)) throw new Error(`${packageDir} tarball is missing ${required}`);
+  }
+  if (paths.some((path) => path !== "package.json" && !path.startsWith("dist/"))) {
+    throw new Error(`${packageDir} tarball contains files outside dist: ${paths.join(", ")}`);
+  }
+  if (packageDir === "packages/cli" && !paths.includes("dist/bin.js")) {
+    throw new Error("@durlo/cli tarball is missing dist/bin.js");
+  }
+}
+
+function exportAssertions(format) {
+  const expected = {
+    core: [
+      "AttemptTimeoutError",
+      "DEFAULT_DURLO_LIMITS",
+      "DEFAULT_RETRY_POLICY",
+      "Durlo",
+      "DurloError",
+      "LostLeaseError",
+      "RunStateError",
+      "SerializationError",
+      "StorageLimitError",
+      "ValidationError",
+      "Worker",
+      "WorkflowSleepError",
+      "assertByteLimit",
+      "assertCountLimit",
+      "calculateRetryDelay",
+      "deserialize",
+      "jsonByteSize",
+      "normalizeBackoff",
+      "normalizeDurloLimits",
+      "normalizeRetryPolicy",
+      "parseDuration",
+      "serialize",
+      "serializeError",
+      "serializeErrorWithinLimit"
+    ],
+    postgres: ["PostgresAdapter", "migrations", "postgresAdapter"],
+    cli: [
+      "CONFIG_FILENAMES",
+      "cliPackageName",
+      "cliVersion",
+      "closeConfig",
+      "configuredWorker",
+      "defineConfig",
+      "findConfigPath",
+      "initProject",
+      "loadConfig",
+      "migrateConfig",
+      "parseConfigFlag",
+      "parseDevFlags",
+      "runCli",
+      "runConfiguredWorker",
+      "startDashboard"
+    ]
+  };
+  return `
+    const expected = ${JSON.stringify(expected)};
+    for (const [name, actual] of Object.entries({ core, postgres, cli })) {
+      const keys = Object.keys(actual).sort();
+      if (JSON.stringify(keys) !== JSON.stringify(expected[name])) {
+        throw new Error("${format} " + name + " exports changed: " + keys.join(", "));
+      }
+    }
+    const versions = postgres.migrations.map(({ version }) => version);
+    if (JSON.stringify(versions) !== JSON.stringify([
+      "0001_initial",
+      "0002_resource_versions",
+      "0003_retention_cleanup",
+      "0004_observability_reads"
+    ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
+    if (cli.cliPackageName !== "@durlo/cli") throw new Error("missing ${format} CLI marker");
+  `;
 }

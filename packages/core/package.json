@@ -18,7 +18,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <27"
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",

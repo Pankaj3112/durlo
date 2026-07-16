@@ -7,7 +7,7 @@ hosted orchestration, or framework adapters.
 
 ## Quickstart: first durable task in under ten minutes
 
-You need Node.js 22 or newer and PostgreSQL 14 or newer. For a disposable local database:
+You need Node.js 22 through 26 and PostgreSQL 14 through 18. For a disposable local database:
 
 ```bash
 docker run --rm --name durlo-postgres \
@@ -89,6 +89,7 @@ step ids must remain stable.
 - [Retention cleanup](docs/RETENTION.md)
 - [Observability](docs/OBSERVABILITY.md)
 - [Postgres operations](docs/OPERATIONS.md)
+- [Beta support policy](docs/SUPPORT.md)
 - [Roadmap](docs/ROADMAP.md)
 
 ## Contributor verification

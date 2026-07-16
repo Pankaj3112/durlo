@@ -60,6 +60,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check release contract
+        run: pnpm test:release-contract
+
       - name: Build
         run: pnpm build
 
