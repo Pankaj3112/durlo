@@ -1,5 +1,8 @@
 import type {
   AppRunInput,
+  AttemptKind,
+  AttemptRecord,
+  AttemptStatus,
   ClaimedRun,
   ClaimRunsInput,
   CreateRunInput,
@@ -19,6 +22,7 @@ import type {
   StepInput,
   StepRecord,
   StepStatus,
+  StoredRunDetails,
   TimerRecord,
   TimerStatus,
   TransactionalDurloAdapter,
@@ -106,6 +110,19 @@ type TimerRow = QueryResultRow & {
   cancelled_at: Date | null;
 };
 
+type AttemptRow = QueryResultRow & {
+  id: string;
+  run_id: string;
+  step_id: string | null;
+  kind: AttemptKind;
+  attempt_number: number;
+  status: AttemptStatus;
+  worker_id: string | null;
+  error_json: SerializedError | null;
+  started_at: Date;
+  completed_at: Date | null;
+};
+
 type Query = <R extends QueryResultRow = QueryResultRow>(
   text: string,
   values?: unknown[]
@@ -191,6 +208,21 @@ function mapTimer(row: TimerRow): TimerRecord {
   };
 }
 
+function mapAttempt(row: AttemptRow): AttemptRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    kind: row.kind,
+    attemptNumber: row.attempt_number,
+    status: row.status,
+    workerId: row.worker_id,
+    error: row.error_json,
+    startedAt: row.started_at,
+    completedAt: row.completed_at
+  };
+}
+
 const RUN_COLUMNS = `
   id, app_id, kind, resource_id, resource_version, status, input_json, output_json, error_json, options_json,
   idempotency_key, priority, scheduled_at, attempt_count, max_attempts, locked_by,
@@ -212,6 +244,10 @@ const RUN_SUMMARY_COLUMNS = `
 const TIMER_COLUMNS = `id, run_id, step_id, fire_at, status, created_at, fired_at, cancelled_at`;
 const QUALIFIED_TIMER_COLUMNS = `
   t.id, t.run_id, t.step_id, t.fire_at, t.status, t.created_at, t.fired_at, t.cancelled_at
+`;
+const ATTEMPT_COLUMNS = `
+  id, run_id, step_id, kind, attempt_number, status, worker_id, error_json,
+  started_at, completed_at
 `;
 
 export class PostgresAdapter implements DurloAdapter {
@@ -295,6 +331,48 @@ export class PostgresAdapter implements DurloAdapter {
       [input.appId, input.runId]
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
+  }
+
+  async getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin transaction isolation level repeatable read read only");
+      const runResult = await client.query<RunRow>(
+        `select ${RUN_COLUMNS} from durlo_runs where app_id = $1 and id = $2`,
+        [input.appId, input.runId]
+      );
+      const row = runResult.rows[0];
+      if (!row) {
+        await client.query("commit");
+        return null;
+      }
+      const steps = await client.query<StepRow>(
+        `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 order by created_at, id`,
+        [input.runId]
+      );
+      const attempts = await client.query<AttemptRow>(
+        `select ${ATTEMPT_COLUMNS} from durlo_attempts where run_id = $1 order by started_at, id`,
+        [input.runId]
+      );
+      const timers = await client.query<TimerRow>(
+        `select ${TIMER_COLUMNS} from durlo_timers where run_id = $1 order by created_at, id`,
+        [input.runId]
+      );
+      const clock = await client.query<{ checked_at: Date }>("select now() as checked_at");
+      await client.query("commit");
+      return {
+        run: mapRun(row),
+        steps: steps.rows.map(mapStep),
+        attempts: attempts.rows.map(mapAttempt),
+        timers: timers.rows.map(mapTimer),
+        checkedAt: clock.rows[0]!.checked_at
+      };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listRuns(input: RunListInput): Promise<RunSummary[]> {

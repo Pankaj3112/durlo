@@ -13,6 +13,7 @@ import type {
   CreateRunInput,
   DurloAdapter,
   RunRecord,
+  StoredRunDetails,
   TransactionalDurloAdapter
 } from "@durlo/core";
 
@@ -55,6 +56,7 @@ function createAdapter(): DurloAdapter & {
     created,
     ...transactional,
     getRun: async () => null,
+    getRunDetails: async () => null,
     listRuns: async () => [],
     cancelRun: async () => {
       throw new Error("not implemented by test adapter");
@@ -217,6 +219,7 @@ describe("Durlo core API", () => {
   it("passes the owning app id to every public run control", async () => {
     const adapter = createAdapter();
     const getRun = vi.spyOn(adapter, "getRun").mockResolvedValue(null);
+    const getRunDetails = vi.spyOn(adapter, "getRunDetails").mockResolvedValue(null);
     const cancelRun = vi
       .spyOn(adapter, "cancelRun")
       .mockRejectedValue(new Error("cancel not implemented"));
@@ -227,6 +230,7 @@ describe("Durlo core API", () => {
     const durlo = new Durlo({ id: "scoped-app", adapter });
 
     await expect(durlo.runs.get("run-1")).resolves.toBeNull();
+    await expect(durlo.runs.getDetails("run-1")).resolves.toBeNull();
     await expect(durlo.runs.cancel("run-1")).rejects.toThrow("cancel not implemented");
     await expect(durlo.runs.retry("run-1")).rejects.toThrow("retry not implemented");
     await expect(
@@ -235,6 +239,7 @@ describe("Durlo core API", () => {
 
     const expected = { appId: "scoped-app", runId: "run-1" };
     expect(getRun).toHaveBeenCalledWith(expected);
+    expect(getRunDetails).toHaveBeenCalledWith(expected);
     expect(cancelRun).toHaveBeenCalledWith(expected);
     expect(retryRun).toHaveBeenCalledWith(expected);
     expect(cleanupRuns).toHaveBeenCalledWith({
@@ -242,6 +247,69 @@ describe("Durlo core API", () => {
       olderThan: 30 * 86_400_000,
       statuses: ["completed"],
       limit: 25
+    });
+  });
+
+  it("builds a chronological timeline and durable failure diagnostics", async () => {
+    const adapter = createAdapter();
+    const run = recordFromInput({
+      id: "run-stalled",
+      appId: "details-app",
+      kind: "workflow",
+      resourceId: "onboarding",
+      resourceVersion: "1",
+      input: { userId: "user-1" },
+      options: {},
+      idempotencyKey: null,
+      priority: 0,
+      scheduledAt: new Date("2026-07-16T09:02:00.000Z"),
+      maxAttempts: 3
+    });
+    run.createdAt = new Date("2026-07-16T09:00:00.000Z");
+    run.updatedAt = new Date("2026-07-16T09:01:00.000Z");
+    run.attemptCount = 1;
+    run.stalledCount = 1;
+    const stored = {
+      run,
+      steps: [],
+      attempts: [
+        {
+          id: "attempt-1",
+          runId: run.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 1,
+          status: "stalled",
+          workerId: "worker-1",
+          error: { name: "StalledError", message: "worker lease expired" },
+          startedAt: new Date("2026-07-16T09:00:10.000Z"),
+          completedAt: new Date("2026-07-16T09:01:00.000Z")
+        }
+      ],
+      timers: [],
+      checkedAt: new Date("2026-07-16T09:01:30.000Z")
+    } satisfies StoredRunDetails;
+    vi.spyOn(adapter, "getRunDetails").mockResolvedValue(stored);
+    const durlo = new Durlo({ id: "details-app", adapter });
+
+    const details = await durlo.runs.getDetails(run.id);
+
+    expect(details?.run.input).toEqual({ userId: "user-1" });
+    expect(details?.timeline.map(({ type }) => type)).toEqual([
+      "run_created",
+      "run_attempt_started",
+      "run_attempt_stalled",
+      "run_retry_scheduled"
+    ]);
+    expect(details?.diagnostics).toEqual({
+      failureCount: 1,
+      failedAttempts: 0,
+      timedOutAttempts: 0,
+      stalledAttempts: 1,
+      retryCount: 1,
+      leaseLossCount: 1,
+      hasExpiredLease: false,
+      timerLagMs: 0
     });
   });
 

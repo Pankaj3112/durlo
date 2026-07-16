@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ValidationError } from "./errors.js";
 import { normalizeRetryPolicy } from "./retry.js";
 import { serialize } from "./serialization.js";
+import { buildRunDetails } from "./observability.js";
 import {
   assertByteLimit,
   assertCountLimit,
@@ -18,6 +19,7 @@ import type {
   NormalizedRetryPolicy,
   RetentionCleanupOptions,
   RetentionCleanupResult,
+  RunDetails,
   RunHandle,
   RunKind,
   RunListCursor,
@@ -107,6 +109,7 @@ export class Durlo {
   readonly adapter: DurloAdapter;
   readonly runs: {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
+    getDetails: (handleOrId: RunHandle | string) => Promise<RunDetails | null>;
     list: (options?: RunListOptions) => Promise<RunListPage>;
     cancel: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     retry: (handleOrId: RunHandle | string) => Promise<RunRecord>;
@@ -132,6 +135,10 @@ export class Durlo {
       typeof value === "string" ? value : value.id;
     this.runs = {
       get: (value) => this.adapter.getRun({ appId: this.id, runId: getId(value) }),
+      getDetails: async (value) => {
+        const records = await this.adapter.getRunDetails({ appId: this.id, runId: getId(value) });
+        return records ? buildRunDetails(records) : null;
+      },
       list: (listOptions) => this.listRuns(listOptions),
       cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
       retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) }),

@@ -250,6 +250,23 @@ export type StepRecord = {
 
 export type StepInput = OwnedRunInput & { stepId: string };
 
+export type AttemptKind = "run" | "step";
+export type AttemptStatus =
+  "running" | "succeeded" | "failed" | "timed_out" | "stalled" | "cancelled";
+
+export type AttemptRecord = {
+  id: string;
+  runId: string;
+  stepId: string | null;
+  kind: AttemptKind;
+  attemptNumber: number;
+  status: AttemptStatus;
+  workerId: string | null;
+  error: SerializedError | null;
+  startedAt: Date;
+  completedAt: Date | null;
+};
+
 export type TimerStatus = "pending" | "fired" | "cancelled";
 
 export type TimerRecord = {
@@ -261,6 +278,73 @@ export type TimerRecord = {
   createdAt: Date;
   firedAt: Date | null;
   cancelledAt: Date | null;
+};
+
+export type RunTimelineEventType =
+  | "run_created"
+  | "run_attempt_started"
+  | "run_attempt_succeeded"
+  | "run_attempt_failed"
+  | "run_attempt_timed_out"
+  | "run_attempt_stalled"
+  | "run_attempt_cancelled"
+  | "run_retry_scheduled"
+  | "run_manual_retry_scheduled"
+  | "run_released"
+  | "step_created"
+  | "step_attempt_started"
+  | "step_attempt_succeeded"
+  | "step_attempt_failed"
+  | "step_attempt_timed_out"
+  | "step_attempt_stalled"
+  | "step_attempt_cancelled"
+  | "step_completed"
+  | "step_failed"
+  | "timer_scheduled"
+  | "timer_fired"
+  | "timer_cancelled"
+  | "run_completed"
+  | "run_failed"
+  | "run_dead_letter"
+  | "run_cancelled";
+
+export type RunTimelineEvent = {
+  id: string;
+  type: RunTimelineEventType;
+  at: Date;
+  runId: string;
+  recordId: string;
+  stepId?: string;
+  attemptNumber?: number;
+  workerId?: string;
+  status?: RunStatus | StepStatus | TimerStatus | AttemptStatus;
+  error?: SerializedError;
+  scheduledAt?: Date;
+  fireAt?: Date;
+};
+
+export type RunDiagnostics = {
+  failureCount: number;
+  failedAttempts: number;
+  timedOutAttempts: number;
+  stalledAttempts: number;
+  retryCount: number;
+  leaseLossCount: number;
+  hasExpiredLease: boolean;
+  timerLagMs: number;
+};
+
+export type StoredRunDetails = {
+  run: RunRecord;
+  steps: StepRecord[];
+  attempts: AttemptRecord[];
+  timers: TimerRecord[];
+  checkedAt: Date;
+};
+
+export type RunDetails = StoredRunDetails & {
+  timeline: RunTimelineEvent[];
+  diagnostics: RunDiagnostics;
 };
 
 export type CreateRunInput = {
@@ -284,6 +368,7 @@ export interface TransactionalDurloAdapter {
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
+  getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
   listRuns(input: RunListInput): Promise<RunSummary[]>;
   cancelRun(input: AppRunInput): Promise<RunRecord>;
   retryRun(input: AppRunInput): Promise<RunRecord>;

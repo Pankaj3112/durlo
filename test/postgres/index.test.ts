@@ -107,6 +107,145 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     });
   });
 
+  it("reads a consistent app-scoped run detail and chronological durable timeline", async () => {
+    const durlo = new Durlo({ id: "details-app", adapter });
+    const workflow = durlo.workflow<{ value: number }, { value: number }>({
+      id: "observable-workflow",
+      retry: { attempts: 3, backoff: { type: "fixed", delay: 0 } },
+      run: async ({ attempt, input, step }) => {
+        const checkpoint = await step.run("checkpoint", async () => ({ value: input.value * 2 }));
+        if (attempt.number === 1) throw new Error("retry me");
+        await step.sleep("brief-pause", 0);
+        return checkpoint;
+      }
+    });
+    const handle = await workflow.start({ value: 21 });
+    const worker = durlo.worker({ workflows: [workflow], workerId: "details-worker" });
+
+    expect(await worker.runOnce()).toBe(1);
+    expect(await worker.runOnce()).toBe(1);
+    expect(await worker.runOnce()).toBe(1);
+
+    const details = await durlo.runs.getDetails(handle);
+    expect(details).toMatchObject({
+      run: {
+        id: handle.id,
+        input: { value: 21 },
+        output: { value: 42 },
+        error: null,
+        status: "completed"
+      },
+      steps: [
+        {
+          stepId: "checkpoint",
+          status: "completed",
+          result: { value: 42 }
+        }
+      ],
+      timers: [{ stepId: "brief-pause", status: "fired" }],
+      diagnostics: {
+        failureCount: 1,
+        failedAttempts: 1,
+        retryCount: 1,
+        stalledAttempts: 0,
+        leaseLossCount: 0,
+        timerLagMs: 0
+      }
+    });
+    expect(
+      details?.attempts
+        .filter(({ kind }) => kind === "run")
+        .map(({ attemptNumber, status }) => [attemptNumber, status])
+    ).toEqual([
+      [1, "failed"],
+      [2, "succeeded"],
+      [3, "succeeded"]
+    ]);
+    expect(details?.timeline.map(({ type }) => type)).toEqual(
+      expect.arrayContaining([
+        "run_created",
+        "step_created",
+        "step_completed",
+        "run_attempt_failed",
+        "timer_scheduled",
+        "timer_fired",
+        "run_completed"
+      ])
+    );
+    expect(
+      details?.timeline.every(
+        (event, index, timeline) => index === 0 || timeline[index - 1]!.at <= event.at
+      )
+    ).toBe(true);
+
+    const otherApp = new Durlo({ id: "other-details-app", adapter });
+    await expect(otherApp.runs.getDetails(handle.id)).resolves.toBeNull();
+  });
+
+  it("surfaces reclaimed lease loss as a stalled durable attempt", async () => {
+    const durlo = new Durlo({ id: "details-app", adapter });
+    const task = durlo.task({
+      id: "stalled-details",
+      retry: { attempts: 2 },
+      run: async () => "recovered"
+    });
+    const handle = await task.enqueue({});
+    await adapter.claimRuns({
+      appId: durlo.id,
+      workerId: "crashed-worker",
+      limit: 1,
+      leaseDuration: 10_000,
+      resources: [{ kind: "task", resourceId: task.id, resourceVersion: task.version }]
+    });
+    await adapter.pool.query(
+      "update durlo_runs set locked_until = now() - interval '1 second' where id = $1",
+      [handle.id]
+    );
+
+    expect(await durlo.worker({ tasks: [task], workerId: "recovery-worker" }).runOnce()).toBe(1);
+    const details = await durlo.runs.getDetails(handle);
+    expect(details?.diagnostics).toMatchObject({
+      failureCount: 1,
+      stalledAttempts: 1,
+      retryCount: 1,
+      leaseLossCount: 1,
+      hasExpiredLease: false
+    });
+    expect(details?.timeline.map(({ type }) => type)).toContain("run_attempt_stalled");
+    expect(details?.attempts.map(({ workerId, status }) => [workerId, status])).toEqual([
+      ["crashed-worker", "stalled"],
+      ["recovery-worker", "succeeded"]
+    ]);
+  });
+
+  it("keeps terminal errors in attempt history across a visible manual retry", async () => {
+    const durlo = new Durlo({ id: "details-app", adapter });
+    const task = durlo.task({
+      id: "manual-retry-details",
+      retry: { attempts: 1 },
+      run: async () => {
+        throw new Error("original failure");
+      }
+    });
+    const handle = await task.enqueue({ operation: "charge" });
+    expect(await durlo.worker({ tasks: [task] }).runOnce()).toBe(1);
+    await durlo.runs.retry(handle);
+
+    const details = await durlo.runs.getDetails(handle);
+    expect(details).toMatchObject({
+      run: { status: "pending", error: null, input: { operation: "charge" } },
+      attempts: [
+        {
+          kind: "run",
+          status: "failed",
+          error: { name: "Error", message: "original failure" }
+        }
+      ],
+      diagnostics: { failureCount: 1, retryCount: 1 }
+    });
+    expect(details?.timeline.map(({ type }) => type)).toContain("run_manual_retry_scheduled");
+  });
+
   it("resumes a sleeping workflow only on its exact compatible version", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const oldWorkflow = durlo.workflow({

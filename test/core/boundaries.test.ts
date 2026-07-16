@@ -40,6 +40,7 @@ function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
     created,
     ...transactional,
     getRun: async () => null,
+    getRunDetails: async () => null,
     listRuns: async () => [],
     cancelRun: unused,
     retryRun: unused,
