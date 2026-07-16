@@ -82,6 +82,37 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  examples/webhook-relay:
+    dependencies:
+      '@durlo/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@durlo/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@durlo/postgres':
+        specifier: workspace:*
+        version: link:../../packages/postgres
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      tsx:
+        specifier: ^4.23.0
+        version: 4.23.0
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.0
+        version: 22.20.0
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+      eslint:
+        specifier: ^9.39.4
+        version: 9.39.4
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/cli:
     dependencies:
       '@durlo/core':
