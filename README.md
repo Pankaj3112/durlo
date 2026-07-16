@@ -26,7 +26,7 @@ Start here:
 
 ## Current Status
 
-The execution foundation and Phase 1 hardening are implemented. Phase 2 is in progress: deployment compatibility, bounded missing-code diagnostics, explicit storage limits, manual retention, and migration upgrade coverage are implemented. Query benchmarks and operational sizing guidance remain before observability, the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
+The execution foundation, Phase 1 hardening, and Phase 2 deployment and storage safety are implemented. Durlo now has version-safe rolling deployment behavior, bounded missing-code diagnostics, explicit storage limits, manual retention, immutable migration checks, a measured Postgres query envelope, and operational sizing guidance. Phase 3 observability is next before the CLI, dashboard, and demo. See the [roadmap](docs/ROADMAP.md).
 
 Run the complete suite with a disposable local PostgreSQL 17 container:
 

@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phase 1 execution hardening is complete. Phase 2 deployment and storage safety is in progress before observability and product UI.
+Phase 1 execution hardening and Phase 2 deployment and storage safety are complete. Phase 3 observability is next before the product UI.
 
 ## Phase 1: Execution Hardening
 
@@ -76,7 +76,7 @@ Status: Complete
 
 ## Phase 2: Deployment And Storage Safety
 
-Status: In Progress
+Status: Complete
 
 ### Progress
 
@@ -88,6 +88,10 @@ Status: In Progress
 - Inputs, outputs, errors, batches, step results, and total workflow step/sleep records now have documented configurable limits that fail before oversized JSON is persisted.
 - `durlo.runs.cleanup()` manually deletes bounded, app-scoped terminal history with row-lock safety; Durlo does not schedule cleanup itself.
 - Retention now explicitly defines the idempotency window: a key remains reserved until its run row is actually deleted.
+- A reproducible Postgres benchmark seeds 50,000 runs, verifies the intended claim, attempt, and timer indexes, and enforces a configurable query-latency envelope.
+- Claim selection now scans expired leases before pending work inside one transaction, removing the combined eligible-set sort while preserving expired-first ordering and `SKIP LOCKED` safety.
+- [Postgres Performance](PERFORMANCE.md) records the 50,000- and 500,000-run measurements; [Postgres Operations](OPERATIONS.md) defines pool, concurrency, polling, lease, and fleet connection guidance.
+- Released migration SQL is protected by immutable checksums, with upgrade tests from every Phase 2 schema prefix.
 
 ### Outcomes
 
