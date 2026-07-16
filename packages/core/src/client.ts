@@ -19,8 +19,13 @@ import type {
   RetentionCleanupOptions,
   RetentionCleanupResult,
   RunHandle,
+  RunKind,
+  RunListCursor,
+  RunListOptions,
+  RunListPage,
   RunOptions,
   RunRecord,
+  RunStatus,
   TaskDefinition,
   TaskDefinitionOptions,
   TransactionalDurloAdapter,
@@ -53,11 +58,56 @@ function isBatchItem<T>(item: T | BatchItem<T>): item is BatchItem<T> {
   return Object.keys(item).every((key) => key === "input" || key === "options");
 }
 
+const RUN_STATUSES = new Set<RunStatus>([
+  "pending",
+  "running",
+  "sleeping",
+  "completed",
+  "failed",
+  "dead_letter",
+  "cancelled"
+]);
+const RUN_KINDS = new Set<RunKind>(["task", "workflow"]);
+
+function normalizeListDate(value: Date | string | number | undefined, label: string): Date | null {
+  if (value === undefined) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new ValidationError(`${label} must be a valid date`);
+  return date;
+}
+
+function decodeRunCursor(value: string | undefined): RunListCursor | null {
+  if (value === undefined) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (!decoded || typeof decoded !== "object") throw new Error("invalid cursor shape");
+    const candidate = decoded as { version?: unknown; createdAt?: unknown; id?: unknown };
+    if (candidate.version !== 1 || typeof candidate.createdAt !== "string") {
+      throw new Error("unsupported cursor version");
+    }
+    if (typeof candidate.id !== "string" || candidate.id.length === 0) {
+      throw new Error("invalid cursor id");
+    }
+    const createdAt = new Date(candidate.createdAt);
+    if (!Number.isFinite(createdAt.getTime())) throw new Error("invalid cursor date");
+    return { createdAt, id: candidate.id };
+  } catch {
+    throw new ValidationError("run list cursor is invalid");
+  }
+}
+
+function encodeRunCursor(cursor: RunListCursor): string {
+  return Buffer.from(
+    JSON.stringify({ version: 1, createdAt: cursor.createdAt.toISOString(), id: cursor.id })
+  ).toString("base64url");
+}
+
 export class Durlo {
   readonly id: string;
   readonly adapter: DurloAdapter;
   readonly runs: {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
+    list: (options?: RunListOptions) => Promise<RunListPage>;
     cancel: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     retry: (handleOrId: RunHandle | string) => Promise<RunRecord>;
     cleanup: (options: RetentionCleanupOptions) => Promise<RetentionCleanupResult>;
@@ -82,6 +132,7 @@ export class Durlo {
       typeof value === "string" ? value : value.id;
     this.runs = {
       get: (value) => this.adapter.getRun({ appId: this.id, runId: getId(value) }),
+      list: (listOptions) => this.listRuns(listOptions),
       cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
       retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) }),
       cleanup: (cleanupOptions) => this.cleanupRuns(cleanupOptions)
@@ -303,6 +354,55 @@ export class Durlo {
       throw new ValidationError("retention cleanup accepts only terminal run statuses");
     }
     return this.adapter.cleanupRuns({ appId: this.id, olderThan, limit, statuses });
+  }
+
+  private async listRuns(options: RunListOptions = {}): Promise<RunListPage> {
+    const limit = options.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new ValidationError("run list limit must be an integer from 1 to 200");
+    }
+    const statuses = options.statuses ?? [];
+    if (
+      new Set(statuses).size !== statuses.length ||
+      statuses.some((status) => !RUN_STATUSES.has(status))
+    ) {
+      throw new ValidationError("run list statuses must be unique valid run statuses");
+    }
+    const kinds = options.kinds ?? [];
+    if (new Set(kinds).size !== kinds.length || kinds.some((kind) => !RUN_KINDS.has(kind))) {
+      throw new ValidationError("run list kinds must be unique valid run kinds");
+    }
+    if (options.resourceId !== undefined) validateId(options.resourceId, "resource id filter");
+    const resourceVersion =
+      options.resourceVersion === undefined
+        ? null
+        : normalizeResourceVersion(options.resourceVersion, "resource version filter");
+    const createdAfter = normalizeListDate(options.createdAfter, "createdAfter");
+    const createdBefore = normalizeListDate(options.createdBefore, "createdBefore");
+    if (createdAfter && createdBefore && createdAfter >= createdBefore) {
+      throw new ValidationError("createdAfter must be earlier than createdBefore");
+    }
+
+    const fetched = await this.adapter.listRuns({
+      appId: this.id,
+      limit: limit + 1,
+      cursor: decodeRunCursor(options.cursor),
+      statuses,
+      kinds,
+      resourceId: options.resourceId ?? null,
+      resourceVersion,
+      createdAfter,
+      createdBefore
+    });
+    const runs = fetched.slice(0, limit);
+    const last = runs.at(-1);
+    return {
+      runs,
+      nextCursor:
+        fetched.length > limit && last
+          ? encodeRunCursor({ createdAt: last.createdAt, id: last.id })
+          : null
+    };
   }
 
   private async createRun<TInput, TOutput>(

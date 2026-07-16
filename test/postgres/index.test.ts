@@ -54,6 +54,59 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(record?.scheduledAt.toISOString()).toBe("2030-01-01T00:00:00.000Z");
   });
 
+  it("lists app-scoped runs with stable keyset pagination and filters", async () => {
+    const durlo = new Durlo({ id: "list-app", adapter });
+    const emailV1 = durlo.task({ id: "email", version: "1", run: async () => undefined });
+    const emailV2 = durlo.task({ id: "email", version: "2", run: async () => undefined });
+    const workflow = durlo.workflow({ id: "onboarding", run: async () => undefined });
+    const first = await emailV1.enqueue({ secret: "one" });
+    const second = await emailV2.enqueue({ secret: "two" });
+    const third = await workflow.start({ secret: "three" });
+    const otherDurlo = new Durlo({ id: "other-list-app", adapter });
+    const otherTask = otherDurlo.task({ id: "email", run: async () => undefined });
+    await otherTask.enqueue({ secret: "hidden" });
+
+    await adapter.pool.query(
+      `update durlo_runs
+       set created_at = case
+         when id = any($1::text[]) then '2026-07-16T10:00:00.000Z'::timestamptz
+         else '2026-07-15T10:00:00.000Z'::timestamptz
+       end
+       where id = any($2::text[])`,
+      [
+        [first.id, second.id],
+        [first.id, second.id, third.id]
+      ]
+    );
+    const expectedNewest = [first.id, second.id].sort().reverse();
+
+    const pageOne = await durlo.runs.list({ limit: 2 });
+    expect(pageOne.runs.map(({ id }) => id)).toEqual(expectedNewest);
+    expect(pageOne.nextCursor).toEqual(expect.any(String));
+    expect(pageOne.runs[0]).not.toHaveProperty("input");
+
+    const pageTwo = await durlo.runs.list({ limit: 2, cursor: pageOne.nextCursor! });
+    expect(pageTwo.runs.map(({ id }) => id)).toEqual([third.id]);
+    expect(pageTwo.nextCursor).toBeNull();
+    expect(new Set([...pageOne.runs, ...pageTwo.runs].map(({ id }) => id)).size).toBe(3);
+
+    await expect(
+      durlo.runs.list({ kinds: ["task"], resourceId: "email", resourceVersion: "2" })
+    ).resolves.toMatchObject({ runs: [{ id: second.id, resourceVersion: "2" }] });
+    await expect(
+      durlo.runs.list({
+        statuses: ["pending"],
+        createdAfter: "2026-07-15T23:59:59.000Z",
+        createdBefore: "2026-07-17T00:00:00.000Z"
+      })
+    ).resolves.toMatchObject({
+      runs: expect.arrayContaining([
+        expect.objectContaining({ id: first.id }),
+        expect.objectContaining({ id: second.id })
+      ])
+    });
+  });
+
   it("resumes a sleeping workflow only on its exact compatible version", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const oldWorkflow = durlo.workflow({

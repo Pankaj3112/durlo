@@ -13,6 +13,7 @@ function createWorkerAdapter(): DurloAdapter {
   return {
     ...transactional,
     getRun: unsupported,
+    listRuns: unsupported,
     cancelRun: unsupported,
     retryRun: unsupported,
     cleanupRuns: vi.fn(async () => ({ deletedRuns: 0, deletedRunIds: [], limitReached: false })),

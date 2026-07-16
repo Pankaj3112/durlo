@@ -118,5 +118,21 @@ export const migrations: readonly Migration[] = [
         on durlo_runs (app_id, updated_at, id)
         where status in ('completed', 'failed', 'dead_letter', 'cancelled');
     `
+  },
+  {
+    version: "0004_observability_reads",
+    sql: `
+      create index durlo_runs_list_idx
+        on durlo_runs (app_id, created_at desc, id desc);
+      create index durlo_runs_status_list_idx
+        on durlo_runs (app_id, status, kind, created_at desc, id desc);
+      create index durlo_runs_resource_list_idx
+        on durlo_runs (app_id, resource_id, resource_version, kind, created_at desc, id desc);
+      create index durlo_runs_active_health_idx
+        on durlo_runs (app_id, status, scheduled_at, created_at)
+        where status in ('pending', 'running', 'sleeping');
+      create index durlo_timers_run_idx
+        on durlo_timers (run_id, created_at);
+    `
   }
 ];

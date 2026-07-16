@@ -102,6 +102,58 @@ export type RunHandle<TOutput = unknown> = Pick<
   "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
 
+export type RunSummary = Pick<
+  RunRecord,
+  | "id"
+  | "kind"
+  | "resourceId"
+  | "resourceVersion"
+  | "status"
+  | "priority"
+  | "scheduledAt"
+  | "attemptCount"
+  | "maxAttempts"
+  | "stalledCount"
+  | "createdAt"
+  | "updatedAt"
+  | "startedAt"
+  | "completedAt"
+  | "cancelledAt"
+>;
+
+export type RunListOptions = {
+  limit?: number;
+  cursor?: string;
+  statuses?: RunStatus[];
+  kinds?: RunKind[];
+  resourceId?: string;
+  resourceVersion?: string;
+  createdAfter?: Date | string | number;
+  createdBefore?: Date | string | number;
+};
+
+export type RunListPage = {
+  runs: RunSummary[];
+  nextCursor: string | null;
+};
+
+export type RunListCursor = {
+  createdAt: Date;
+  id: string;
+};
+
+export type RunListInput = {
+  appId: string;
+  limit: number;
+  cursor: RunListCursor | null;
+  statuses: RunStatus[];
+  kinds: RunKind[];
+  resourceId: string | null;
+  resourceVersion: string | null;
+  createdAfter: Date | null;
+  createdBefore: Date | null;
+};
+
 export type ClaimedRun = RunRecord & {
   status: "running";
   lockedBy: string;
@@ -232,6 +284,7 @@ export interface TransactionalDurloAdapter {
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
+  listRuns(input: RunListInput): Promise<RunSummary[]>;
   cancelRun(input: AppRunInput): Promise<RunRecord>;
   retryRun(input: AppRunInput): Promise<RunRecord>;
   cleanupRuns(input: RetentionCleanupInput): Promise<RetentionCleanupResult>;

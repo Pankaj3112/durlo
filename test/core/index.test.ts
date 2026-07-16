@@ -55,6 +55,7 @@ function createAdapter(): DurloAdapter & {
     created,
     ...transactional,
     getRun: async () => null,
+    listRuns: async () => [],
     cancelRun: async () => {
       throw new Error("not implemented by test adapter");
     },
@@ -242,6 +243,87 @@ describe("Durlo core API", () => {
       statuses: ["completed"],
       limit: 25
     });
+  });
+
+  it("normalizes app-scoped run listing and returns an opaque keyset cursor", async () => {
+    const adapter = createAdapter();
+    const newer = recordFromInput({
+      id: "run-z",
+      appId: "scoped-app",
+      kind: "task",
+      resourceId: "email",
+      resourceVersion: "2",
+      input: {},
+      options: {},
+      idempotencyKey: null,
+      priority: 0,
+      scheduledAt: new Date("2026-07-16T10:00:00.000Z"),
+      maxAttempts: 3
+    });
+    newer.createdAt = new Date("2026-07-16T10:00:00.000Z");
+    const older = { ...newer, id: "run-a" };
+    const listRuns = vi.spyOn(adapter, "listRuns").mockResolvedValue([newer, older]);
+    const durlo = new Durlo({ id: "scoped-app", adapter });
+
+    const first = await durlo.runs.list({
+      limit: 1,
+      statuses: ["pending"],
+      kinds: ["task"],
+      resourceId: "email",
+      resourceVersion: "2",
+      createdAfter: "2026-07-01",
+      createdBefore: new Date("2026-08-01")
+    });
+
+    expect(first.runs).toEqual([newer]);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(listRuns).toHaveBeenCalledWith({
+      appId: "scoped-app",
+      limit: 2,
+      cursor: null,
+      statuses: ["pending"],
+      kinds: ["task"],
+      resourceId: "email",
+      resourceVersion: "2",
+      createdAfter: new Date("2026-07-01"),
+      createdBefore: new Date("2026-08-01")
+    });
+
+    listRuns.mockResolvedValue([]);
+    await durlo.runs.list({ cursor: first.nextCursor! });
+    expect(listRuns).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        appId: "scoped-app",
+        limit: 51,
+        cursor: { createdAt: newer.createdAt, id: newer.id }
+      })
+    );
+  });
+
+  it("rejects invalid run listing options before storage", async () => {
+    const adapter = createAdapter();
+    const listRuns = vi.spyOn(adapter, "listRuns");
+    const durlo = new Durlo({ id: "list-app", adapter });
+    const invalid = [
+      { limit: 0 },
+      { limit: 201 },
+      { cursor: "not-a-cursor" },
+      { statuses: ["pending", "pending"] },
+      { statuses: ["unknown"] },
+      { kinds: ["task", "task"] },
+      { kinds: ["event"] },
+      { resourceId: "" },
+      { resourceVersion: " version" },
+      { createdAfter: "invalid" },
+      { createdAfter: "2026-08-01", createdBefore: "2026-07-01" }
+    ];
+
+    for (const options of invalid) {
+      await expect(
+        durlo.runs.list(options as Parameters<typeof durlo.runs.list>[0])
+      ).rejects.toBeInstanceOf(ValidationError);
+    }
+    expect(listRuns).not.toHaveBeenCalled();
   });
 
   it("validates bounded retention cleanup options before calling storage", async () => {

@@ -11,8 +11,10 @@ import type {
   RetentionCleanupInput,
   RetentionCleanupResult,
   RunKind,
+  RunListInput,
   RunRecord,
   RunStatus,
+  RunSummary,
   SerializedError,
   StepInput,
   StepRecord,
@@ -73,6 +75,24 @@ type StepRow = QueryResultRow & {
   updated_at: Date;
   started_at: Date | null;
   completed_at: Date | null;
+};
+
+type RunSummaryRow = QueryResultRow & {
+  id: string;
+  kind: RunKind;
+  resource_id: string;
+  resource_version: string;
+  status: RunStatus;
+  priority: number;
+  scheduled_at: Date;
+  attempt_count: number;
+  max_attempts: number;
+  stalled_count: number;
+  created_at: Date;
+  updated_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+  cancelled_at: Date | null;
 };
 
 type TimerRow = QueryResultRow & {
@@ -138,6 +158,26 @@ function mapStep(row: StepRow): StepRecord {
   };
 }
 
+function mapRunSummary(row: RunSummaryRow): RunSummary {
+  return {
+    id: row.id,
+    kind: row.kind,
+    resourceId: row.resource_id,
+    resourceVersion: row.resource_version,
+    status: row.status,
+    priority: row.priority,
+    scheduledAt: row.scheduled_at,
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    stalledCount: row.stalled_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    cancelledAt: row.cancelled_at
+  };
+}
+
 function mapTimer(row: TimerRow): TimerRecord {
   return {
     id: row.id,
@@ -161,6 +201,12 @@ const RUN_COLUMNS = `
 const STEP_COLUMNS = `
   id, run_id, step_id, status, result_json, error_json, options_json,
   attempt_count, max_attempts, created_at, updated_at, started_at, completed_at
+`;
+
+const RUN_SUMMARY_COLUMNS = `
+  id, kind, resource_id, resource_version, status, priority, scheduled_at,
+  attempt_count, max_attempts, stalled_count, created_at, updated_at, started_at,
+  completed_at, cancelled_at
 `;
 
 const TIMER_COLUMNS = `id, run_id, step_id, fire_at, status, created_at, fired_at, cancelled_at`;
@@ -249,6 +295,44 @@ export class PostgresAdapter implements DurloAdapter {
       [input.appId, input.runId]
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
+  }
+
+  async listRuns(input: RunListInput): Promise<RunSummary[]> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
+      throw new ValidationError("run list limit must be an integer from 1 to 1000");
+    }
+    const result = await this.query()<RunSummaryRow>(
+      `
+        select ${RUN_SUMMARY_COLUMNS}
+        from durlo_runs
+        where app_id = $1
+          and (cardinality($2::text[]) = 0 or status = any($2::text[]))
+          and (cardinality($3::text[]) = 0 or kind = any($3::text[]))
+          and ($4::text is null or resource_id = $4)
+          and ($5::text is null or resource_version = $5)
+          and ($6::timestamptz is null or created_at > $6)
+          and ($7::timestamptz is null or created_at < $7)
+          and (
+            $8::timestamptz is null
+            or (created_at, id) < ($8::timestamptz, $9::text)
+          )
+        order by created_at desc, id desc
+        limit $10
+      `,
+      [
+        input.appId,
+        input.statuses,
+        input.kinds,
+        input.resourceId,
+        input.resourceVersion,
+        input.createdAfter,
+        input.createdBefore,
+        input.cursor?.createdAt ?? null,
+        input.cursor?.id ?? null,
+        input.limit
+      ]
+    );
+    return result.rows.map(mapRunSummary);
   }
 
   async cleanupRuns(input: RetentionCleanupInput): Promise<RetentionCleanupResult> {

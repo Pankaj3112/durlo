@@ -53,7 +53,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       expect(versions.rows).toEqual([
         { version: "0001_initial", count: "1" },
         { version: "0002_resource_versions", count: "1" },
-        { version: "0003_retention_cleanup", count: "1" }
+        { version: "0003_retention_cleanup", count: "1" },
+        { version: "0004_observability_reads", count: "1" }
       ]);
 
       const tables = await admin.pool.query<{ count: string }>(
@@ -99,7 +100,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       expect(versions.rows).toEqual([
         { version: "0001_initial" },
         { version: "0002_resource_versions" },
-        { version: "0003_retention_cleanup" }
+        { version: "0003_retention_cleanup" },
+        { version: "0004_observability_reads" }
       ]);
     } finally {
       await adapter.close();
@@ -135,7 +137,56 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       expect(versions.rows).toEqual([
         { version: "0001_initial" },
         { version: "0002_resource_versions" },
-        { version: "0003_retention_cleanup" }
+        { version: "0003_retention_cleanup" },
+        { version: "0004_observability_reads" }
+      ]);
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("upgrades a 0003 schema with indexed observability reads", async () => {
+    const schema = await createSchema();
+    const adapter = schemaAdapter(schema);
+    try {
+      for (const migration of migrations.slice(0, 3)) {
+        await adapter.pool.query(migration.sql);
+      }
+      await adapter.pool.query(`
+        create table durlo_schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
+      await adapter.pool.query(
+        `insert into durlo_schema_migrations (version)
+         values ('0001_initial'), ('0002_resource_versions'), ('0003_retention_cleanup')`
+      );
+
+      await adapter.migrate();
+
+      const indexes = await adapter.pool.query<{ index_name: string }>(
+        `select indexname as index_name
+         from pg_indexes
+         where schemaname = current_schema()
+           and indexname = any($1::text[])
+         order by indexname`,
+        [
+          [
+            "durlo_runs_active_health_idx",
+            "durlo_runs_list_idx",
+            "durlo_runs_resource_list_idx",
+            "durlo_runs_status_list_idx",
+            "durlo_timers_run_idx"
+          ]
+        ]
+      );
+      expect(indexes.rows.map(({ index_name }) => index_name)).toEqual([
+        "durlo_runs_active_health_idx",
+        "durlo_runs_list_idx",
+        "durlo_runs_resource_list_idx",
+        "durlo_runs_status_list_idx",
+        "durlo_timers_run_idx"
       ]);
     } finally {
       await adapter.close();
@@ -160,7 +211,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("3");
+      expect(applied.rows[0]?.count).toBe("4");
     } finally {
       await adapter.close();
     }
