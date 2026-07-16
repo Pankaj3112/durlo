@@ -32,6 +32,18 @@ CI and nightly jobs begin with a clean GitHub checkout and a frozen lockfile. Au
 coverage are retained as workflow artifacts. A release candidate is not supported on a new runtime
 or database major merely because installation succeeds; the declared matrix must pass first.
 
+The Phase 5 candidate at commit `94e82b5` was run from a clean worktree across all six boundary
+cells on 2026-07-16:
+
+```txt
+Node.js 22.23.1, 24.18.0, 26.5.0 × PostgreSQL 14.23, 18.4
+```
+
+Every cell passed the release-contract check, build, packed ESM/CommonJS/TypeScript consumer,
+133-test coverage suite, packed crash-and-resume quickstart, restricted-role test, and 50-seed
+durability stress suite. The same matrix remains automated nightly so later dependency and runtime
+patch changes must continue to pass.
+
 ## Automated Durability Evidence
 
 The following tests use the public execution model and real PostgreSQL transactions:

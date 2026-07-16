@@ -180,7 +180,7 @@ Status: In Progress
 - A TCP-level database outage test severs active and idle worker connections, verifies the process remains alive, observes lease loss, restores polling, and reclaims the expired attempt.
 - Due-timer lag drains independently while every execution slot is occupied.
 - A Postgres integration scenario covers a sleeping old workflow, new-version-only deployment, mixed-version resume, idempotency across the version change, and rollback availability.
-- Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. Nightly tests Node 22, 24, and 26 against both database boundaries.
+- Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. The clean six-cell boundary audit passed on Node 22.23.1, 24.18.0, and 26.5.0 against PostgreSQL 14.23 and 18.4, and the same matrix runs nightly.
 - Immutable migrations and every schema-prefix upgrade are tested. Empty ESM, CommonJS, and strict TypeScript consumers verify the exact tarball contents, exports, CLI binary, migrations, and packed crash-and-resume quickstart.
 - [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and real-application evidence protocol.
 - No qualifying operating reports from two real applications are recorded yet; repository tests and examples intentionally do not count toward that gate.
