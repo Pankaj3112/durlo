@@ -505,6 +505,58 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     }
   });
 
+  it("skips a locked expired lease while reclaiming another", async () => {
+    const durlo = new Durlo({ id: "integration", adapter });
+    const task = durlo.task({ id: "skip-locked-expired", run: async () => undefined });
+    await task.batchEnqueue([
+      { input: { value: 1 }, options: { priority: 100 } },
+      { input: { value: 2 }, options: { priority: 0 } }
+    ]);
+    const resources = [{ kind: "task" as const, resourceId: task.id }];
+    await adapter.claimRuns({
+      appId: "integration",
+      workerId: "expired-owner",
+      limit: 2,
+      leaseDuration: 10_000,
+      resources
+    });
+    await adapter.pool.query(
+      `update durlo_runs set locked_until = now() - interval '1 second'
+       where resource_id = 'skip-locked-expired'`
+    );
+    const lockingClient = await adapter.pool.connect();
+    let claimPromise: ReturnType<typeof adapter.claimRuns> | undefined;
+
+    try {
+      await lockingClient.query("begin");
+      const locked = await lockingClient.query<{ id: string }>(
+        `select id from durlo_runs
+         where resource_id = 'skip-locked-expired'
+         order by priority desc, scheduled_at, created_at, id
+         for update limit 1`
+      );
+
+      claimPromise = adapter.claimRuns({
+        appId: "integration",
+        workerId: "expired-reclaimer",
+        limit: 1,
+        leaseDuration: 10_000,
+        resources
+      });
+      const timeout = new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("expired claim blocked on a row lock")), 1_000).unref();
+      });
+      const [claim] = await Promise.race([claimPromise, timeout]);
+
+      expect(claim).toBeDefined();
+      expect(claim?.id).not.toBe(locked.rows[0]?.id);
+    } finally {
+      await lockingClient.query("rollback");
+      lockingClient.release();
+      await claimPromise?.catch(() => undefined);
+    }
+  });
+
   it("rejects every ownership-sensitive write with the wrong worker or lease token", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "owned-write-task", run: async () => undefined });

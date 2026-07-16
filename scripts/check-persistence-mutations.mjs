@@ -37,18 +37,40 @@ const mutations = [
     test: "rejects every ownership-sensitive write"
   },
   {
-    name: "claims skip locked rows",
+    name: "expired claims skip locked rows",
     occurrence: 0,
-    search: "for update skip locked",
-    replacement: "for update",
+    search: `and status = 'running' and locked_until < now()
+          order by
+            priority desc,
+            scheduled_at asc,
+            created_at asc
+          for update skip locked`,
+    replacement: `and status = 'running' and locked_until < now()
+          order by
+            priority desc,
+            scheduled_at asc,
+            created_at asc
+          for update`,
+    file: "test/postgres/index.test.ts",
+    test: "skips a locked expired lease"
+  },
+  {
+    name: "pending claims skip locked rows",
+    occurrence: 0,
+    search: `and status = 'pending' and scheduled_at <= now()
+                order by priority desc, scheduled_at asc, created_at asc
+                for update skip locked`,
+    replacement: `and status = 'pending' and scheduled_at <= now()
+                order by priority desc, scheduled_at asc, created_at asc
+                for update`,
     file: "test/postgres/index.test.ts",
     test: "skips a claimable row locked"
   },
   {
     name: "only expired running rows are reclaimed",
     occurrence: 0,
-    search: "(status = 'running' and locked_until < now())",
-    replacement: "(status = 'running' and locked_until > now())",
+    search: "status = 'running' and locked_until < now()",
+    replacement: "status = 'running' and locked_until > now()",
     file: "test/postgres/index.test.ts",
     test: "reclaims expired leases"
   }
@@ -179,7 +201,9 @@ function testDiagnostics(result) {
       const report = JSON.parse(stdout);
       const failures = (report.testResults ?? []).flatMap((testResult) => [
         testResult.message,
-        ...(testResult.assertionResults ?? []).flatMap(({ failureMessages = [] }) => failureMessages)
+        ...(testResult.assertionResults ?? []).flatMap(
+          ({ failureMessages = [] }) => failureMessages
+        )
       ]);
       stdout = [
         `Vitest tests: ${report.numPassedTests ?? 0} passed, ${report.numFailedTests ?? 0} failed, ${report.numPendingTests ?? 0} pending`,
