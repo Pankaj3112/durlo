@@ -349,6 +349,176 @@ describe("Durlo core API", () => {
     });
   });
 
+  it("explains terminal steps, cancelled timers, manual attempts, and released claims", async () => {
+    const adapter = createAdapter();
+    const at = (seconds: number) => new Date(1_752_652_800_000 + seconds * 1_000);
+    const makeRun = (id: string): RunRecord =>
+      recordFromInput({
+        id,
+        appId: "edge-details",
+        kind: "task",
+        resourceId: "edge-task",
+        resourceVersion: "1",
+        input: {},
+        options: {},
+        idempotencyKey: null,
+        priority: 0,
+        scheduledAt: at(0),
+        maxAttempts: 1
+      });
+
+    const cancelledRun = makeRun("cancelled-run");
+    cancelledRun.status = "cancelled";
+    cancelledRun.createdAt = at(0);
+    cancelledRun.cancelledAt = at(5);
+    const cancelled = {
+      run: cancelledRun,
+      steps: [
+        {
+          id: "failed-step-record",
+          runId: cancelledRun.id,
+          stepId: "failed-step",
+          status: "failed",
+          result: null,
+          error: { name: "Error", message: "step failed" },
+          options: {},
+          attemptCount: 1,
+          maxAttempts: 1,
+          createdAt: at(1),
+          updatedAt: at(3),
+          startedAt: at(2),
+          completedAt: at(3)
+        }
+      ],
+      attempts: [
+        {
+          id: "cancelled-run-attempt",
+          runId: cancelledRun.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 1,
+          status: "cancelled",
+          workerId: null,
+          error: null,
+          startedAt: at(1),
+          completedAt: at(5)
+        },
+        {
+          id: "failed-step-attempt",
+          runId: cancelledRun.id,
+          stepId: "failed-step",
+          kind: "step",
+          attemptNumber: 1,
+          status: "failed",
+          workerId: "edge-worker",
+          error: { name: "Error", message: "step failed" },
+          startedAt: at(2),
+          completedAt: at(3)
+        }
+      ],
+      timers: [
+        {
+          id: "cancelled-timer",
+          runId: cancelledRun.id,
+          stepId: "cancelled-sleep",
+          fireAt: at(10),
+          status: "cancelled",
+          createdAt: at(1),
+          firedAt: null,
+          cancelledAt: at(4)
+        }
+      ],
+      checkedAt: at(20)
+    } satisfies StoredRunDetails;
+
+    const deadRun = makeRun("dead-run");
+    deadRun.status = "dead_letter";
+    deadRun.error = { name: "Error", message: "manual attempt failed" };
+    deadRun.createdAt = at(0);
+    deadRun.completedAt = at(6);
+    deadRun.attemptCount = 2;
+    const dead = {
+      run: deadRun,
+      steps: [],
+      attempts: [
+        {
+          id: "dead-attempt-1",
+          runId: deadRun.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 1,
+          status: "failed",
+          workerId: null,
+          error: { name: "Error", message: "automatic attempt failed" },
+          startedAt: at(1),
+          completedAt: at(2)
+        },
+        {
+          id: "dead-attempt-2",
+          runId: deadRun.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 2,
+          status: "failed",
+          workerId: "manual-worker",
+          error: { name: "Error", message: "manual attempt failed" },
+          startedAt: at(4),
+          completedAt: at(6)
+        }
+      ],
+      timers: [],
+      checkedAt: at(7)
+    } satisfies StoredRunDetails;
+
+    const releasedRun = makeRun("released-run");
+    releasedRun.createdAt = at(0);
+    releasedRun.updatedAt = at(3);
+    const released = {
+      run: releasedRun,
+      steps: [],
+      attempts: [
+        {
+          id: "released-attempt",
+          runId: releasedRun.id,
+          stepId: null,
+          kind: "run",
+          attemptNumber: 1,
+          status: "cancelled",
+          workerId: "stopping-worker",
+          error: null,
+          startedAt: at(1),
+          completedAt: at(3)
+        }
+      ],
+      timers: [],
+      checkedAt: at(4)
+    } satisfies StoredRunDetails;
+
+    vi.spyOn(adapter, "getRunDetails")
+      .mockResolvedValueOnce(cancelled)
+      .mockResolvedValueOnce(dead)
+      .mockResolvedValueOnce(released);
+    const durlo = new Durlo({ id: "edge-details", adapter });
+
+    expect(
+      (await durlo.runs.getDetails(cancelledRun.id))?.timeline.map(({ type }) => type)
+    ).toEqual(
+      expect.arrayContaining([
+        "step_attempt_failed",
+        "step_failed",
+        "timer_cancelled",
+        "run_attempt_cancelled",
+        "run_cancelled"
+      ])
+    );
+    expect((await durlo.runs.getDetails(deadRun.id))?.timeline.map(({ type }) => type)).toEqual(
+      expect.arrayContaining(["run_manual_retry_started", "run_attempt_failed", "run_dead_letter"])
+    );
+    expect(
+      (await durlo.runs.getDetails(releasedRun.id))?.timeline.map(({ type }) => type)
+    ).toContain("run_released");
+  });
+
   it("normalizes app-scoped run listing and returns an opaque keyset cursor", async () => {
     const adapter = createAdapter();
     const newer = recordFromInput({

@@ -105,6 +105,19 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
         expect.objectContaining({ id: second.id })
       ])
     });
+    await expect(
+      adapter.listRuns({
+        appId: durlo.id,
+        limit: 0,
+        cursor: null,
+        statuses: [],
+        kinds: [],
+        resourceId: null,
+        resourceVersion: null,
+        createdAfter: null,
+        createdBefore: null
+      })
+    ).rejects.toThrow("run list limit");
   });
 
   it("reads a consistent app-scoped run detail and chronological durable timeline", async () => {
@@ -316,8 +329,27 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     expect(health.checkedAt).toBeInstanceOf(Date);
     await expect(durlo.runs.get(running)).resolves.toMatchObject({ status: "running" });
     await expect(durlo.runs.get(sleeping)).resolves.toMatchObject({ status: "sleeping" });
-    await expect(durlo.runs.getDetails(sleeping)).resolves.toMatchObject({
-      diagnostics: { timerLagMs: expect.any(Number) }
+    const sleepingDetails = await durlo.runs.getDetails(sleeping);
+    expect(sleepingDetails?.diagnostics.timerLagMs).toBeGreaterThanOrEqual(4_000);
+
+    const emptyHealth = await new Durlo({
+      id: "empty-health-app",
+      adapter
+    }).runs.getBacklogHealth();
+    expect(emptyHealth).toMatchObject({
+      runs: {
+        active: 0,
+        pending: 0,
+        ready: 0,
+        delayed: 0,
+        running: 0,
+        sleeping: 0,
+        expiredLeases: 0,
+        oldestReadyAt: null,
+        oldestReadyCreatedAt: null,
+        readyLagMs: 0
+      },
+      timers: { pending: 0, due: 0, oldestDueAt: null, lagMs: 0 }
     });
   });
 
