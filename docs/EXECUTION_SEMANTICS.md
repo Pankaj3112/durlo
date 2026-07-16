@@ -313,3 +313,6 @@ V1 does not guarantee:
 - Cron scheduling.
 - Event-driven workflow triggers.
 - Distributed global concurrency limits.
+
+The production-like crash, database-outage, timer-lag, contention, and rolling-version evidence for
+these guarantees is summarized in [Beta Release Proof](BETA_RELEASE_PROOF.md).

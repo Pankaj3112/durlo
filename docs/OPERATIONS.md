@@ -88,6 +88,35 @@ Lower intervals reduce pickup latency but increase empty-query traffic. Higher i
 
 Timer timestamps and run eligibility use Postgres `now()`. Application clock drift does not make a row early or late, but database load, pool waiting, poll interval, and available execution slots can all add observed delay.
 
+## Database And Network Outages
+
+Claim and timer-promotion loops retry transient query failures independently with bounded
+exponential backoff and jitter. The Postgres adapter keeps internal pool and checked-out-client
+error listeners so a severed idle or active `pg` connection does not become an uncaught
+`EventEmitter` error. Applications may attach their own `adapter.pool.on("error", ...)` listener for
+metrics and alerting; active operations still reject and worker health still records polling
+failures.
+
+A failed heartbeat is treated conservatively as lease loss. The worker aborts the attempt signal,
+suppresses completion through that lease token, and stops scheduling more durable steps for the
+attempt. The stored run remains `running` until its lease expires, then a compatible worker records
+the old attempt as stalled and either reclaims it or terminally exhausts its retry budget. User
+JavaScript that ignores the abort signal can continue locally, so an outage can create the same
+duplicate-effect window as a process crash.
+
+Set `leaseDuration` above expected failover, network, pool-waiting, and database-recovery pauses when
+avoiding false stalls matters more than immediate crash recovery. Do not set it so high that a real
+crash leaves work unavailable beyond the application's recovery objective.
+
+After an outage:
+
+1. Confirm claim and timer success timestamps in `worker.getHealth()` are advancing again.
+2. Check backlog health for ready lag, expired leases, due timers, and timer lag.
+3. Check the complete fleet's compatibility reports before treating an old-version row as stranded.
+4. Inspect stalled attempt history and business-side idempotency records for possible duplicates.
+5. Keep workers running until every supported eligible row is terminal, sleeping on a future timer,
+   or intentionally delayed.
+
 ## Retention And Maintenance
 
 `durlo.runs.cleanup()` uses a bounded transaction and never schedules itself. Run cleanup from an operator-controlled process, use modest batches, and pause between batches when the worker pool or database is busy. A separate adapter can isolate cleanup queueing, but its connections still count against the fleet budget.
@@ -112,3 +141,6 @@ At minimum, observe:
 Pool waiting alone is not failure; brief bursts are expected. Sustained waiting combined with heartbeat loss or increasing timer lag is the signal that the current concurrency, pool, or database budget is too small.
 
 Backlog health aggregates the active rows for one app. Poll it at an operator or dashboard cadence rather than at the worker's claim interval. Run detail and compatibility reads are bounded; run list pages are limited to 200 summaries. See [Observability](OBSERVABILITY.md) for field definitions and scope.
+
+The exact beta outage, contention, timer-lag, and long-tail scenarios are recorded in
+[Beta Release Proof](BETA_RELEASE_PROOF.md).

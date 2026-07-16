@@ -16,3 +16,6 @@ substitute for them.
 
 Use `report-template.json` for the final report. Store release reports outside the source tree as CI
 or release artifacts; do not commit credentials or connection strings.
+
+Use `production-evidence-template.json` for the separate Phase 5 real-application gate. Automated
+tests, repository examples, and synthetic soak runs do not count as real-application evidence.

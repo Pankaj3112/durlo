@@ -59,6 +59,10 @@ One worker process may register multiple versions of the same resource id when b
 durlo.worker({ workflows: [onboardingV1, onboardingV2] });
 ```
 
+The beta release suite exercises this procedure end to end with a sleeping old-version workflow,
+a new-version-only worker, a mixed-version fleet, idempotency reuse across the version change, and
+the inverse rollback case. See [Beta Release Proof](BETA_RELEASE_PROOF.md).
+
 ## Diagnosing Missing Code
 
 `worker.getCompatibilityReport({ limit })` performs a bounded, read-only check. It returns active runs that the worker cannot claim and labels each one as:

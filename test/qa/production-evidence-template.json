@@ -1,0 +1,35 @@
+{
+  "application": "",
+  "owner": "",
+  "releaseCandidate": "",
+  "observation": {
+    "startedAt": "",
+    "completedAt": ""
+  },
+  "environment": {
+    "node": "",
+    "postgres": "",
+    "deployment": ""
+  },
+  "deployments": [],
+  "retryObservations": [],
+  "cancellationObservations": [],
+  "recoveryObservations": [],
+  "duplicateExecution": {
+    "observed": false,
+    "details": "",
+    "businessIdempotency": ""
+  },
+  "incidents": [],
+  "finalState": {
+    "eligibleRuns": 0,
+    "expiredLeases": 0,
+    "dueTimers": 0,
+    "runningAttemptsWithoutRunningRuns": 0
+  },
+  "approvals": {
+    "operator": "",
+    "releaseReviewer": ""
+  },
+  "sensitiveDataRemoved": false
+}

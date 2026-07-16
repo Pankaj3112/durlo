@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phases 1 through 4 are complete. Durlo now has a packed and tested CLI, explicit registration configuration, local operations dashboard, crash-and-resume demo, and under-ten-minute quickstart on top of the stable execution and read models. Phase 5 beta release proof is next.
+Phases 1 through 4 are complete. Phase 5's repeatable engineering proof is implemented: production-like durability stress, rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball verification, and published beta limits and duplicate-execution guidance. The remaining Phase 5 gate is reviewed operating evidence from two real applications.
 
 ## Phase 1: Execution Hardening
 
@@ -171,7 +171,19 @@ Status: Complete
 
 ## Phase 5: Beta Release Proof
 
-Status: Planned
+Status: In Progress
+
+### Progress
+
+- Four independent worker pools drain contended work, seeded creation/claim races preserve lease and idempotency invariants, and a blocked long-tail execution does not prevent slot replenishment.
+- Child-process crash windows cover death after claim, after an external side effect, and after a committed workflow checkpoint.
+- A TCP-level database outage test severs active and idle worker connections, verifies the process remains alive, observes lease loss, restores polling, and reclaims the expired attempt.
+- Due-timer lag drains independently while every execution slot is occupied.
+- A Postgres integration scenario covers a sleeping old workflow, new-version-only deployment, mixed-version resume, idempotency across the version change, and rollback availability.
+- Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. Nightly tests Node 22, 24, and 26 against both database boundaries.
+- Immutable migrations and every schema-prefix upgrade are tested. Empty ESM, CommonJS, and strict TypeScript consumers verify the exact tarball contents, exports, CLI binary, migrations, and packed crash-and-resume quickstart.
+- [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and real-application evidence protocol.
+- No qualifying operating reports from two real applications are recorded yet; repository tests and examples intentionally do not count toward that gate.
 
 ### Outcomes
 
@@ -187,6 +199,10 @@ Status: Planned
 - The release audit is repeatable from a clean checkout.
 - No known failure can silently strand eligible work.
 - The documented guarantees match observed production-like behavior.
+
+### Remaining Gate
+
+- Review operating reports from two real, non-demo applications that collectively observe deployments, retries, cancellation, and crash or outage recovery. Convert unexpected findings into deterministic tests or documented accepted beta limits before marking the phase complete.
 
 ## Post-v1: Adapter Ecosystem
 

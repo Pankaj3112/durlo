@@ -90,6 +90,7 @@ step ids must remain stable.
 - [Observability](docs/OBSERVABILITY.md)
 - [Postgres operations](docs/OPERATIONS.md)
 - [Beta support policy](docs/SUPPORT.md)
+- [Beta release proof](docs/BETA_RELEASE_PROOF.md)
 - [Roadmap](docs/ROADMAP.md)
 
 ## Contributor verification
