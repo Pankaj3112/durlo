@@ -108,7 +108,254 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
       wrong_attempt_counts: "0"
     });
   });
+
+  it("drains a contended queue across independent worker pools exactly once without failures", async () => {
+    const appId = "stress-worker-fleet";
+    const runCount = 120;
+    const executionCounts = new Map<string, number>();
+    const durlo = new Durlo({ id: appId, adapter });
+    const task = durlo.task<{ sequence: number }, number>({
+      id: "fleet-task",
+      run: async ({ sequence }, { run }) => {
+        executionCounts.set(run.id, (executionCounts.get(run.id) ?? 0) + 1);
+        if (sequence % 7 === 0) await wait(4);
+        return sequence;
+      }
+    });
+    const handles = await task.batchEnqueue(
+      Array.from({ length: runCount }, (_, sequence) => ({ sequence }))
+    );
+    const workerAdapters = Array.from({ length: 4 }, () =>
+      postgresAdapter({ connectionString: databaseUrl!, max: 4 })
+    );
+    const workers = workerAdapters.map((workerAdapter, index) =>
+      new Durlo({ id: appId, adapter: workerAdapter }).worker({
+        tasks: [task],
+        workerId: `fleet-worker-${index}`,
+        concurrency: 6,
+        pollInterval: 5,
+        leaseDuration: 2_000
+      })
+    );
+    const runningWorkers = workers.map((worker) => worker.start());
+
+    try {
+      await waitFor(async () => {
+        const result = await adapter.pool.query<{ completed: string }>(
+          `select count(*)::text as completed from durlo_runs
+           where app_id = $1 and status = 'completed'`,
+          [appId]
+        );
+        return result.rows[0]?.completed === String(runCount);
+      });
+    } finally {
+      for (const worker of workers) worker.stop();
+      await Promise.all(runningWorkers);
+      await Promise.all(workerAdapters.map((workerAdapter) => workerAdapter.close()));
+    }
+
+    expect(executionCounts.size).toBe(runCount);
+    expect([...executionCounts.values()].every((count) => count === 1)).toBe(true);
+    const conservation = await adapter.pool.query<{
+      attempts: string;
+      distinct_runs: string;
+      active_attempts: string;
+    }>(
+      `select
+         count(*)::text as attempts,
+         count(distinct run_id)::text as distinct_runs,
+         count(*) filter (where status = 'running')::text as active_attempts
+       from durlo_attempts where run_id = any($1::text[]) and kind = 'run'`,
+      [handles.map(({ id }) => id)]
+    );
+    expect(conservation.rows[0]).toEqual({
+      attempts: String(runCount),
+      distinct_runs: String(runCount),
+      active_attempts: "0"
+    });
+  });
+
+  it("replenishes slots while one long-tail execution remains blocked", async () => {
+    const appId = "stress-long-tail";
+    let markSlowStarted!: () => void;
+    let releaseSlow!: () => void;
+    const slowStarted = new Promise<void>((resolve) => {
+      markSlowStarted = resolve;
+    });
+    const slowGate = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const durlo = new Durlo({ id: appId, adapter });
+    const task = durlo.task<{ slow: boolean; sequence: number }, number>({
+      id: "long-tail-task",
+      run: async ({ slow, sequence }) => {
+        if (slow) {
+          markSlowStarted();
+          await slowGate;
+        } else {
+          await wait(5);
+        }
+        return sequence;
+      }
+    });
+    const slow = await task.enqueue({ slow: true, sequence: 0 }, { priority: 100 });
+    const fast = await task.batchEnqueue(
+      Array.from({ length: 12 }, (_, index) => ({
+        input: { slow: false, sequence: index + 1 }
+      }))
+    );
+    const worker = durlo.worker({
+      tasks: [task],
+      workerId: "long-tail-worker",
+      concurrency: 3,
+      pollInterval: 5,
+      leaseDuration: 2_000
+    });
+    const runningWorker = worker.start();
+
+    try {
+      await slowStarted;
+      await waitFor(async () => {
+        const completed = await adapter.pool.query<{ count: string }>(
+          `select count(*)::text as count from durlo_runs
+           where id = any($1::text[]) and status = 'completed'`,
+          [fast.map(({ id }) => id)]
+        );
+        return Number(completed.rows[0]?.count) >= 8;
+      });
+      expect(await adapter.getRun({ appId, runId: slow.id })).toMatchObject({
+        status: "running"
+      });
+      releaseSlow();
+      await waitFor(async () => {
+        const completed = await adapter.pool.query<{ count: string }>(
+          `select count(*)::text as count from durlo_runs
+           where app_id = $1 and status = 'completed'`,
+          [appId]
+        );
+        return completed.rows[0]?.count === "13";
+      });
+    } finally {
+      releaseSlow();
+      worker.stop();
+      await runningWorker;
+    }
+  });
+
+  it("drains due timer lag while execution slots are occupied", async () => {
+    const appId = "stress-timer-lag";
+    const workflowCount = 12;
+    const durlo = new Durlo({ id: appId, adapter });
+    const workflow = durlo.workflow<{ sequence: number }, number>({
+      id: "lagged-workflow",
+      run: async ({ input, step }) => {
+        await step.sleep("release", "1d");
+        return input.sequence;
+      }
+    });
+    const workflowHandles = await Promise.all(
+      Array.from({ length: workflowCount }, (_, sequence) => workflow.start({ sequence }))
+    );
+    const preparationWorker = durlo.worker({
+      workflows: [workflow],
+      workerId: "timer-preparation-worker",
+      concurrency: 6
+    });
+    while (
+      (
+        await adapter.pool.query<{ count: string }>(
+          `select count(*)::text as count from durlo_runs
+           where app_id = $1 and status = 'sleeping'`,
+          [appId]
+        )
+      ).rows[0]?.count !== String(workflowCount)
+    ) {
+      await preparationWorker.runOnce();
+    }
+
+    await adapter.pool.query(
+      `update durlo_timers set fire_at = now() - interval '500 milliseconds'
+       where run_id = any($1::text[])`,
+      [workflowHandles.map(({ id }) => id)]
+    );
+    const lagged = await durlo.runs.getBacklogHealth();
+    expect(lagged.timers).toMatchObject({ pending: workflowCount, due: workflowCount });
+    expect(lagged.timers.lagMs).toBeGreaterThanOrEqual(400);
+
+    let blockersStarted = 0;
+    let markBlockersStarted!: () => void;
+    let releaseBlockers!: () => void;
+    const allBlockersStarted = new Promise<void>((resolve) => {
+      markBlockersStarted = resolve;
+    });
+    const blockerGate = new Promise<void>((resolve) => {
+      releaseBlockers = resolve;
+    });
+    const blocker = durlo.task({
+      id: "timer-slot-blocker",
+      run: async () => {
+        blockersStarted += 1;
+        if (blockersStarted === 2) markBlockersStarted();
+        await blockerGate;
+      }
+    });
+    await blocker.batchEnqueue([
+      { input: {}, options: { priority: 100 } },
+      { input: {}, options: { priority: 100 } }
+    ]);
+    const worker = durlo.worker({
+      tasks: [blocker],
+      workflows: [workflow],
+      workerId: "timer-lag-worker",
+      concurrency: 2,
+      pollInterval: 10,
+      leaseDuration: 2_000
+    });
+    const runningWorker = worker.start();
+
+    try {
+      await allBlockersStarted;
+      await waitFor(async () => (await durlo.runs.getBacklogHealth()).timers.due === 0);
+      const promoted = await adapter.pool.query<{ count: string }>(
+        `select count(*)::text as count from durlo_runs
+         where id = any($1::text[]) and status = 'pending'`,
+        [workflowHandles.map(({ id }) => id)]
+      );
+      expect(promoted.rows[0]?.count).toBe(String(workflowCount));
+      releaseBlockers();
+      await waitFor(async () => {
+        const completed = await adapter.pool.query<{ count: string }>(
+          `select count(*)::text as count from durlo_runs
+           where app_id = $1 and status = 'completed'`,
+          [appId]
+        );
+        return completed.rows[0]?.count === String(workflowCount + 2);
+      });
+      expect((await durlo.runs.getBacklogHealth()).timers).toMatchObject({
+        pending: 0,
+        due: 0,
+        lagMs: 0
+      });
+    } finally {
+      releaseBlockers();
+      worker.stop();
+      await runningWorker;
+    }
+  });
 });
+
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await wait(10);
+  }
+  throw new Error(`condition did not become true within ${timeoutMs}ms`);
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0;

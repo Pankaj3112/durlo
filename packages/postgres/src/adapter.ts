@@ -271,7 +271,17 @@ export class PostgresAdapter implements DurloAdapter {
   private readonly boundClient?: PoolClient;
 
   constructor(options: PostgresAdapterOptions | Pool, boundClient?: PoolClient) {
-    this.pool = options instanceof Pool ? options : new Pool(options);
+    if (options instanceof Pool) {
+      this.pool = options;
+    } else {
+      this.pool = new Pool(options);
+      // pg emits idle-client failures on the pool rather than rejecting a query. Keep a transient
+      // network failure from becoming an uncaught EventEmitter error. Checked-out clients also emit
+      // before their active query rejects, so keep a listener attached across pool acquisitions.
+      // Callers can add their own listeners for observability; active operations still reject.
+      this.pool.on("error", () => undefined);
+      this.pool.on("connect", (client) => client.on("error", () => undefined));
+    }
     if (boundClient) this.boundClient = boundClient;
   }
 
