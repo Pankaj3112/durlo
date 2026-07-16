@@ -5,7 +5,7 @@ try {
   await adapter.pool.query(`
     create table if not exists webhook_relay_deliveries (
       id text primary key,
-      run_id text unique references durlo_runs(id) on delete cascade,
+      run_id text unique,
       destination_url text not null,
       payload jsonb not null,
       status text not null check (status in ('queued', 'delivering', 'retrying', 'delivered', 'cancelled')),
@@ -18,6 +18,9 @@ try {
       delivered_at timestamptz
     )
   `);
+  await adapter.pool.query(
+    "alter table webhook_relay_deliveries drop constraint if exists webhook_relay_deliveries_run_id_fkey"
+  );
   process.stdout.write("webhook relay migrations applied\n");
 } finally {
   await adapter.close();

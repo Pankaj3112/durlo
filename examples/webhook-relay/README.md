@@ -53,6 +53,8 @@ attempts, start a manual attempt with `POST /deliveries/:id/retry`.
 - Leave HTTP disabled in production.
 - Run API and worker processes separately against the same Postgres database.
 - Keep old task versions registered until their active runs finish during rolling deployments.
+- Keep business delivery rows independently of Durlo history; retention cleanup may remove the run
+  after its operational evidence window without removing the application record.
 - Do not place destination credentials in task input. Add server-managed credentials at execution
   time if adapting this example for a real endpoint.
 
