@@ -78,6 +78,9 @@ jobs:
       - name: Test packed crash-and-resume quickstart
         run: pnpm test:quickstart
 
+      - name: Test reference applications
+        run: pnpm test:reference-apps
+
       - name: Test restricted database role
         run: pnpm test:privileged
 

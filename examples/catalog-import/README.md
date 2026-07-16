@@ -44,6 +44,10 @@ Set `DURLO_EXAMPLE_PAUSE_AFTER_PREPARE=1` only on a disposable worker. After it 
 kill that worker and restart without the variable. The recovered workflow reuses both checkpoints,
 resumes its durable timer, and publishes once.
 
+`DURLO_WORKER_LEASE_DURATION` defaults to `15s`. Keep it comfortably above normal database and
+event-loop latency in production; the automated smoke test lowers it only to make crash recovery
+finish quickly.
+
 `CATALOG_IMPORT_WORKFLOW_VERSION` controls the opaque compatibility version. During a breaking
 deployment, keep workers for the previous value available until their active workflows complete;
 use the worker compatibility report before removing them.

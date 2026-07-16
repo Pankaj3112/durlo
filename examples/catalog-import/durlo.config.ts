@@ -1,4 +1,5 @@
 import { defineConfig } from "@durlo/cli";
+import { config } from "./src/config.js";
 import { catalogImportWorkflow, durlo } from "./src/durlo.js";
 
 export default defineConfig({
@@ -8,7 +9,7 @@ export default defineConfig({
   worker: {
     concurrency: 4,
     pollInterval: "250ms",
-    leaseDuration: "15s"
+    leaseDuration: config.workerLeaseDuration
   },
   dashboard: {
     host: "127.0.0.1",

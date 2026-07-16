@@ -42,6 +42,10 @@ assert(/postgres: \[14, 18\]/.test(nightly), "nightly must test PostgreSQL 14 an
 assert(nightly.includes("pnpm test:stress"), "nightly must run the durability stress suite");
 assert(nightly.includes("pnpm test:package"), "nightly must install packed artifacts");
 assert(nightly.includes("pnpm test:quickstart"), "nightly must run the packed quickstart");
+assert(
+  nightly.includes("pnpm test:reference-apps"),
+  "nightly must run the deployable reference applications"
+);
 
 const support = await readFile(new URL("../docs/SUPPORT.md", import.meta.url), "utf8");
 assert(support.includes("Node.js 22 through 26"), "support policy must declare Node boundaries");

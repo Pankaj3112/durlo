@@ -26,7 +26,8 @@ export const config = {
   databaseUrl: required("DATABASE_URL"),
   port: parsePort(process.env.PORT),
   publicationDelayMs: parsePublicationDelay(process.env.CATALOG_PUBLICATION_DELAY),
-  workflowVersion: process.env.CATALOG_IMPORT_WORKFLOW_VERSION?.trim() || "1"
+  workflowVersion: process.env.CATALOG_IMPORT_WORKFLOW_VERSION?.trim() || "1",
+  workerLeaseDuration: process.env.DURLO_WORKER_LEASE_DURATION?.trim() || "15s"
 };
 
 export function getApiKey(): string {
