@@ -1,5 +1,7 @@
 import { closeConfig, loadConfig } from "./config.js";
+import { startDashboard } from "./dashboard.js";
 import { initProject } from "./init.js";
+import { configuredWorker, runConfiguredWorker } from "./worker.js";
 import type { CliIo, DurloConfig, RunCliOptions } from "./types.js";
 
 const HELP = `Durlo — durable tasks and workflows on Postgres
@@ -66,8 +68,45 @@ export async function runCli(
       return 0;
     }
 
-    if (command === "worker" || command === "dev") {
-      throw new Error(`'durlo ${command}' is not available in this build`);
+    if (command === "worker") {
+      const parsed = parseConfigFlag(args);
+      const loaded = await loadConfig(io.cwd, parsed.configPath);
+      try {
+        await runConfiguredWorker(loaded.config, { stdout: io.stdout });
+      } finally {
+        await closeConfig(loaded.config);
+      }
+      return 0;
+    }
+
+    if (command === "dev") {
+      const parsed = parseDevFlags(args);
+      const loaded = await loadConfig(io.cwd, parsed.configPath);
+      try {
+        await migrateConfig(loaded.config);
+        const worker = configuredWorker(loaded.config);
+        const dashboard = await startDashboard(loaded.config, worker, {
+          ...(parsed.host === undefined ? {} : { host: parsed.host }),
+          ...(parsed.port === undefined ? {} : { port: parsed.port })
+        });
+        const stop = (): void => worker.stop();
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+        io.stdout.write(`Dashboard ${dashboard.url}\n`);
+        io.stdout.write(
+          `Worker ${worker.id} registered ${loaded.config.tasks?.length ?? 0} task(s) and ${loaded.config.workflows?.length ?? 0} workflow(s)\n`
+        );
+        try {
+          await worker.start();
+        } finally {
+          process.off("SIGINT", stop);
+          process.off("SIGTERM", stop);
+          await dashboard.close();
+        }
+      } finally {
+        await closeConfig(loaded.config);
+      }
+      return 0;
     }
     throw new Error(`unknown command '${command ?? ""}'; run 'durlo --help'`);
   } catch (error) {
@@ -99,6 +138,43 @@ export function parseConfigFlag(args: readonly string[]): { configPath?: string 
     throw new Error(`unknown option '${argument}'`);
   }
   return configPath === undefined ? {} : { configPath };
+}
+
+export function parseDevFlags(args: readonly string[]): {
+  configPath?: string;
+  host?: string;
+  port?: number;
+} {
+  let configPath: string | undefined;
+  let host: string | undefined;
+  let port: number | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    const value = args[index + 1];
+    if (!["--config", "-c", "--host", "--port"].includes(argument ?? "")) {
+      throw new Error(`unknown option '${argument}'`);
+    }
+    if (!value || value.startsWith("-")) throw new Error(`${argument} requires a value`);
+    if (argument === "--config" || argument === "-c") {
+      if (configPath !== undefined) throw new Error("--config may only be provided once");
+      configPath = value;
+    } else if (argument === "--host") {
+      if (host !== undefined) throw new Error("--host may only be provided once");
+      host = value;
+    } else {
+      if (port !== undefined) throw new Error("--port may only be provided once");
+      port = Number(value);
+      if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+        throw new Error("--port must be an integer from 0 to 65535");
+      }
+    }
+    index += 1;
+  }
+  return {
+    ...(configPath === undefined ? {} : { configPath }),
+    ...(host === undefined ? {} : { host }),
+    ...(port === undefined ? {} : { port })
+  };
 }
 
 function assertOnlyFlags(args: readonly string[], allowed: readonly string[]): void {

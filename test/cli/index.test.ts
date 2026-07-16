@@ -10,6 +10,7 @@ import {
   loadConfig,
   migrateConfig,
   parseConfigFlag,
+  parseDevFlags,
   runCli
 } from "@durlo/cli";
 import type { DurloConfig } from "@durlo/cli";
@@ -108,6 +109,17 @@ describe("durlo migrate", () => {
     expect(() => parseConfigFlag(["--config"])).toThrow(/requires a path/);
     expect(() => parseConfigFlag(["--config", "a", "-c", "b"])).toThrow(/only be provided once/);
     expect(() => parseConfigFlag(["--wat"])).toThrow(/unknown option/);
+  });
+
+  it("parses dashboard overrides without accepting unknown or invalid values", () => {
+    expect(parseDevFlags(["-c", "custom.ts", "--host", "localhost", "--port", "4321"])).toEqual({
+      configPath: "custom.ts",
+      host: "localhost",
+      port: 4321
+    });
+    expect(() => parseDevFlags(["--port", "nope"])).toThrow(/integer/);
+    expect(() => parseDevFlags(["--port", "70000"])).toThrow(/65535/);
+    expect(() => parseDevFlags(["--host"])).toThrow(/requires a value/);
   });
 });
 

@@ -41,10 +41,10 @@ try {
     `
       import { Durlo } from "@durlo/core";
       import { postgresAdapter } from "@durlo/postgres";
-      import { cliPackageName } from "durlo";
+      import { cliPackageName } from "@durlo/cli";
       if (typeof Durlo !== "function") throw new Error("missing ESM Durlo export");
       if (typeof postgresAdapter !== "function") throw new Error("missing ESM postgres export");
-      if (cliPackageName !== "durlo") throw new Error("missing ESM CLI export");
+      if (cliPackageName !== "@durlo/cli") throw new Error("missing ESM CLI export");
       const adapter = postgresAdapter({ connectionString: "postgres://unused" });
       await adapter.close();
     `
@@ -54,10 +54,10 @@ try {
     `
       const { Durlo } = require("@durlo/core");
       const { postgresAdapter } = require("@durlo/postgres");
-      const { cliPackageName } = require("durlo");
+      const { cliPackageName } = require("@durlo/cli");
       if (typeof Durlo !== "function") throw new Error("missing CJS Durlo export");
       if (typeof postgresAdapter !== "function") throw new Error("missing CJS postgres export");
-      if (cliPackageName !== "durlo") throw new Error("missing CJS CLI export");
+      if (cliPackageName !== "@durlo/cli") throw new Error("missing CJS CLI export");
       const adapter = postgresAdapter({ connectionString: "postgres://unused" });
       adapter.close();
     `
@@ -67,7 +67,7 @@ try {
     `
       import { Durlo, type DurloAdapter } from "@durlo/core";
       import { postgresAdapter, type PostgresAdapter } from "@durlo/postgres";
-      import { cliPackageName } from "durlo";
+      import { cliPackageName } from "@durlo/cli";
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
       const durlo: Durlo = new Durlo({ id: cliPackageName, adapter: contract });
@@ -96,6 +96,12 @@ try {
   run(npm, ["install", ...packed], consumer, "installing packed artifacts");
   run(node, ["esm.mjs"], consumer, "loading packed ESM artifacts");
   run(node, ["cjs.cjs"], consumer, "loading packed CJS artifacts");
+  run(
+    join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
+    ["--help"],
+    consumer,
+    "running the packed CLI binary"
+  );
   run(
     join(workspaceRoot, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc"),
     ["--project", join(consumer, "tsconfig.json")],
