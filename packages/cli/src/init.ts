@@ -12,7 +12,7 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL is required");
 }
 
-const adapter = postgresAdapter({ connectionString: databaseUrl });
+export const adapter = postgresAdapter({ connectionString: databaseUrl });
 
 export const durlo = new Durlo({
   id: "my-app",

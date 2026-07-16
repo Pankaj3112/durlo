@@ -5,6 +5,8 @@ Updated: 2026-07-16
 
 Durlo exposes an app-scoped read model for local CLIs, dashboards, and operational diagnosis. It is derived from run, step, attempt, and timer records already required for execution. V1 does not add an event stream or a separate event-history table.
 
+`durlo dev` renders this read model through the loopback-by-default local dashboard documented in [CLI And Local Dashboard](CLI_AND_DASHBOARD.md). The dashboard remains a consumer of these public reads and controls; it does not add storage or transition semantics.
+
 ## Run Listing
 
 `durlo.runs.list()` returns payload-free summaries ordered newest first by `(created_at, id)`. The id is the deterministic tie-breaker when multiple runs share a creation timestamp.

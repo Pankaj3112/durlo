@@ -25,12 +25,14 @@ It does not provide events, cron, multiple languages, hosted orchestration, fram
 ```txt
 @durlo/core       public API, validation, retries, steps, and worker runtime
 @durlo/postgres   migrations and atomic Postgres state transitions
-durlo             CLI package; product commands remain roadmap work
+@durlo/cli        configuration loader, CLI process lifecycle, and local dashboard
 ```
 
 The core package does not depend on Postgres. It consumes the internal adapter contract defined in `packages/core/src/types.ts`.
 
 The Postgres package does not import user task or workflow code. It only stores records and performs state transitions.
+
+The CLI imports user code only from an explicit `durlo.config.*` file. It passes registered definitions into the existing core worker and consumes the existing observability and control APIs for its local dashboard; it does not own a parallel execution state machine.
 
 ## Runtime Topology
 
@@ -48,6 +50,8 @@ application process
 ```
 
 Calling `enqueue` or `start` persists a run. It does not execute user code. User code runs only inside a worker that registered the matching task or workflow definition.
+
+`durlo worker` is the production process entry point. `durlo dev` adds a loopback local dashboard and development-time migration step around the same worker. Both commands handle termination by stopping new claims and waiting for the core worker to drain before the configured adapter closes.
 
 The application and worker may be separate processes. Multiple worker processes may use the same database; Postgres row locks and lease tokens decide ownership.
 

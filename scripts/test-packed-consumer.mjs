@@ -86,7 +86,7 @@ try {
           noEmit: true,
           skipLibCheck: false
         },
-        include: ["typecheck.ts"]
+        include: ["typecheck.ts", "durlo.config.ts"]
       },
       null,
       2
@@ -101,6 +101,12 @@ try {
     ["--help"],
     consumer,
     "running the packed CLI binary"
+  );
+  run(
+    join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
+    ["init"],
+    consumer,
+    "scaffolding with the packed CLI"
   );
   run(
     join(workspaceRoot, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc"),

@@ -1,82 +1,111 @@
 # Durlo
 
-Durlo is a TypeScript-native durable async layer for Postgres-backed apps.
+Durlo is a TypeScript-native durable task and workflow library for Postgres-backed applications.
+It gives normal Node.js processes retries, delays, workflow checkpoints, durable sleeps, crash
+recovery, cancellation, manual retry, and a local operations dashboard—without events, cron,
+hosted orchestration, or framework adapters.
 
-V1 focuses on:
+## Quickstart: first durable task in under ten minutes
 
-- direct background tasks
-- direct multi-step workflows
-- retries, delays, sleeps, and cancellation
-- Postgres-only durable state
-- a normal Node worker process
+You need Node.js 22 or newer and PostgreSQL 14 or newer. For a disposable local database:
 
-V1 does not include events, cron, distributed concurrency, hosted cloud, or framework-specific adapters.
+```bash
+docker run --rm --name durlo-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=durlo \
+  -p 5432:5432 \
+  -d postgres:17-alpine
 
-Start here:
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/durlo
+```
 
-- [Roadmap](docs/ROADMAP.md)
+Create a TypeScript project, install the three Durlo packages, and scaffold an explicit config:
+
+```bash
+mkdir durlo-hello && cd durlo-hello
+npm init -y
+npm install @durlo/core @durlo/postgres @durlo/cli pg tsx
+npx durlo init
+```
+
+The generated `durlo.config.ts` defines a `hello` task and registers it with the worker. Add
+`enqueue.ts` beside it:
+
+```ts
+import { adapter, hello } from "./durlo.config.js";
+
+const run = await hello.enqueue({ name: "Ada" });
+console.log(`queued ${run.id}`);
+await adapter.close();
+```
+
+In the first terminal, migrate once and start the local worker plus dashboard:
+
+```bash
+npx durlo migrate
+npx durlo dev
+```
+
+Open <http://127.0.0.1:3210>. In a second terminal, set the same `DATABASE_URL` and enqueue:
+
+```bash
+npx tsx enqueue.ts
+```
+
+The run moves from pending to completed in the runs list. Select it to inspect its input, output,
+attempts, diagnostics, and derived timeline. `Ctrl-C` gracefully stops new claims and drains work
+already running.
+
+For production, run `durlo migrate` as a deployment step and `durlo worker` as the long-lived
+process. `durlo dev` applies migrations automatically for local convenience and exposes an
+unauthenticated local dashboard, bound to `127.0.0.1` by default.
+
+## Crash, checkpoint, sleep, retry, resume
+
+The [crash-and-resume demo](examples/quickstart/README.md) starts an order workflow in the same
+raw `pg` transaction as its business row. It then proves checkpoint reuse after `SIGKILL`, expired
+lease recovery, a durable sleep, one deliberate failure, automatic retry, and the final timeline.
+The repository test installs packed tarballs into an empty consumer before running that scenario;
+it does not import workspace source.
+
+## Delivery semantics
+
+Durlo is at-least-once. A process can perform an external side effect and die before recording
+success, so emails, charges, API calls, and similar effects still need business-level or provider
+idempotency. A Durlo idempotency key deduplicates run creation; it does not make external effects
+exactly once.
+
+Workflow code re-enters from the top after retry, crash recovery, or sleep. Completed
+`step.run(...)` results are reused, so branching should depend on input or stored step results and
+step ids must remain stable.
+
+## Documentation
+
+- [CLI and local dashboard](docs/CLI_AND_DASHBOARD.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Execution semantics](docs/EXECUTION_SEMANTICS.md)
-- [Decisions and edge cases](docs/DECISIONS_AND_EDGE_CASES.md)
 - [Deployment compatibility](docs/DEPLOYMENT_COMPATIBILITY.md)
 - [Storage limits](docs/STORAGE_LIMITS.md)
 - [Retention cleanup](docs/RETENTION.md)
 - [Observability](docs/OBSERVABILITY.md)
-- [Postgres performance envelope](docs/PERFORMANCE.md)
 - [Postgres operations](docs/OPERATIONS.md)
+- [Roadmap](docs/ROADMAP.md)
 
-## Current Status
+## Contributor verification
 
-The execution foundation and Phases 1 through 3 are implemented. Durlo now has hardened workers, version-safe deployments, bounded storage and retention, app-scoped paginated run reads, durable detail timelines and diagnostics, backlog health, immutable migration checks, and a measured Postgres query envelope. Phase 4 is next: the CLI, local dashboard, quickstart, and demo. See the [roadmap](docs/ROADMAP.md).
-
-Run the complete suite with a disposable local PostgreSQL 17 container:
-
-```bash
-pnpm test:local
-```
-
-Pure unit tests do not require Docker:
+Pure unit tests require no database:
 
 ```bash
 pnpm test:unit
 ```
 
-Generate full unit-plus-integration coverage with another disposable database:
+The default local suite creates a disposable PostgreSQL 17 container and includes the packed
+crash-and-resume quickstart:
 
 ```bash
-pnpm test:local:coverage
+pnpm test:local
 ```
 
-Heavier durability checks are available separately:
-
-```bash
-pnpm test:local:stress
-pnpm test:local:mutations
-pnpm test:local:privileged
-pnpm test:package
-```
-
-Run the reproducible Postgres query benchmark with:
-
-```bash
-pnpm benchmark:local
-```
-
-Run the complete release-candidate audit—including package consumers, core and persistence
-mutations, privileged-role checks, and seeded stress—with:
-
-```bash
-pnpm test:audit
-```
-
-Nightly compatibility tests exercise Node.js 22 and 24 LTS plus Node.js 26 Current against the
-oldest and newest supported PostgreSQL bounds, currently PostgreSQL 14 and 18. See the
-[Node.js release schedule](https://nodejs.org/en/about/previous-releases) and
-[PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/).
-
-To use an existing Postgres database, provide its URL explicitly. The integration command fails
-clearly when the URL is missing; it never reports a skipped suite as success.
-
-```bash
-DURLO_TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/durlo_test pnpm test:integration
-```
+Use `pnpm test:audit` for the complete release-candidate audit. It adds formatting, lint,
+typechecking, builds, packed ESM/CommonJS/CLI consumers, mutation checks, privileged-role tests,
+seeded contention, and persistence-safety mutations.

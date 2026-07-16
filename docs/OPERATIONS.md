@@ -94,6 +94,8 @@ Timer timestamps and run eligibility use Postgres `now()`. Application clock dri
 
 Run migrations before starting new-version workers. Migrations are serialized with a transaction-scoped advisory lock and should not be run continuously by every worker replica during normal operation.
 
+With the CLI, use `durlo migrate` as the deployment step and `durlo worker` for the long-lived process. `durlo worker` never migrates automatically. `durlo dev` does migrate before starting, but is a local workflow that also exposes the unauthenticated dashboard and should not replace the production separation.
+
 ## What To Monitor
 
 At minimum, observe:

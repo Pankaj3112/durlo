@@ -35,7 +35,7 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phase 1 execution hardening, Phase 2 deployment and storage safety, and Phase 3 observability are complete. Phase 4 is next: the CLI, local dashboard, and quickstart can now build on the stable read model.
+Phases 1 through 4 are complete. Durlo now has a packed and tested CLI, explicit registration configuration, local operations dashboard, crash-and-resume demo, and under-ten-minute quickstart on top of the stable execution and read models. Phase 5 beta release proof is next.
 
 ## Phase 1: Execution Hardening
 
@@ -143,7 +143,18 @@ Status: Complete
 
 ## Phase 4: CLI, Dashboard, And Quickstart
 
-Status: Planned
+Status: Complete
+
+### Progress
+
+- `@durlo/cli` now installs the `durlo` binary with `init`, `migrate`, `worker`, and `dev` commands.
+- TypeScript and JavaScript configs explicitly register exact task and workflow definitions plus worker and dashboard settings.
+- Worker commands own signal handling, drain through the existing worker lifecycle, and close their Postgres adapter only after shutdown.
+- The loopback-by-default local dashboard provides filtered run pages, backlog/process/compatibility health, complete run records, and the derived timeline.
+- Dashboard cancellation and manual retry are confirmed, same-origin, app-scoped actions whose final state validation remains atomic in storage.
+- The order-fulfillment demo transactionally starts a workflow, checkpoints an idempotent business effect, supports a deliberate hard crash, resumes after lease expiry, sleeps durably, fails once, retries, and completes.
+- The README is now a direct under-ten-minute quickstart instead of a project status page.
+- Packed-artifact verification installs an empty consumer, executes the installed CLI, kills and restarts its worker, and asserts the recovered dashboard timeline without workspace source imports.
 
 ### Outcomes
 

@@ -64,6 +64,7 @@ describe("durlo init", () => {
     const source = await readFile(created.path, "utf8");
     expect(source).toContain('from "@durlo/core"');
     expect(source).toContain('from "@durlo/cli"');
+    expect(source).toContain("export const adapter");
     expect(source).toContain("tasks: [hello]");
 
     await expect(initProject(cwd)).rejects.toThrow(/--force/);
