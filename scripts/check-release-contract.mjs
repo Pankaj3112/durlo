@@ -54,8 +54,19 @@ assert(
   "support policy must declare PostgreSQL boundaries"
 );
 
+const roadmap = await readFile(new URL("../docs/ROADMAP.md", import.meta.url), "utf8");
+const phaseFive = roadmap.match(/## Phase 5: Beta Release Proof[\s\S]*?(?=\n## )/)?.[0];
+assert(phaseFive?.includes("Status: Complete"), "Phase 5 must remain complete in the roadmap");
+
+const betaProof = await readFile(new URL("../docs/BETA_RELEASE_PROOF.md", import.meta.url), "utf8");
+assert(/^Status: Complete$/m.test(betaProof), "beta release proof must remain complete");
+assert(
+  betaProof.includes("pnpm test:local test:reference-apps"),
+  "beta release proof must retain its local reference-app command"
+);
+
 process.stdout.write(
-  "release contract passed: public manifests, package exports, support boundaries, and nightly audit\n"
+  "release contract passed: manifests, exports, support boundaries, nightly audit, and Phase 5 proof\n"
 );
 
 async function readJson(path) {
