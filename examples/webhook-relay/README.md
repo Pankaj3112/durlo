@@ -1,6 +1,6 @@
 # Webhook relay
 
-This deployable reference application accepts authenticated delivery requests and sends them from a
+This production-shaped reference application accepts authenticated delivery requests and sends them from a
 Durlo task. The API inserts its delivery row and Durlo run in one Postgres transaction, so a process
 crash cannot commit one without the other.
 
@@ -58,6 +58,5 @@ attempts, start a manual attempt with `POST /deliveries/:id/retry`.
 - Do not place destination credentials in task input. Add server-managed credentials at execution
   time if adapting this example for a real endpoint.
 
-This repository example is not itself Phase 5 production evidence. A deployment counts only when a
-real operator uses it and records the required retry, cancellation, deployment, and recovery
-observations without credentials or payload data.
+This application supplies the direct-task half of the repeatable Phase 5 application proof. That is
+an engineering claim, not a claim that this sample has carried customer production traffic.

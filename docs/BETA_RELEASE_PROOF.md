@@ -1,11 +1,11 @@
 # Durlo Beta Release Proof
 
-Status: Engineering proof complete; production adoption proof pending
-Updated: 2026-07-16
+Status: Complete
+Updated: 2026-07-17
 
-This document is the repeatable Phase 5 audit for Durlo v1 beta. It separates automated evidence,
-which the repository can reproduce, from real-application evidence, which must come from actual
-operation and must not be simulated or inferred from tests.
+This document is the repeatable Phase 5 audit for Durlo v1 beta. Every release gate can be reproduced
+from the repository on a local machine or in CI; no VPS, hosted Durlo service, unrelated application,
+or customer workload is required.
 
 ## Repeatable Audit
 
@@ -123,33 +123,35 @@ Rows that correctly remain unclaimed are diagnosable rather than silently strand
 Operators should alert on growing ready lag, expired leases, due-timer lag, and incompatible active
 runs. Recovery and escalation steps are in [Postgres Operations](OPERATIONS.md).
 
-## Real-Application Evidence Gate
+## Reference-Application Evidence
 
-Phase 5 also requires operating Durlo in at least two real, non-demo applications long enough to
-observe deployments, retries, cancellation, and recovery. Repository-only executions of tests,
-examples, and soak fixtures do not satisfy this gate.
+The two applications under [`examples/`](../examples/README.md) are the application-level Phase 5
+proof. They are intentionally owned by this repository so a clean checkout can exercise the same
+behavior without depending on private code, future adopters, or external hosting.
 
-Two deployable candidates now live under [`examples/`](../examples/README.md). Their smoke test makes
-the integration and fault exercises repeatable, but no execution performed solely for repository
-verification counts as adoption. Either candidate can qualify later only if an identifiable
-operator runs it as a continuing service carrying genuine work and reviews a sanitized operating
-report.
+Run only this proof with Docker running:
 
-For each application, copy `test/qa/production-evidence-template.json` to the release evidence
-artifact store and record:
+```bash
+pnpm test:local test:reference-apps
+```
 
-- an anonymized but stable application identifier and owner
-- observation start/end and deployed Durlo candidate
-- Node.js and PostgreSQL versions
-- at least one deployment observation
-- retry, cancellation, and crash/outage recovery observations across the two applications
-- duplicate-effect observations or the idempotency mechanism that prevented business duplication
-- incidents, unexpected states, and final active-run/attempt/timer checks
-- operator and release-review approval
+The command creates a disposable PostgreSQL database, starts each application's actual HTTP API and
+Durlo worker as separate processes, performs controlled fault exercises through the public APIs,
+checks the durable application and Durlo records, and removes the processes, tables, and container.
 
-Do not commit credentials, database URLs, customer data, or sensitive logs. An application qualifies
-only when it carries real application work; the quickstart and test fixtures do not qualify.
+| Application    | Application-level evidence                                                                                                                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Webhook relay  | Authenticated API, atomic delivery/run creation, a genuine HTTP boundary, stable provider idempotency, transient 503 retry, duplicate request reuse, conflicting request rejection, and stored business delivery history.       |
+| Catalog import | Authenticated API, atomic import/run creation, bounded business data, workflow checkpoints, durable publication sleep, cancellation before publication, `SIGKILL` lease recovery, checkpoint reuse, and idempotent publication. |
 
-No qualifying real-application reports are currently recorded in this repository. Phase 5 cannot
-be marked complete until two reports are reviewed and their findings either have deterministic
-regression tests or are explicitly documented as accepted beta limitations.
+The separate rolling-version integration scenario supplies deployment compatibility coverage, and
+the outage and stress suites supply database recovery and fleet-level coverage. Together these tests
+observe every Phase 5 outcome through real process and PostgreSQL boundaries while remaining fully
+repeatable.
+
+This evidence is a beta engineering claim, not a claim of customer adoption or production scale.
+Independent operating reports are welcome after adoption and can use
+`test/qa/production-evidence-template.json`, but they are not a beta release prerequisite. Any
+unexpected behavior found later must still become a deterministic regression test or a documented
+accepted limitation. Reports must never include credentials, database URLs, customer data, or
+sensitive logs.

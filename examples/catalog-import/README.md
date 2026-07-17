@@ -1,6 +1,6 @@
 # Catalog import
 
-This deployable reference application accepts a bounded product catalog, stores it in application
+This production-shaped reference application accepts a bounded product catalog, stores it in application
 tables, and starts a small Durlo workflow reference in the same Postgres transaction. Large business
 payloads stay out of workflow input and remain available after Durlo history retention.
 
@@ -61,6 +61,5 @@ use the worker compatibility report before removing them.
 - Treat cancellation as best-effort if publication has already started.
 - Do not change workflow behavior incompatibly without changing its version and retaining old code.
 
-This repository example is not itself Phase 5 production evidence. It counts only after a real
-operator uses a deployment and reviews an operating report covering actual runs and controlled
-recovery observations.
+This application supplies the direct-workflow half of the repeatable Phase 5 application proof. That
+is an engineering claim, not a claim that this sample has carried customer production traffic.

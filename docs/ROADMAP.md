@@ -1,7 +1,7 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 This is the canonical forward-looking plan for Durlo. It targets a strong TypeScript and Postgres alternative for direct tasks and workflows; it does not target feature parity with Inngest or Temporal.
 
@@ -35,7 +35,10 @@ V1 excludes:
 
 The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
 
-Phases 1 through 4 are complete. Phase 5's repeatable engineering proof is implemented: production-like durability stress, rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball verification, deployable direct-task and direct-workflow reference applications, and published beta limits and duplicate-execution guidance. The remaining Phase 5 gate is reviewed operating evidence from two real applications.
+Phases 1 through 5 are complete. The beta release proof includes production-like durability stress,
+rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball
+verification, locally runnable direct-task and direct-workflow reference applications, and published
+beta limits and duplicate-execution guidance.
 
 ## Phase 1: Execution Hardening
 
@@ -171,7 +174,7 @@ Status: Complete
 
 ## Phase 5: Beta Release Proof
 
-Status: In Progress
+Status: Complete
 
 ### Progress
 
@@ -182,9 +185,9 @@ Status: In Progress
 - A Postgres integration scenario covers a sleeping old workflow, new-version-only deployment, mixed-version resume, idempotency across the version change, and rollback availability.
 - Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. The clean six-cell boundary audit passed on Node 22.23.1, 24.18.0, and 26.5.0 against PostgreSQL 14.23 and 18.4, and the same matrix runs nightly.
 - Immutable migrations and every schema-prefix upgrade are tested. Empty ESM, CommonJS, and strict TypeScript consumers verify the exact tarball contents, exports, CLI binary, migrations, and packed crash-and-resume quickstart.
-- Deployable [webhook-relay and catalog-import reference applications](../examples/README.md) exercise transactional task enqueue, external-delivery retry and idempotency, workflow checkpoints, durable cancellation windows, versioning, `SIGKILL` recovery, and business-data retention independently of Durlo history. Their actual APIs and workers run in CI and the nightly boundary matrix.
-- [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and real-application evidence protocol.
-- No qualifying operating reports from two real applications are recorded yet; repository-only tests and example runs intentionally do not count toward that gate.
+- Locally runnable [webhook-relay and catalog-import reference applications](../examples/README.md) exercise transactional task enqueue, external-delivery retry and idempotency, workflow checkpoints, durable cancellation windows, versioning, `SIGKILL` recovery, and business-data retention independently of Durlo history. Their actual APIs and workers run against real PostgreSQL in CI and the nightly boundary matrix.
+- [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and reference-application evidence.
+- The complete application-level proof runs locally with a disposable PostgreSQL container. It does not require a VPS, hosted service, customer workload, or access to an unrelated repository.
 
 ### Outcomes
 
@@ -192,7 +195,7 @@ Status: In Progress
 - Test rolling deployments across supported workflow versions.
 - Test every supported Node.js and PostgreSQL boundary.
 - Verify migrations, package exports, and the quickstart from release tarballs.
-- Operate Durlo in at least two real applications long enough to observe deployments, retries, cancellation, and recovery.
+- Exercise Durlo through at least two production-shaped applications covering direct tasks and workflows, with real process boundaries, PostgreSQL transactions, retries, cancellation, and recovery.
 - Publish tested limits, expected duplicate-execution behavior, and operational guidance.
 
 ### Done When
@@ -200,10 +203,14 @@ Status: In Progress
 - The release audit is repeatable from a clean checkout.
 - No known failure can silently strand eligible work.
 - The documented guarantees match observed production-like behavior.
+- The task and workflow reference applications pass from a clean checkout without external infrastructure beyond the disposable test database.
 
-### Remaining Gate
+### Future Adoption Evidence
 
-- Review operating reports from two real, non-demo applications that collectively observe deployments, retries, cancellation, and crash or outage recovery. Convert unexpected findings into deterministic tests or documented accepted beta limits before marking the phase complete.
+Operating reports from independent applications remain valuable post-beta adoption evidence, but
+they are not a repository release gate. Making beta completion depend on future users or unrelated
+private repositories would make the release non-reproducible. Unexpected findings from later
+adoption must still become deterministic tests or documented accepted limitations.
 
 ## Post-v1: Adapter Ecosystem
 

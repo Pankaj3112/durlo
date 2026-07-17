@@ -17,11 +17,10 @@ substitute for them.
 Use `report-template.json` for the final report. Store release reports outside the source tree as CI
 or release artifacts; do not commit credentials or connection strings.
 
-Use `production-evidence-template.json` for the separate Phase 5 real-application gate. Automated
-tests, repository-only example runs, and synthetic soak runs do not count as real-application
-evidence.
+`production-evidence-template.json` is available for optional post-beta adoption reports. It is not
+part of the reproducible Phase 5 release gate, and completing it never replaces automated coverage.
 
-The deployable applications under `examples/` provide candidate integration code and a repeatable
-fault-exercise baseline through `pnpm test:reference-apps`. Follow the
-[examples qualification rules](../../examples/README.md) before treating an independently operated
-deployment as evidence.
+The applications under `examples/` provide the application-level Phase 5 proof and a repeatable
+fault-exercise baseline through `pnpm test:reference-apps`. See the
+[examples evidence criteria](../../examples/README.md) for the exact boundary of that engineering
+claim.

@@ -68,7 +68,7 @@ lease recovery, a durable sleep, one deliberate failure, automatic retry, and th
 The repository test installs packed tarballs into an empty consumer before running that scenario;
 it does not import workspace source.
 
-## Deployable reference applications
+## Reference applications
 
 The [`webhook-relay`](examples/webhook-relay/README.md) and
 [`catalog-import`](examples/catalog-import/README.md) examples are complete HTTP applications for
@@ -76,8 +76,8 @@ direct tasks and direct workflows. Their automated smoke test covers transaction
 at-least-once external delivery, retry, idempotency conflicts, durable sleep, cancellation,
 `SIGKILL` recovery, and checkpoint reuse.
 
-See the [examples index](examples/README.md) for the boundary between repeatable repository proof and
-the real operating reports still required by Phase 5.
+See the [examples index](examples/README.md) for the complete, locally runnable Phase 5
+application-level proof. It needs Docker for a disposable PostgreSQL container, not a VPS.
 
 ## Delivery semantics
 
