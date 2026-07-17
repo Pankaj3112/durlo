@@ -25,7 +25,7 @@ try {
   await testWebhookRelay();
   await testCatalogImport();
   process.stdout.write(
-    "reference applications passed: transactional enqueue, retry, idempotency, durable sleep, cancellation, SIGKILL recovery, and checkpoint reuse\n"
+    "reference applications passed: authentication, transactional enqueue, retry, idempotency, durable sleep, cancellation, SIGKILL recovery, and checkpoint reuse\n"
   );
 } finally {
   await stopAll();
@@ -69,6 +69,12 @@ async function testWebhookRelay() {
   await worker.waitFor(/registered 1 task\(s\) and 0 workflow\(s\)/, 10_000);
   const api = startApi(webhookDirectory, environment);
   await api.waitFor(/webhook relay listening/, 10_000);
+
+  const unauthorized = await requestJson(
+    `http://127.0.0.1:${apiPort}/deliveries/reference-webhook`
+  );
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.body.error, "unauthorized");
 
   const input = {
     deliveryId: "reference-webhook",
@@ -143,6 +149,11 @@ async function testCatalogImport() {
   };
   const api = startApi(catalogDirectory, environment);
   await api.waitFor(/catalog import API listening/, 10_000);
+
+  const unauthorized = await requestJson(`http://127.0.0.1:${apiPort}/products`);
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.body.error, "unauthorized");
+
   const crashWorker = startWorker(catalogDirectory, {
     ...environment,
     DURLO_EXAMPLE_PAUSE_AFTER_PREPARE: "1"
