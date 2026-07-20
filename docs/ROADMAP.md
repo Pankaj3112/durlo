@@ -1,267 +1,149 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-17
+Updated: 2026-07-20
 
-This is the canonical forward-looking plan for Durlo. It targets a strong TypeScript and Postgres alternative for direct tasks and workflows; it does not target feature parity with Inngest or Temporal.
+## Product direction
 
-## Product Goal
+Durlo should become the most trustworthy Postgres-native background task and direct workflow
+library for TypeScript applications. Its wedge is atomic creation of application data and durable
+work in one PostgreSQL transaction, combined with honest at-least-once execution and inspectable
+workflow checkpoints.
 
-Durlo v1 is ready when a TypeScript application can transactionally create a task or workflow in Postgres, run it safely across worker processes, survive crashes and deployments, inspect every attempt, and operate it without hidden failure modes.
+The goal is BullMQ-level trust for a narrower use case, not immediate BullMQ or Inngest feature
+parity. Correctness, operability, release quality, and evidence come before events, cron, hosted
+execution, or a large adapter ecosystem.
 
-## Scope
+## V1 boundary
 
-V1 includes:
+V1 includes direct tasks and workflows, PostgreSQL persistence, Node.js workers, retries, delays,
+durable steps and sleeps, cancellation, manual retry, local inspection, bounded cleanup, and raw
+`pg` transaction integration.
 
-- direct tasks and workflows
-- Postgres persistence
-- Node.js workers
-- retries, delays, durable steps, and sleeps
-- cancellation and manual retry
-- local CLI and dashboard
-- raw `pg` transaction-bound run creation
+V1 excludes events, schedules, other languages, hosted orchestration, framework adapters,
+distributed global/per-resource/per-tenant concurrency, rate limiting, and Temporal-style event
+history replay.
 
-V1 excludes:
+## Current state
 
-- events and event triggers
-- cron and schedules
-- languages other than TypeScript
-- hosted orchestration
-- framework and ORM adapters
-- distributed global, per-resource, or per-tenant concurrency
-- Temporal-style event-history replay
+The repository has a strong execution foundation: lease-token fencing, `FOR UPDATE SKIP LOCKED`,
+crash and outage recovery tests, resource-version compatibility, durable workflow checkpoints,
+bounded payloads, observability reads, a CLI, a local dashboard, and realistic example
+applications.
 
-## Current State
+It is not yet a beta release. The current packages are `0.0.0`, release metadata is incomplete,
+throughput is not measured end to end, and the integrity issues below can violate or obscure public
+behavior. Earlier Phase 1–5 work remains useful engineering evidence, but the old “Phase 5 complete”
+claim is retired.
 
-The execution foundation is implemented and tested. It covers the public core API, Postgres persistence, lease-safe workers, retries, workflow checkpoints, timers, cancellation, and manual retry.
+## Now: Integrity repair
 
-Phases 1 through 5 are complete. The beta release proof includes production-like durability stress,
-rolling-version deployment coverage, an explicit runtime/database support matrix, release-tarball
-verification, locally runnable direct-task and direct-workflow reference applications, and published
-beta limits and duplicate-execution guidance.
+Status: In progress
 
-## Phase 1: Execution Hardening
+Repair the promises already exposed before adding product breadth.
 
-Status: Complete
+1. Replace `durlo.tx(client: unknown)` with an API that cannot mistake a `pg.Pool` or non-active
+   client for a transaction. Prove business writes and run creation commit or roll back together.
+2. Close or transition workflow step attempts when a lease stalls, a run is cancelled, or an
+   attempt times out. Terminal run detail must not contain unexplained active attempts or steps.
+3. Validate Standard Schema input once, persist its output, and represent schema input/output types
+   correctly. A transforming schema must execute successfully.
+4. Replace the unescaped `$durlo.date` representation with collision-safe serialization and test
+   round trips for every valid JSON shape.
+5. Make sleep and lease-loss sentinels internal or unforgeable so user exceptions always follow
+   normal failure persistence.
+6. Remove the ambiguous batch item union. Valid task payloads containing `input` and `options` must
+   never be interpreted as batch metadata.
+7. Make idempotency reuse explicit. Detect incompatible payload/options or return a result that says
+   whether a run was created or deduplicated.
+8. Track adapter connection ownership so closing Durlo never ends a caller-owned pool.
+9. Reject zero polling intervals and retry configurations that can overflow into invalid dates.
+10. Ensure worker health cannot report a healthy database while execution persistence repeatedly
+    fails.
 
-### Progress
+Done when every issue has a public-API regression test, no known state transition can silently
+corrupt input or durable history, and the complete audit passes.
 
-- Continuously replenished worker slots and independent timer promotion are implemented.
-- Lease heartbeats are serialized so a slow renewal cannot overlap the next renewal.
-- `worker.stop()` stops new claims and timer promotion, then `worker.start()` drains active work before returning.
-- Claim and timer polling recover independently from transient Postgres failures with bounded exponential backoff and jitter.
-- `worker.getHealth()` exposes lifecycle, active-slot, polling-success, and database-failure state.
-- Configured loggers receive structured worker lifecycle, database recovery, and run transition records.
-- Public run reads, cancellation, and manual retry are scoped by both app id and run id.
-- Workflow step and sleep calls are runtime-enforced as sequential boundaries; nested and concurrent calls fail predictably.
-- Attempt timeout, running cancellation, shutdown draining, and late completion behavior are documented and covered by deterministic tests.
+## Next: Public contract and first release
 
-### Outcomes
+Status: Blocked by integrity repair
 
-- Replace batch-shaped worker cycles with continuously replenished concurrency slots.
-- Promote due timers and reclaim expired work independently of long-running executions.
-- Recover from transient Postgres failures with bounded exponential backoff and jitter.
-- Serialize lease heartbeats and prevent renewal overlap.
-- Drain active work during graceful shutdown and expose worker health.
-- Scope get, cancel, retry, and future dashboard reads by app id and run id.
-- Enforce sequential workflow steps in v1.
-- Finalize cooperative timeout and cancellation behavior and terminology.
-- Connect structured logging to worker lifecycle and run transitions.
+1. Narrow the public exports before semver freezes internal adapter types, serializers, `_durlo`,
+   and control-flow errors.
+2. Add an abortable, timeout-aware, typed `durlo.runs.wait(handle)` or equivalent result API.
+3. Add explicit permanent failure and server-directed retry behavior without weakening retry
+   accounting.
+4. Decide and add the repository license; include package READMEs, license text, repository,
+   homepage, issue, keyword, and public publish metadata in every tarball.
+5. Derive the CLI version from the package manifest and introduce one version/release process with
+   changelog and provenance checks.
+6. Publish a non-placeholder prerelease and verify installation from the registry in an empty ESM,
+   CommonJS, and strict TypeScript consumer.
+7. Document priority ordering and every public option at the point of use.
 
-### Done When
+Done when an outside TypeScript/Postgres user can install one documented prerelease, understand the
+support boundary, run a task, wait for its typed result, and identify every failure state without
+repository knowledge.
 
-- One slow run does not leave other worker slots idle.
-- Due timers continue to progress while unrelated work is running.
-- A temporary database outage does not permanently stop the worker.
-- Cross-app run reads and mutations are impossible through public APIs.
-- Concurrent step calls fail predictably.
-- Shutdown, timeout, cancellation, and late completion have deterministic tests.
-
-## Phase 2: Deployment And Storage Safety
-
-Status: Complete
-
-### Progress
-
-- Task and workflow definitions now carry an opaque compatibility version, defaulting to `"1"`.
-- Runs persist their resource version and workers claim only exact kind, resource-id, and version matches.
-- `worker.getCompatibilityReport()` provides a bounded, read-only view of active runs unavailable to that worker's registrations.
-- The rolling-deployment, rollback, workflow-compatibility, and idempotency interaction policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
-- Additive migration `0002_resource_versions` preserves `0001_initial` and has a tested upgrade path that backfills existing runs to version `"1"`.
-- Inputs, outputs, errors, batches, step results, and total workflow step/sleep records now have documented configurable limits that fail before oversized JSON is persisted.
-- `durlo.runs.cleanup()` manually deletes bounded, app-scoped terminal history with row-lock safety; Durlo does not schedule cleanup itself.
-- Retention now explicitly defines the idempotency window: a key remains reserved until its run row is actually deleted.
-- A reproducible Postgres benchmark seeds 50,000 runs, verifies the intended claim, attempt, and timer indexes, and enforces a configurable query-latency envelope.
-- Claim selection now scans expired leases before pending work inside one transaction, removing the combined eligible-set sort while preserving expired-first ordering and `SKIP LOCKED` safety.
-- [Postgres Performance](PERFORMANCE.md) records the 50,000- and 500,000-run measurements; [Postgres Operations](OPERATIONS.md) defines pool, concurrency, polling, lease, and fleet connection guidance.
-- Released migration SQL is protected by immutable checksums, with upgrade tests from every Phase 2 schema prefix.
-
-### Outcomes
-
-- Define a workflow compatibility/version policy for runs spanning deployments.
-- Make missing compatible worker code diagnosable instead of silently pending.
-- Add explicit input, output, error, batch, and workflow-step limits.
-- Add a manual, bounded retention cleanup operation; Durlo will not schedule it itself in v1.
-- Define how retention affects idempotency keys.
-- Benchmark and improve claim, attempt, and timer queries where measurements require it.
-- Publish Postgres pool and worker-concurrency guidance.
-- Keep migrations immutable and test supported upgrade paths.
-
-### Done When
-
-- A sleeping workflow resumes only under a documented compatible deployment policy.
-- Oversized payloads fail before persistence with actionable errors.
-- Operators can bound storage growth without unsafe deletes.
-- Load tests establish a documented performance envelope.
-
-## Phase 3: Observability
-
-Status: Complete
-
-### Progress
-
-- `durlo.runs.list()` provides app-scoped, newest-first keyset pagination with status, kind, resource, version, and creation-time filters.
-- Payload-free list summaries and opaque versioned cursors give the CLI and dashboard a bounded stable contract.
-- `durlo.runs.getDetails()` reads one consistent run, step, attempt, and timer snapshot without taking row locks.
-- The core read model builds a deterministic chronological timeline from durable records without adding an event-history subsystem.
-- Detail diagnostics expose retries, failures, timeouts, stalls, durable lease loss, expired current leases, and timer lag.
-- `durlo.runs.getBacklogHealth()` reports app-scoped ready/delayed work, running and sleeping work, expired leases, due timers, and database-clocked lag.
-- Existing `worker.getHealth()` and `worker.getCompatibilityReport()` complete the local operational view, including bounded unregistered-resource and incompatible-version diagnosis.
-- Additive migration `0004_observability_reads` indexes list filters, active backlog reads, and timer detail; its upgrade path and immutable checksum are tested.
-- The reproducible 50,000-run benchmark now enforces the intended list, detail, and backlog query indexes and latency envelope.
-
-### Outcomes
-
-- Add app-scoped, cursor-paginated run listing and filtering.
-- Add run-detail reads for steps, attempts, timers, input, output, and errors.
-- Build a chronological run timeline from durable records.
-- Surface retries, stalls, lease loss, timer lag, and unregistered resources.
-- Expose basic worker and backlog health for local operation.
-
-### Done When
-
-- Every run transition can be explained from stored state.
-- Read queries are indexed and do not interfere materially with claiming work.
-- The read model is stable enough for the CLI and dashboard to consume.
-
-## Phase 4: CLI, Dashboard, And Quickstart
-
-Status: Complete
-
-### Progress
-
-- `@durlo/cli` now installs the `durlo` binary with `init`, `migrate`, `worker`, and `dev` commands.
-- TypeScript and JavaScript configs explicitly register exact task and workflow definitions plus worker and dashboard settings.
-- Worker commands own signal handling, drain through the existing worker lifecycle, and close their Postgres adapter only after shutdown.
-- The loopback-by-default local dashboard provides filtered run pages, backlog/process/compatibility health, complete run records, and the derived timeline.
-- Dashboard cancellation and manual retry are confirmed, same-origin, app-scoped actions whose final state validation remains atomic in storage.
-- The order-fulfillment demo transactionally starts a workflow, checkpoints an idempotent business effect, supports a deliberate hard crash, resumes after lease expiry, sleeps durably, fails once, retries, and completes.
-- The README is now a direct under-ten-minute quickstart instead of a project status page.
-- Packed-artifact verification installs an empty consumer, executes the installed CLI, kills and restarts its worker, and asserts the recovered dashboard timeline without workspace source imports.
-
-### Outcomes
-
-- Implement `durlo init`, `durlo migrate`, `durlo worker`, and `durlo dev`.
-- Load explicit task and workflow registration from configuration.
-- Build a local runs list and run-detail timeline.
-- Add safe cancel and manual retry actions.
-- Create one polished demo showing transactional workflow start, checkpointing, sleep, retry, crash recovery, and resume.
-- Replace the current README status page with a tested sub-ten-minute quickstart.
-
-### Done When
-
-- A new user can install packed packages, run the demo, crash the worker, restart it, and inspect the correct timeline without repository-specific knowledge.
-
-## Phase 5: Beta Release Proof
-
-Status: Complete
-
-### Progress
-
-- Four independent worker pools drain contended work, seeded creation/claim races preserve lease and idempotency invariants, and a blocked long-tail execution does not prevent slot replenishment.
-- Child-process crash windows cover death after claim, after an external side effect, and after a committed workflow checkpoint.
-- A TCP-level database outage test severs active and idle worker connections, verifies the process remains alive, observes lease loss, restores polling, and reclaims the expired attempt.
-- Due-timer lag drains independently while every execution slot is occupied.
-- A Postgres integration scenario covers a sleeping old workflow, new-version-only deployment, mixed-version resume, idempotency across the version change, and rollback availability.
-- Public packages declare Node.js 22 through 26; PostgreSQL 14 through 18 is the supported database range. The clean six-cell boundary audit passed on Node 22.23.1, 24.18.0, and 26.5.0 against PostgreSQL 14.23 and 18.4, and the same matrix runs nightly.
-- Immutable migrations and every schema-prefix upgrade are tested. Empty ESM, CommonJS, and strict TypeScript consumers verify the exact tarball contents, exports, CLI binary, migrations, and packed crash-and-resume quickstart.
-- Locally runnable [webhook-relay and catalog-import reference applications](../examples/README.md) exercise transactional task enqueue, external-delivery retry and idempotency, workflow checkpoints, durable cancellation windows, versioning, `SIGKILL` recovery, and business-data retention independently of Durlo history. Their actual APIs and workers run against real PostgreSQL in CI and the nightly boundary matrix.
-- [Beta Release Proof](BETA_RELEASE_PROOF.md) publishes the clean-checkout audit, regression scales, tested configuration/storage limits, duplicate-execution windows, stranding diagnostics, and reference-application evidence.
-- The complete application-level proof runs locally with a disposable PostgreSQL container. It does not require a VPS, hosted service, customer workload, or access to an unrelated repository.
-
-### Outcomes
-
-- Run multi-worker contention, crash-window, database-outage, timer-lag, and long-tail concurrency tests.
-- Test rolling deployments across supported workflow versions.
-- Test every supported Node.js and PostgreSQL boundary.
-- Verify migrations, package exports, and the quickstart from release tarballs.
-- Exercise Durlo through at least two production-shaped applications covering direct tasks and workflows, with real process boundaries, PostgreSQL transactions, retries, cancellation, and recovery.
-- Publish tested limits, expected duplicate-execution behavior, and operational guidance.
-
-### Done When
-
-- The release audit is repeatable from a clean checkout.
-- No known failure can silently strand eligible work.
-- The documented guarantees match observed production-like behavior.
-- The task and workflow reference applications pass from a clean checkout without external infrastructure beyond the disposable test database.
-
-### Future Adoption Evidence
-
-Operating reports from independent applications remain valuable post-beta adoption evidence, but
-they are not a repository release gate. Making beta completion depend on future users or unrelated
-private repositories would make the release non-reproducible. Unexpected findings from later
-adoption must still become deterministic tests or documented accepted limitations.
-
-## Post-v1: Adapter Ecosystem
+## Then: Production operations and scale proof
 
 Status: Future
 
-Adapter work begins only after the direct `pg` Postgres implementation meets the beta release gates. Durlo will keep one semantic execution contract while allowing applications to connect through their existing database client and, later, use additional storage engines.
+1. Make batch creation, run claiming/recovery, and timer promotion set-based with bounded claim
+   batches independent of configured worker concurrency.
+2. Add end-to-end benchmarks for jobs per second, pickup latency, checkpoint-heavy workflows,
+   recovery after outage, pool saturation, retained-history churn, and cleanup pressure.
+3. Add durable app/resource pause, worker drain, and bounded bulk retry/cancel controls.
+4. Provide standard Prometheus/OpenTelemetry recipes for backlog, polling, persistence failures,
+   lease loss, timer lag, pool waiting, and event-loop lag.
+5. Add connection-acquisition/query timeout guidance and tests that reserve enough capacity for
+   heartbeats under load.
+6. Define an online migration procedure for large tables and store migration checksums in the
+   database.
+7. Bound cleanup by actual child-row work or time, not only the number of parent runs.
+8. Decide the supported CPU-work boundary. Either add isolation or explicitly support only
+   cooperative I/O-oriented handlers in v1.
 
-### Adapter Foundation
+Done when capacity claims are reproducible on realistic workloads, operators can stop and recover
+work safely, and a worker fleet exposes actionable health rather than process-local hints alone.
 
-- Stabilize and version the semantic storage contract around claims, leases, retries, steps, timers, idempotency, and transaction-bound run creation.
-- Define connection ownership so Durlo never closes a user-owned client or pool.
-- Add adapter lifecycle and capability metadata without weakening required execution guarantees.
-- Publish an adapter conformance suite covering concurrency, lease fencing, crash recovery, idempotency, timers, and transactions.
-- Keep the Postgres state-machine implementation shared so client integrations do not duplicate its correctness logic.
+## After v1: Adoption bridge
 
-### Postgres Client Integrations
+Status: Future
 
-- Add an official Drizzle integration first, allowing users to provide their configured Drizzle client and transaction.
-- Add Prisma and Kysely integrations based on demand and the transaction guarantees their clients can expose.
-- Keep raw `pg` as the canonical Postgres implementation and the option for applications that do not use an ORM.
-- Name and document integrations so both the storage engine and client are clear; Drizzle and Prisma are connection choices, not separate durability engines.
+1. Publish standalone copies of the reference applications outside the monorepo package graph.
+2. Add a storage-adapter conformance suite before accepting alternate clients or engines.
+3. Add Drizzle transaction integration first, then evaluate Kysely, Prisma, and framework helpers
+   based on actual demand.
+4. Collect independent operating reports and convert every unexpected behavior into a deterministic
+   regression test or an explicit limitation.
+5. Build contributor, release, security-reporting, and support processes suitable for outside users.
 
-### Additional Storage Engines
+## Post-v1 product breadth
 
-- Evaluate an official MongoDB storage adapter after the conformance suite is proven by Postgres.
-- Require MongoDB deployments and transaction capabilities that can preserve Durlo's existing atomicity and lease guarantees.
-- Model MongoDB as its own durable state engine rather than routing it through the Postgres implementation.
-- Do not release any storage adapter that weakens Durlo's documented at-least-once, idempotency, or lease-fencing semantics.
+Status: Future
 
-### Community Adapters
+Only after the narrow product is trusted and adopted, evaluate in this order:
 
-- Document how to implement and test third-party adapters.
-- Distinguish Durlo-maintained adapters from community-maintained adapters.
-- Require published compatibility and conformance results before listing a community adapter as supported.
+1. per-resource and keyed tenant concurrency
+2. global concurrency, rate limiting, and throttling
+3. durable progress and application logs
+4. an authenticated deployable operations surface
+5. parent/child fan-out and fan-in flows
+6. schedules and cron
+7. event ingestion and event-triggered workflows
+8. hosted orchestration or additional storage engines
 
-### Done When
+Each addition needs a concrete use case, durable semantics, operational controls, and failure tests.
+Feature count alone is not progress.
 
-- Postgres passes the same public conformance suite available to adapter authors.
-- A Drizzle user can run Durlo and transactionally create runs using an existing configured client without separately managing a Durlo pool.
-- Adapter authors can implement the contract without importing Postgres-specific concepts into Durlo core.
-- Any additional storage engine demonstrates the same correctness guarantees under contention and crash recovery as Postgres.
+## Documentation ownership
 
-## Tracking Model
+- `ROADMAP.md` owns future work and ordering.
+- `ARCHITECTURE.md` describes the implementation that exists.
+- `EXECUTION_SEMANTICS.md` describes public runtime behavior, including current limitations.
+- `OPERATIONS.md` owns deployment and PostgreSQL guidance.
+- `DECISIONS_AND_EDGE_CASES.md` records durable product decisions and non-goals.
 
-The roadmap and GitHub serve different purposes:
-
-- This file owns product direction, phase order, scope, and release gates.
-- A GitHub `Durlo v1` milestone should own execution tracking.
-- Create issues only for work that is ready to implement, ideally one outcome or tested slice per issue.
-- Each issue should link to its roadmap phase and contain acceptance criteria.
-- Do not copy the entire roadmap into GitHub issues.
-- When an issue changes a phase outcome or completes a gate, update this file in the same pull request.
-
-This keeps long-term intent versioned with the code while GitHub handles assignment, discussion, and day-to-day progress.
+When code changes a promise, update the owning document in the same commit. Do not add a new
+top-level document when one of these five already owns the subject.

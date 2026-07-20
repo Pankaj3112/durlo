@@ -47,26 +47,20 @@ assert(
   "nightly must run the deployable reference applications"
 );
 
-const support = await readFile(new URL("../docs/SUPPORT.md", import.meta.url), "utf8");
-assert(support.includes("Node.js 22 through 26"), "support policy must declare Node boundaries");
-assert(
-  support.includes("PostgreSQL 14 through 18"),
-  "support policy must declare PostgreSQL boundaries"
-);
+const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+assert(readme.includes("Node.js 22 through 26"), "README must declare Node boundaries");
+assert(readme.includes("PostgreSQL 14 through 18"), "README must declare PostgreSQL boundaries");
+assert(readme.includes("Durlo is pre-release"), "README must state the pre-release status");
 
 const roadmap = await readFile(new URL("../docs/ROADMAP.md", import.meta.url), "utf8");
-const phaseFive = roadmap.match(/## Phase 5: Beta Release Proof[\s\S]*?(?=\n## )/)?.[0];
-assert(phaseFive?.includes("Status: Complete"), "Phase 5 must remain complete in the roadmap");
-
-const betaProof = await readFile(new URL("../docs/BETA_RELEASE_PROOF.md", import.meta.url), "utf8");
-assert(/^Status: Complete$/m.test(betaProof), "beta release proof must remain complete");
+const currentPhase = roadmap.match(/## Now: Integrity repair[\s\S]*?(?=\n## )/)?.[0];
 assert(
-  betaProof.includes("pnpm test:local test:reference-apps"),
-  "beta release proof must retain its local reference-app command"
+  currentPhase?.includes("Status: In progress"),
+  "roadmap must identify integrity repair as the current phase"
 );
 
 process.stdout.write(
-  "release contract passed: manifests, exports, support boundaries, nightly audit, and Phase 5 proof\n"
+  "repository contract passed: manifests, exports, support boundaries, nightly audit, and roadmap status\n"
 );
 
 async function readJson(path) {
