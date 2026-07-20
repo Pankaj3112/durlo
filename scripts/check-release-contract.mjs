@@ -33,6 +33,12 @@ assert(
 const cli = manifests.find(({ name }) => name === "@durlo/cli");
 assert(cli?.bin?.durlo === "./dist/bin.js", "@durlo/cli must publish the durlo binary");
 
+const workspace = await readFile(new URL("../pnpm-workspace.yaml", import.meta.url), "utf8");
+assert(
+  /^preferSymlinkedExecutables: true$/m.test(workspace),
+  "workspace installs must link the durlo binary before build output exists"
+);
+
 const nightly = await readFile(
   new URL("../.github/workflows/nightly.yml", import.meta.url),
   "utf8"
