@@ -1,318 +1,211 @@
 # Durlo Execution Semantics
 
-Status: Current
-Updated: 2026-07-16
+Status: Current pre-release behavior
+Updated: 2026-07-20
 
-Answers: **What guarantees do the public calls provide?**
+This document describes what the current public API does, including known defects. It is not a
+promise that roadmap work is already implemented.
 
-This document describes runtime behavior for the v1 task/workflow API. It does not define storage tables or adapter method names.
+## Guarantee model
 
-## Core Model
-
-Durlo provides durable scheduling and state tracking. It does not provide exactly-once execution of arbitrary user code.
-
-The v1 guarantee model:
-
-- Enqueue/start persistence is durable once committed.
+- Run persistence is durable after its database transaction commits.
 - Worker execution is at-least-once.
-- User code must be safe to retry.
-- Idempotency keys deduplicate run creation, not external side effects.
-- `step.run(...)` checkpoints successful workflow steps.
-- Sleeps and delays survive worker restarts.
-- Transactions can commit business rows and Durlo runs together.
-- Expired running leases are reclaimed or terminally failed; they must not remain stranded forever.
-- Stale workers cannot complete or fail a run after losing the current lease token.
-- Workers execute only runs whose stored resource version exactly matches registered code.
+- Idempotency keys deduplicate run creation, not user-code execution or external side effects.
+- A current lease token fences durable writes after another claim rotates ownership.
+- Completed workflow step results are reused after re-entry.
+- Delays and sleeps survive worker restarts.
+- Workers claim only exact resource kind, id, and compatibility-version matches.
+- Durlo does not provide exactly-once effects, process isolation, deterministic replay, or a hosted
+  control plane.
 
-## Run Creation
+## Run creation
 
-`task.enqueue(input, options?)` creates a task run.
+`task.enqueue(input, options?)` creates a task run. `workflow.start(input, options?)` creates a
+workflow run. Both return a `RunHandle` after persistence.
 
-`workflow.start(input, options?)` creates a workflow run.
+Supported options are `delay`, `runAt`, `attempts`, `backoff`, `idempotencyKey`, `priority`, and
+`timeout`. `delay` and `runAt` are mutually exclusive. Higher priority values are claimed first;
+continuous high-priority work can starve lower priorities.
 
-If the call resolves, Durlo has persisted a run and returned a `RunHandle`.
+If creation throws after an uncertain connection failure, use an idempotency key before retrying.
+The handle's output type is currently phantom: `runs.get()` returns a `RunRecord` whose output is
+`JsonValue`, and there is no public wait-for-result method.
 
-If the call throws, the caller must treat the result as unknown unless an `idempotencyKey` was used. Retrying the same call with the same idempotency key should return the same run if it was already created.
+### Idempotency
 
-## Idempotency
-
-`idempotencyKey` is scoped to:
+The key scope is:
 
 ```txt
 app id + resource kind + resource id + idempotency key
 ```
 
-For duplicate keys, Durlo returns the existing `RunHandle`.
+The resource version is intentionally outside the scope. A duplicate key returns the existing run,
+including its original version. The current conflict path does not compare input, options, or
+version and does not report whether creation was deduplicated. Callers must not reuse one key for
+different logical work.
 
-Idempotency does not mean the run body executes once. It only prevents duplicate run rows for the same key.
+The key remains reserved while the run row exists. Deleting a terminal run through cleanup also
+releases its key.
 
-Rows retained in Durlo storage define the deduplication window. V1 has no idempotency TTL or reset API.
+### Batch creation
 
-Manual retention cleanup is the only v1 operation that releases an idempotency key. A key remains reserved until its terminal run row is actually deleted. After deletion, the same scoped key may create a new run. See [Retention Cleanup](RETENTION.md).
+`task.batchEnqueue(items)` validates all items before persistence and creates the batch in one
+transaction. Returned handles preserve order. Duplicate idempotency keys inside one batch are
+rejected.
 
-Failed, dead-letter, completed, and cancelled runs keep their idempotency key. Starting new work with the same logical business key after terminal status requires a different idempotency key until a future reset API exists.
+The current `Array<TInput | { input: TInput; options?: RunOptions }>` API is ambiguous. An object
+input whose only keys are `input` and `options` is interpreted as batch metadata. Avoid that payload
+shape until the API is replaced.
 
-## Transactions
+## Transaction-bound creation
 
-`durlo.tx(tx).enqueue(...)` and `durlo.tx(tx).start(...)` write through a caller-owned transaction client.
+`durlo.tx(client).enqueue(...)`, `.start(...)`, and `.batchEnqueue(...)` issue run writes through the
+provided object's `query()` method. Durlo never begins, commits, or rolls back that transaction.
 
-Guarantee:
+Atomic application data plus run creation is achieved only when the caller passes a checked-out raw
+`pg` client that is already inside `BEGIN` and later commits or rolls back that same client. The
+current API accepts `unknown` and checks only for `query()`, so it also accepts `pg.Pool` and clients
+outside a transaction. Passing either silently loses atomicity. Treat this API as unsafe until the
+roadmap transaction repair lands.
 
-```txt
-business data and Durlo run commit together, or neither commits
-```
+## Validation and serialization
 
-Durlo does not start, commit, or roll back the transaction. The application owns the transaction lifecycle.
+A Standard Schema, when configured, is run before creation. Its returned value is serialized and
+stored. The worker currently deserializes that value and runs the same schema again before user
+code. Transforming schemas must therefore accept their own output or execution can fail after a
+successful enqueue. This double-validation behavior is a known defect.
 
-V1 supports raw `pg` transaction clients.
+Durlo stores compact JSON plus tagged `Date` values and serialized `Error` objects. It rejects
+non-finite numbers, `BigInt`, `undefined`, functions, symbols, circular objects, invalid dates, and
+unsupported class instances.
 
-## Worker Execution
+The current date tag is a one-key object named `$durlo.date`. A valid user object with that exact
+shape is deserialized as a `Date`; there is no escape mechanism. Do not use that shape in inputs or
+results until collision-safe serialization lands.
 
-Workers claim due runs with lease-based locking.
+## Storage limits
 
-Rules:
+Limits are configured on `Durlo` and measured as compact serialized UTF-8 JSON.
 
-- A claimed run has `locked_by` and `locked_until`.
-- A claimed run also has a unique `lease_token` generated for that claim.
-- A worker may extend the lease while executing.
-- Heartbeat renewals for one run are serialized; Durlo does not start another renewal while the previous renewal is unresolved.
-- If a worker crashes, the lease eventually expires.
-- Another worker may reclaim expired work.
-- User code can therefore execute more than once.
-- Completion, failure, cancellation, and lease extension must verify the current lease token when acting on a running attempt.
-- If lease extension returns false, the worker has lost ownership. It should stop scheduling more Durlo work for that run and any final completion write must be rejected by the adapter.
-- Worker concurrency slots are replenished individually as runs finish.
-- Timer promotion continues independently while execution slots are occupied.
-- Graceful stop prevents new claims and waits for already active runs to settle.
-- Transient claim and timer query failures are retried with bounded exponential backoff and jitter; either loop can recover without restarting the worker.
+| Limit | Default | Behavior |
+| --- | ---: | --- |
+| `maxInputBytes` | 1 MiB | Rejects creation before persistence |
+| `maxOutputBytes` | 1 MiB | Fails the attempt without storing the output |
+| `maxErrorBytes` | 64 KiB | Replaces oversized errors with bounded diagnostics |
+| `maxBatchItems` | 1,000 | Rejects the whole batch |
+| `maxBatchBytes` | 10 MiB | Rejects the whole batch |
+| `maxStepResultBytes` | 1 MiB | Fails the step and workflow attempt |
+| `maxWorkflowSteps` | 1,000 | Counts durable steps and sleeps |
 
-Durlo must not hold a database transaction open while user code runs.
+Output, error, step-result, and workflow-step limits are persisted in run options so later workers
+use the creation-time values. Runs created before persisted limits use worker defaults.
 
-Lease expiry is treated as a stalled attempt. It is recorded in attempt history and consumes retry budget. If retry budget is exhausted, an expired task moves to `dead_letter` and an expired workflow moves to `failed`.
+## Worker ownership and recovery
 
-`attempt_count` counts claims and workflow re-entries. Retry exhaustion is based on failed, timed-out, and stalled attempt history, so successful sleep/resume boundaries do not consume the workflow's failure retry budget.
+A claim stores `locked_by`, `lease_token`, and `locked_until`. Heartbeats extend an unexpired lease
+roughly every third of `leaseDuration`. Any failed renewal is treated conservatively as lease loss:
+the attempt signal is aborted and final persistence is suppressed.
 
-## Task Semantics
+After expiry, another worker can claim the run. Reclaim marks the old run attempt `stalled`, counts
+it against the failure budget, and either creates a new attempt or moves an exhausted task to
+`dead_letter` and an exhausted workflow to `failed`.
 
-A task run executes the task `run(input, ctx)` function.
+Durable completion/failure currently checks token, worker, and `running` status but not lease time.
+A worker may finish after the deadline if no competing claimant has rotated the token. Once another
+claim wins, the stale token cannot write.
 
-On success:
+### Known workflow-history defect
 
-- Output is persisted.
-- Run status becomes `completed`.
+Lease reclaim closes only the old run attempt. A workflow step attempt active during a crash or
+timeout can remain recorded as `running` after recovery, while a later entry creates another step
+attempt. Cancellation closes the current attempt record but leaves the durable step row `running`.
+Run detail can therefore show stale active step state. This is release-blocking roadmap work.
 
-On thrown error:
+## Retries and failure
 
-- Error is persisted.
-- Attempt count has already increased when the run was claimed.
-- Durlo either schedules a retry or moves the run to terminal failure.
+`attempts` includes the first failure-bearing attempt and defaults to 3. The default backoff is
+exponential from 10 seconds with factor 2 and jitter 0.2. Run options override definition options,
+which override client defaults.
 
-If a worker crashes after user code performs an external side effect but before Durlo persists completion, the task may run again.
+Thrown errors, validation failures at execution, serialization failures, and timeouts all follow
+the same retry policy. There is currently no supported permanent-error, custom retry decision,
+`Retry-After`, or retry-at timestamp exception.
 
-## Workflow Semantics
+Task exhaustion becomes `dead_letter`; workflow exhaustion becomes `failed`. Manual retry is
+allowed only for those respective terminal states. It preserves history and schedules one more
+claim without resetting automatic failure history.
 
-A workflow run executes `workflow.run({ input, step, run })`.
+Workflow re-entry after successful sleeps increases `attempt_count` without consuming failure
+budget. Consequently `context.attempt.number` can exceed `context.attempt.maxAttempts`; the former
+is a claim count and the latter a failure budget.
 
-Workflow code may be re-entered after worker crash, retry, or sleep resume. Durable side effects should be wrapped in `step.run(...)`.
+Backoff factor and delay currently have no practical combined ceiling. Extreme exponential
+settings can overflow into an invalid retry date.
 
-Top-level workflow code outside `step.run(...)` can run more than once.
+## Timeouts, cancellation, and user code
 
-Durlo does not replay workflow history like Temporal. It re-enters the workflow function and uses stored step/timer records to skip completed durable boundaries. Workflow code should therefore be deterministic with respect to the original input and persisted step results.
+Timeouts use `Promise.race` and abort the task/workflow signal with `AttemptTimeoutError`. The
+timed-out promise is not terminated; code that ignores the signal can continue and perform late
+external effects while a retry starts.
 
-## Deployment Compatibility
+Cancellation is app-scoped and valid for pending, running, or sleeping work. It prevents future
+Durlo state transitions and cancels pending timers. Running code observes cancellation only after
+the next failed heartbeat, and arbitrary JavaScript may continue locally.
 
-Task and workflow definitions have an opaque `version`, defaulting to `"1"`. Run creation persists that version. Claiming requires an exact match across resource kind, resource id, and resource version.
+`WorkflowSleepError` and `LostLeaseError` are currently public exports used as internal worker
+sentinels. If user code throws them, the worker can suppress ordinary failure persistence. Do not
+throw these classes from application code.
 
-Retries, delays, lease recovery, manual retries, and workflow sleep/resume do not change the stored version. A code change may retain a version only if it remains compatible with all active runs under that version. Breaking changes require a new version and continued worker availability for older active versions.
+## Workflow checkpoints and sleeps
 
-`worker.getCompatibilityReport()` is a bounded, read-only diagnostic relative to that worker's registrations. It does not prove that code is unavailable across a fleet of specialized workers. See [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md) for the rollout, rollback, workflow checkpoint, and idempotency policy.
+`step.run(id, fn)` reserves a stable step id, returns an existing completed result on re-entry, or
+executes and persists a new result. Step and sleep calls must be sequential and cannot be nested.
 
-Unsafe examples:
+Workflow branching must depend on input or prior durable step results. Mutable outer variables,
+current time, unordered data, and non-checkpointed reads can differ after re-entry. Step ids must
+remain stable across compatible deployments.
 
-- Reading current database state outside `step.run(...)` and branching on it.
-- Calling external APIs outside `step.run(...)`.
-- Mutating outer variables inside `step.run(...)` and expecting them to exist on resume.
-- Generating random step IDs.
+`step.sleep` and `step.sleepUntil` create one timer for `(run id, step id)`, move the run to
+`sleeping`, and release the worker. Due timer promotion and moving the run back to `pending` happen
+in one database transaction and only while the run is still sleeping.
 
-## Step Semantics
+## Compatibility versions
 
-`step.run(id, fn)` persists a successful result under `(run id, step id)`.
+Definition versions are opaque strings, defaulting to `"1"`. Runs retain their creation version
+through delays, retries, sleeps, lease recovery, and manual retry. Workers claim exact matches.
 
-If the step already completed, Durlo returns the persisted result and does not call `fn` again.
+Keep a version only when new code can read every active input and checkpoint and preserves existing
+step meanings. For a breaking change, deploy new-version workers, switch producers, and retain old
+workers until old active runs finish. `worker.getCompatibilityReport()` is bounded and relative to
+one worker, so it does not prove fleet-wide unavailability.
 
-If `fn` throws, Durlo applies retry policy and records the failure.
+## Reads and controls
 
-If a worker crashes after `fn` performs an external side effect but before the step result is persisted, Durlo may call `fn` again.
+- `runs.get()` returns one app-scoped run or `null`.
+- `runs.list()` returns payload-free newest-first keyset pages; default 50, maximum 200.
+- `runs.getDetails()` returns one repeatable-read snapshot plus a derived timeline and diagnostics.
+- `runs.getBacklogHealth()` aggregates active state and lag for one app.
+- `worker.getHealth()` reports one process's claim and timer polling state.
+- `worker.getCompatibilityReport()` returns at most 1,000 worker-relative unavailable runs.
+- `runs.cancel()` and `runs.retry()` perform app-scoped state transitions.
+- `runs.cleanup()` deletes bounded terminal history.
 
-Step ids must be stable for the lifetime of a workflow definition.
+The timeline is derived from current durable records, not a complete event history. Because of the
+step-attempt defect above, it cannot yet guarantee that every displayed active step attempt is
+actually active.
 
-V1 step rules:
+## Retention
 
-- Duplicate step ids in one workflow run are runtime errors.
-- `step.*` calls inside a `step.run(...)` callback are runtime errors.
-- Concurrent or otherwise overlapping `step.*` calls are runtime errors; workflow durable boundaries must be awaited sequentially.
-- Step-level retry overrides are not public in v1; step failures use the workflow run retry policy.
-- Completed steps return the stored result without calling `fn`.
+`runs.cleanup({ olderThan, limit?, statuses? })` deletes only terminal runs older than a
+PostgreSQL-clock cutoff. The default limit is 1,000 and maximum is 10,000. It uses row locks and
+`SKIP LOCKED`, then cascades to steps, timers, and attempts.
 
-## Sleep Semantics
+The operation is bounded by parent-run count, not child rows, bytes, WAL, or elapsed time. A run
+with extensive history can therefore make a nominally small cleanup expensive. Durlo does not
+schedule cleanup automatically.
 
-`step.sleep(id, duration)` and `step.sleepUntil(id, date)` persist a timer.
+## Deliberate v1 non-goals
 
-The workflow pauses and the worker is released.
-
-When the timer is due, a worker resumes the workflow. Resume is at-least-once, but the sleep step itself should not create duplicate timers for the same `(run id, step id)`.
-
-Timer firing must be atomic with moving the owning run from `sleeping` to `pending`. A cancelled or terminal run must not be resumed by a due timer.
-
-## Delay Semantics
-
-`delay` and `runAt` on `task.enqueue(...)` or `workflow.start(...)` control when a run first becomes eligible.
-
-They do not guarantee exact wall-clock execution time. A run becomes eligible at or after its scheduled time, then waits for an available worker.
-
-## Retry Semantics
-
-`attempts` includes the first attempt.
-
-Default attempts: `3`.
-
-Retry precedence:
-
-1. Run option override.
-2. Task or workflow definition retry.
-3. Client default retry.
-4. Durlo default retry.
-
-Backoff decides when the next attempt becomes eligible. Jitter may shift retry time to reduce synchronized retries.
-
-Default retry:
-
-```txt
-attempts: 3
-backoff: exponential
-base delay: 10 seconds
-jitter: 0.2
-```
-
-Task exhaustion moves the run to `dead_letter`. Workflow exhaustion moves the run to `failed`.
-
-## Cancellation
-
-`durlo.runs.cancel(handleOrId)` is best-effort.
-
-The lookup and mutation are scoped to the `Durlo` instance's app id. A run belonging to another app is not visible or cancellable through that instance.
-
-Cancellation must prevent future execution for pending, sleeping, delayed, and retry-scheduled runs.
-
-Cancellation may not interrupt JavaScript already executing. If a running attempt finishes after cancellation, Durlo should avoid scheduling further work for that run.
-
-For running runs, cancellation changes the run to `cancelled` and clears the lease only if the adapter can do so atomically. A stale worker completion after cancellation must not move the run back to `completed`.
-
-Running cancellation is cooperative at the worker boundary. The worker observes the invalidated lease on a heartbeat, aborts the attempt signal with `LostLeaseError`, and suppresses final writes. If user code ignores the signal, the durable run remains cancelled but the local worker slot stays occupied until that JavaScript settles.
-
-## Manual Retry
-
-`durlo.runs.retry(handleOrId)` creates a new attempt for a failed or dead-letter run.
-
-The lookup and mutation are scoped to the `Durlo` instance's app id. A run belonging to another app is treated as missing.
-
-Manual retry does not clear history. Attempts remain visible for debugging.
-
-Manual retry schedules one new claim without resetting the automatic retry budget. If that manual attempt fails, the run returns to `dead_letter` or `failed`; another manual retry may be requested afterward.
-
-Manual retry is allowed for `failed` workflow runs and `dead_letter` task runs. V1 does not manually retry `completed`, `cancelled`, `pending`, `running`, or `sleeping` runs.
-
-## Observability Reads
-
-Run reads are always scoped to the `Durlo` instance's app id.
-
-`durlo.runs.list(options?)` returns bounded payload-free summaries in descending `(created_at, id)` order. Pagination is keyset-based with an opaque cursor; it does not hold a database snapshot between pages. Status, kind, resource id, resource version, and exclusive creation-time filters are supported.
-
-`durlo.runs.getDetails(handleOrId)` returns a short repeatable-read snapshot of the run, its steps, attempts, and timers, plus a timeline and diagnostics derived in core. It takes no row locks. The timeline is an explanation of durable state transitions, not a replay log and not an additional source of truth.
-
-`durlo.runs.getBacklogHealth()` returns an app-scoped database-clocked snapshot of ready and delayed work, running and sleeping work, expired leases, pending/due timers, and lag. It does not claim, fire, cancel, retry, or otherwise mutate work.
-
-`worker.getHealth()` remains process-local. `worker.getCompatibilityReport()` remains worker-relative: an unregistered or incompatible run in one report may still be serviceable by a different worker. See [Observability](OBSERVABILITY.md).
-
-## Batch Enqueue
-
-`task.batchEnqueue(items)` should be atomic by default.
-
-If any item fails validation or persistence, no items are enqueued.
-
-The returned handles preserve item order.
-
-Duplicate idempotency keys inside the same batch are a validation error in v1.
-
-## Schema Validation
-
-If a task or workflow has a schema:
-
-- Input is validated before run creation.
-- Input is validated again before execution.
-
-Validation failure before persistence rejects the caller.
-
-Validation failure at execution time fails the run without calling user code.
-
-## Serialization
-
-Durlo stores inputs, outputs, step results, and errors as JSON.
-
-V1 should support JSON-compatible values plus explicit Durlo handling for `Date` and `Error`.
-
-V1 should reject unsupported values before persistence where possible:
-
-- `BigInt`
-- functions
-- symbols
-- circular objects
-- class instances that cannot be represented as JSON
-
-Values read back from storage are plain data. Class prototypes and methods are not preserved.
-
-Serialized inputs, outputs, errors, batch inputs, and workflow step results have explicit UTF-8 byte limits. Workflow runs also limit the total durable step and sleep records they can create. Input and batch violations reject creation atomically. Output, error, and step violations follow normal attempt failure and retry semantics without persisting the oversized value. Defaults and configuration are defined in [Storage Limits](STORAGE_LIMITS.md).
-
-## Timeouts
-
-Timeouts are attempt-level limits.
-
-If an attempt exceeds its timeout, Durlo records a timeout failure and applies retry policy.
-
-At the limit, Durlo aborts the attempt signal with the exported `AttemptTimeoutError`, persists a timed-out attempt, and applies the retry policy. Durlo does not wait for arbitrary JavaScript to terminate before releasing the execution slot or scheduling a retry.
-
-Timeouts are cooperative. Durlo cannot safely terminate arbitrary JavaScript in-process. Code that ignores the signal may finish late, but that late return cannot write run completion through the concluded attempt. External side effects can still happen late and must be idempotent.
-
-Timeout failure consumes an attempt and follows the same retry/exhaustion rules as thrown errors.
-
-## Terminal Statuses
-
-Terminal run statuses:
-
-- `completed`
-- `failed`
-- `dead_letter`
-- `cancelled`
-
-Non-terminal run statuses:
-
-- `pending`
-- `running`
-- `sleeping`
-
-`dead_letter` means automatic attempts are exhausted and manual retry is still possible.
-
-## Non-Goals
-
-V1 does not guarantee:
-
-- Exactly-once execution of user code.
-- Exactly-once external side effects.
-- Deterministic replay like Temporal.
-- Interruption of already-running JavaScript.
-- Cron scheduling.
-- Event-driven workflow triggers.
-- Distributed global concurrency limits.
-
-The production-like crash, database-outage, timer-lag, contention, and rolling-version evidence for
-these guarantees is summarized in [Beta Release Proof](BETA_RELEASE_PROOF.md).
+V1 does not guarantee exactly-once effects, process isolation, event or cron triggers, parent-child
+flows, distributed concurrency, rate limiting, authenticated production UI, or deterministic
+workflow replay.

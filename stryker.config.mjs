@@ -23,5 +23,5 @@ export default {
   },
   concurrency: 4,
   timeoutMS: 10_000,
-  ignorePatterns: ["coverage", "test/postgres", "test/qa"]
+  ignorePatterns: ["coverage", "test/postgres"]
 };

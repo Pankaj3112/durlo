@@ -61,5 +61,5 @@ use the worker compatibility report before removing them.
 - Treat cancellation as best-effort if publication has already started.
 - Do not change workflow behavior incompatibly without changing its version and retaining old code.
 
-This application supplies the direct-workflow half of the repeatable Phase 5 application proof. That
-is an engineering claim, not a claim that this sample has carried customer production traffic.
+This application is a direct-workflow regression fixture and integration example. It has not
+carried customer production traffic and does not establish a throughput or support claim.

@@ -1,198 +1,137 @@
 # Durlo Architecture
 
 Status: Current
-Updated: 2026-07-16
+Updated: 2026-07-20
 
-This document explains how Durlo is built today. Public guarantees belong in [EXECUTION_SEMANTICS.md](EXECUTION_SEMANTICS.md), product decisions belong in [DECISIONS_AND_EDGE_CASES.md](DECISIONS_AND_EDGE_CASES.md), and future work belongs in [ROADMAP.md](ROADMAP.md).
+This document describes the implementation that exists today. Public behavior belongs in
+[Execution Semantics](EXECUTION_SEMANTICS.md), deployment guidance in
+[Operations](OPERATIONS.md), durable rationale in
+[Decisions And Edge Cases](DECISIONS_AND_EDGE_CASES.md), and future work in the
+[Roadmap](ROADMAP.md).
 
-## Product Boundary
+## Product boundary
 
-Durlo v1 is a TypeScript durable task and workflow library for applications that already use Postgres.
+Durlo is a TypeScript library for direct tasks and direct workflows in applications that already
+use PostgreSQL. It is embedded in application and worker processes; it is not a hosted service.
 
-It provides:
+```txt
+application process                 worker process
+task.enqueue / workflow.start       registered definitions
+            \                           /
+             \                         /
+              PostgreSQL durable state
+          runs / steps / timers / attempts
+```
 
-- direct task enqueue
-- direct workflow start
-- Postgres-backed scheduling and state
-- a normal Node.js worker process
-- retries, delays, checkpoints, sleeps, cancellation, and manual retry
-- transaction-bound enqueue and start with raw `pg`
-
-It does not provide events, cron, multiple languages, hosted orchestration, framework adapters, distributed global concurrency, or Temporal-style replay.
+Creating a run never executes user code. A worker must register the exact resource kind, id, and
+compatibility version before it can claim that run.
 
 ## Packages
 
 ```txt
-@durlo/core       public API, validation, retries, steps, and worker runtime
-@durlo/postgres   migrations and atomic Postgres state transitions
-@durlo/cli        configuration loader, CLI process lifecycle, and local dashboard
+@durlo/core       definitions, validation, retries, workflow tools, worker, read API
+@durlo/postgres   schema migrations and PostgreSQL state transitions
+@durlo/cli        config loading, process lifecycle, and local dashboard
 ```
 
-The core package does not depend on Postgres. It consumes the internal adapter contract defined in `packages/core/src/types.ts`.
+Core depends on an adapter contract rather than PostgreSQL. The Postgres adapter never imports
+user definitions. The CLI uses the same core worker and read/control APIs as library consumers; it
+does not implement another execution state machine.
 
-The Postgres package does not import user task or workflow code. It only stores records and performs state transitions.
+## Durable records
 
-The CLI imports user code only from an explicit `durlo.config.*` file. It passes registered definitions into the existing core worker and consumes the existing observability and control APIs for its local dashboard; it does not own a parallel execution state machine.
+The schema in `packages/postgres/src/migrations.ts` contains:
 
-## Runtime Topology
+- `durlo_runs`: scheduling state, current status, input/output/error, lease, and retained summary
+- `durlo_steps`: workflow checkpoint state and result
+- `durlo_timers`: durable sleep state
+- `durlo_attempts`: run and step execution evidence
+- `durlo_schema_migrations`: applied migration versions
+
+PostgreSQL `now()` decides eligibility, lease expiry, cleanup age, and timer readiness. Active queue
+state and retained history share the same tables.
+
+## Run ownership
+
+Workers poll for pending due runs and expired leases using short transactions and
+`FOR UPDATE SKIP LOCKED`. Each claim writes a worker id, a unique lease token, and an expiry. The
+worker renews the lease while executing user code outside a database transaction.
+
+Completion, failure, release, checkpoint, and sleep writes verify the current lease token. Once a
+new claim rotates that token, writes from the older worker are rejected. This fences durable state;
+it cannot prevent a late external side effect.
+
+Claiming currently selects a bounded group and then performs failure counts, state updates, and
+attempt inserts sequentially for each run while row locks remain held. Timer promotion and batch
+creation also perform per-record queries. The selector benchmark does not measure these full
+transactions or end-to-end throughput.
+
+## Tasks
 
 ```txt
-application process
-  task.enqueue(...) / workflow.start(...)
-                  |
-                  v
-              Postgres
-      runs / steps / timers / attempts
-                  ^
-                  |
-          Node.js worker process
-       registered tasks and workflows
+pending -> running -> completed
+                   -> pending retry -> running
+                   -> dead_letter
+                   -> cancelled
 ```
 
-Calling `enqueue` or `start` persists a run. It does not execute user code. User code runs only inside a worker that registered the matching task or workflow definition.
+Tasks execute in the worker's Node.js process. Timeouts and cancellation use `AbortSignal`; Durlo
+does not terminate arbitrary JavaScript. CPU-bound or signal-ignoring work can block heartbeats or
+continue after a timeout.
 
-`durlo worker` is the production process entry point. `durlo dev` adds a loopback local dashboard and development-time migration step around the same worker. Both commands handle termination by stopping new claims and waiting for the core worker to drain before the configured adapter closes.
+## Workflows
 
-The application and worker may be separate processes. Multiple worker processes may use the same database; Postgres row locks and lease tokens decide ownership.
+Workflow code re-enters from the top after a retry, crash, or sleep. `step.run(id, fn)` stores a
+successful result and returns it without running `fn` again on later entry. `step.sleep` and
+`step.sleepUntil` store a timer and move the run to `sleeping`; a separate worker polling loop fires
+due timers and returns the run to `pending`.
 
-## Runtime Entities
+V1 requires sequential, non-nested `step.*` calls. Durlo stores checkpoints, not a Temporal-style
+event history, so local variables and non-checkpointed reads are not replayed.
 
-### Definition
+## Worker loops
 
-A task or workflow definition is TypeScript code registered under a stable resource id and an opaque compatibility version. The default version is `"1"`.
+One worker runs:
 
-### Run
+1. a claim loop that fills process-local execution slots;
+2. a timer loop that promotes due workflow timers independently;
+3. one serialized heartbeat loop per active run.
 
-A run is a durable task or workflow instance stored in `durlo_runs`. The run row is both the scheduling record and the current state summary. It retains the resource version selected at creation for its entire lifetime.
+Both polling loops use the configured `pollInterval` and recover from query failures with bounded
+backoff and jitter. Every worker currently polls timers even if it registers only tasks.
 
-### Worker
+`worker.stop()` stops new claims and timer promotion. The promise returned by `worker.start()`
+settles after active executions drain. `worker.getHealth()` describes only that process;
+`durlo.runs.getBacklogHealth()` describes stored work for one app; and
+`worker.getCompatibilityReport()` compares active stored work with one worker's registrations.
 
-A worker polls Postgres for eligible runs whose resource ids it registered. It executes user code in-process and renews a lease while the run is active. Execution slots are replenished as individual runs finish; the worker does not wait for an entire claimed group before claiming into newly available capacity.
+## Transactions and adapters
 
-### Step
+`durlo.tx(client)` creates a transactional adapter bound to a caller-provided object with a
+`query()` method. Durlo does not begin, commit, or roll back the caller transaction.
 
-`step.run(id, fn)` is a durable checkpoint inside a workflow. The callback runs in the workflow's worker process. A completed result is stored in `durlo_steps` and returned without re-running the callback after re-entry.
+The current runtime check cannot distinguish an active `pg.PoolClient` transaction from a
+`pg.Pool` or a client outside `BEGIN`. Atomic application-write plus run creation therefore depends
+on correct caller usage until the transaction API is replaced. The exported `PostgresAdapter`
+constructor also accepts a caller-owned pool, but `close()` currently ends it; ownership is not yet
+tracked.
 
-### Timer
+## Reads, controls, and cleanup
 
-`step.sleep` and `step.sleepUntil` store timers in `durlo_timers`. Sleeping releases the worker. A later polling cycle atomically fires the timer and makes the workflow pending again.
+Run list uses app-scoped keyset pagination. Run details read the run, steps, attempts, and timers in
+one short repeatable-read transaction, then core derives a timeline and diagnostics. Backlog health
+aggregates active state using the PostgreSQL clock.
 
-### Attempt
+Cancellation and manual retry are app-scoped storage transitions. Retention cleanup deletes a
+bounded set of terminal parent runs and cascades to their steps, timers, and attempts. There is no
+automatic cleanup scheduler.
 
-`durlo_attempts` stores append-only run and step attempt history for failure analysis and the future dashboard.
+## Source of truth
 
-## Task Execution
-
-```txt
-application creates pending task run
-worker claims run with worker id, lease token, and expiry
-worker validates input and calls task code
-worker persists completion or failure
-failure schedules retry or moves the task to dead_letter
-```
-
-User code is never executed inside an open Durlo database transaction. A worker claims a task only when its registered kind, resource id, and resource version exactly match the run.
-
-## Workflow Execution
-
-```txt
-application creates pending workflow run
-worker claims run
-workflow code starts from the top
-completed step results are loaded from Postgres
-new step callbacks execute and checkpoint results
-workflow completes, fails, retries, or sleeps
-```
-
-Durlo does not reconstruct local variables from an event history. Workflow code re-enters after retry, crash recovery, or sleep. Durable branching must depend on input or stored step results. Sleep and resume preserve the run's resource version, so incompatible deployments cannot claim it accidentally.
-
-V1 workflows require sequential step and sleep calls. A step boundary is reserved before its first storage read, so nested or concurrent `step.*` calls fail with a validation error instead of racing durable state.
-
-## Sleep And Resume
-
-```txt
-workflow creates timer
-run becomes sleeping and releases its lease
-worker polling later finds the due timer
-timer becomes fired and run becomes pending in one transaction
-worker claims the run again
-workflow re-enters and the fired sleep returns immediately
-```
-
-No compute is held while a workflow sleeps. A running worker is required to promote due timers and claim resumed work. Timer promotion runs independently of execution-slot availability, so long-running user code does not pause due timers.
-
-## Ownership And Crash Recovery
-
-Every claim receives a unique lease token. Running-state writes require:
-
-```txt
-run id + worker id + lease token + running status
-```
-
-If a worker stops renewing its lease, another worker may reclaim the run after expiry. The expired attempt is recorded as stalled. Writes from the old token are rejected.
-
-This fences durable state updates. It cannot make external side effects exactly once.
-
-## Storage
-
-The schema is defined by `packages/postgres/src/migrations.ts` and currently contains:
-
-- `durlo_schema_migrations`
-- `durlo_runs`
-- `durlo_steps`
-- `durlo_timers`
-- `durlo_attempts`
-
-Postgres `now()` decides eligibility, lease expiry, and timer due checks. Partial indexes support pending runs, expired leases, resource lookup, and due timers.
-
-The observability read model remains on the same durable records. `durlo.runs.list()` reads payload-free summaries through bounded `(created_at, id)` keyset pages. `durlo.runs.getDetails()` reads the owning run plus steps, attempts, and timers in a short repeatable-read transaction without row locks, then core derives a deterministic timeline and diagnostics. `durlo.runs.getBacklogHealth()` aggregates active rows and pending timers using the Postgres clock. Dedicated indexes serve list filters, active backlog reads, and timer detail; no event-history table is introduced.
-
-The same run table holds active queue state and retained history. `durlo.runs.cleanup()` performs manual, bounded terminal-row deletion using a terminal-only partial index and row locking; Durlo does not schedule retention. The full contract is documented in [Retention Cleanup](RETENTION.md). Public core APIs enforce the payload and batch limits documented in [Storage Limits](STORAGE_LIMITS.md); the Postgres adapter enforces the durable workflow-step count under the owning run lock.
-
-`worker.getCompatibilityReport()` performs a bounded read for pending, sleeping, and expired-running work that does not match that worker's registrations. The report is worker-relative and does not mutate run state. The complete policy is documented in [Deployment Compatibility](DEPLOYMENT_COMPATIBILITY.md).
-
-The combined local operational view is intentionally split by scope: `worker.getHealth()` describes one process, `durlo.runs.getBacklogHealth()` describes one app's stored backlog, and `worker.getCompatibilityReport()` compares stored active work with one worker's registrations. The public contract and timeline semantics are documented in [Observability](OBSERVABILITY.md).
-
-## Transaction Boundary
-
-`durlo.tx(client)` binds run creation to a caller-owned raw `pg` transaction.
-
-```txt
-business write + Durlo run creation commit together, or neither commits
-```
-
-Durlo does not begin, commit, or roll back the caller's transaction.
-
-## Worker Boundary
-
-Worker concurrency is local to one process. Postgres prevents two workers from owning the same claim, but Durlo v1 does not provide a global, per-resource, or per-tenant concurrency limit.
-
-The worker maintains process-local concurrency with continuously replenished execution slots. Claiming waits only when every slot is occupied. Due-timer promotion runs in a separate maintenance loop.
-
-`worker.stop()` stops the claim and timer loops. Already claimed runs retain their heartbeats and are allowed to finish; the `worker.start()` promise settles only after those active runs drain. Lease renewals for each run are serialized so a slow database call cannot overlap a later heartbeat.
-
-Claim and timer polling recover independently from transient database errors. Each loop uses exponential backoff starting at 100 milliseconds, capped at 30 seconds, with 20 percent jitter. A persistence error for one active run is logged and left for lease-based recovery instead of permanently stopping the worker process.
-
-`worker.getHealth()` returns a process-local snapshot containing lifecycle status, active slots, consecutive claim and timer failures, last successful polling times, and the most recent operational error. When a `Durlo` logger is configured, worker lifecycle, database retries, lease loss, and run transitions are emitted as structured records.
-
-## Control Boundary
-
-Cancellation prevents future Durlo state transitions and invalidates a running lease. It cannot forcibly terminate arbitrary JavaScript. Task and workflow code receives an `AbortSignal` and should stop cooperatively.
-
-Public run reads and controls always pass both the owning app id and run id to storage. A run id from another app is treated as missing, including for cancellation and manual retry.
-
-Attempt timeouts use the same cooperative model. The signal reason is the exported `AttemptTimeoutError`. A running cancellation is detected by the worker's next failed lease renewal, so its signal reason is `LostLeaseError`. External effects must remain idempotent because timed-out or lease-lost code may finish late.
-
-## Source Of Truth
-
-To prevent documentation drift:
-
-- public types and adapter contracts: `packages/core/src/types.ts`
+- public surface and records: `packages/core/src/types.ts`
+- client behavior: `packages/core/src/client.ts`
 - worker behavior: `packages/core/src/worker.ts`
 - workflow checkpoints: `packages/core/src/steps.ts`
-- timeline and run diagnostics: `packages/core/src/observability.ts`
-- Postgres transitions: `packages/postgres/src/adapter.ts`
-- database schema: `packages/postgres/src/migrations.ts`
-- behavioral guarantees: `docs/EXECUTION_SEMANTICS.md`
-- edge-case decisions: `docs/DECISIONS_AND_EDGE_CASES.md`
-- release priorities: `docs/ROADMAP.md`
+- derived diagnostics: `packages/core/src/observability.ts`
+- PostgreSQL transitions: `packages/postgres/src/adapter.ts`
+- schema: `packages/postgres/src/migrations.ts`

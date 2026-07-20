@@ -1,146 +1,192 @@
-# Postgres Operations
+# Durlo Operations
 
-Status: Current
-Updated: 2026-07-16
+Status: Current pre-release guidance
+Updated: 2026-07-20
 
-This guide sizes a Durlo v1 worker against Postgres. It describes process-local execution concurrency, connection pools, polling, leases, and retention. It does not introduce a distributed concurrency limit.
+Durlo has no supported production release yet. This document records the operating behavior that
+exists and the boundaries exercised by the repository.
 
-## Two Independent Limits
+## Tested environment
 
-`worker.concurrency` is the maximum number of run bodies executing in one worker process. The default is 10. If `W` worker processes each use concurrency `C`, the fleet may execute up to `W × C` runs at once.
+- Node.js 22 through 26
+- PostgreSQL 14 through 18
+- ESM, CommonJS, and strict TypeScript package consumers
 
-The Postgres adapter's `max` option is the maximum number of database connections in that adapter's `pg` pool. `pg` defaults to 10 when `max` is omitted.
+CI runs Node 22 with PostgreSQL 17. Nightly tests the boundary cells Node 22, 24, and 26 against
+PostgreSQL 14 and 18. These are tested repository boundaries, not a support commitment for a
+published package.
 
-These values do not need to be equal. Durlo holds a connection only for a query or short transaction; it does not hold one while task or workflow user code runs. A worker with concurrency 8 and pool `max: 2` is covered by integration tests, including concurrent lease renewal and completion. A smaller pool queues database operations, however, so it can add checkpoint, completion, timer, and heartbeat latency.
+## Process layout
+
+Use separate application, migration, and worker processes:
+
+```txt
+application/API    creates business rows and Durlo runs
+migration job      runs `durlo migrate` before new workers
+worker processes   run `durlo worker` with explicit registrations
+PostgreSQL         stores application and Durlo state
+```
+
+`durlo dev` runs migrations, a worker, and the local dashboard together. It is a development
+command, not a production deployment shape.
+
+The CLI loads the first `durlo.config.ts`, `.mts`, `.js`, `.mjs`, or `.cjs` in the current directory
+unless `--config`/`-c` is provided. A config exports one `Durlo` instance, explicit task/workflow
+registrations, and optional worker/dashboard settings.
+
+## Migrations
+
+Run `durlo migrate` once as a deployment step with a schema-owner connection before starting
+workers that require the new schema. `durlo worker` does not migrate automatically.
+
+Migrations run in one transaction under a transaction-scoped advisory lock. Current index changes
+are not created concurrently, and no lock or statement timeout is supplied by Durlo. On large live
+tables, review migration SQL and schedule an appropriate maintenance window. Migration versions are
+stored, but their checksums are currently enforced by repository tests rather than stored in the
+database.
+
+The runtime role requires normal read/write access to Durlo tables and sequences but should not own
+the schema.
+
+## Connections and concurrency
+
+Two independent limits matter:
+
+1. worker execution slots (`concurrency`, default 10, accepted range 1–1,000);
+2. PostgreSQL pool capacity (`max`, controlled by `pg`).
+
+Each worker has a claim loop, a timer loop, and heartbeat/persistence queries for active runs. Pool
+connections are shared rather than reserved. A saturated pool can delay heartbeats and cause false
+lease loss even when the database is healthy.
+
+Start conservatively:
+
+- keep concurrency near the expected number of simultaneously useful I/O operations;
+- give the pool headroom above normal claim, timer, heartbeat, and completion demand;
+- budget the sum of every API, worker, migration, dashboard, and administrative pool against the
+  PostgreSQL connection limit;
+- alert on sustained `pool.waitingCount`, not brief bursts alone;
+- configure connection, query, and statement timeouts in the supplied `pg` options where needed.
+
+The `PostgresAdapter` currently closes a caller-supplied pool when `adapter.close()` is called. Use
+the `postgresAdapter(config)` factory with a Durlo-owned pool until ownership is fixed, and do not
+share that pool with unrelated application traffic.
+
+## Polling and latency
+
+The default `pollInterval` is one second. Each worker polls both runs and timers, so idle database
+traffic grows linearly with worker replicas. Pickup and timer latency include the polling interval,
+pool wait, query time, and available execution capacity.
+
+Zero is currently accepted and creates a tight database loop; never configure `pollInterval: 0`.
+Durlo provides no pickup-latency or timer-lag SLA.
+
+Polling failures use bounded exponential backoff with jitter. Heartbeat query errors are treated as
+immediate lease loss rather than retried under the existing lease.
+
+## Leases and user code
+
+The default `leaseDuration` is 30 seconds and heartbeats occur at roughly one third of it. Choose a
+lease long enough to cover normal event-loop delay, pool waiting, network interruption, database
+latency, and failover; choose it short enough to meet crash-recovery objectives.
+
+Handlers run in-process. CPU-bound synchronous work blocks heartbeat and timeout timers. Timeouts
+and cancellation only abort a signal; work that ignores it can continue and overlap a retry.
+External effects must be idempotent.
+
+Graceful shutdown calls `worker.stop()`, stops claims and timer promotion, and waits for active work
+through the outstanding `worker.start()` promise. Allow enough process termination grace for the
+longest cooperative handler.
+
+## Deployment compatibility
+
+Definition versions are exact compatibility tokens. For a breaking change from version `1` to `2`:
+
+1. deploy workers that register version 2;
+2. switch producers to the version-2 definition;
+3. keep version-1 workers while version-1 work is pending, running, or sleeping;
+4. inspect reports from the complete worker fleet before removing old code.
+
+Manual retry preserves the original version. Restore matching code before retrying an old terminal
+run. A version bump does not change idempotency scope; an existing key still returns its original
+run.
+
+## What to monitor
+
+At minimum collect:
+
+- `worker.getHealth()` lifecycle, active slots, claim/timer failures, and last successful polls;
+- `durlo.runs.getBacklogHealth()` ready lag, delayed work, expired leases, due timers, and timer lag;
+- `worker.getCompatibilityReport()` from every registration set in the fleet;
+- structured `run.lease_lost`, `run.persistence_failed`, database retry, and transition logs;
+- `pool.totalCount`, `pool.idleCount`, and sustained `pool.waitingCount`;
+- PostgreSQL query latency, CPU, I/O, active connections, lock waits, dead tuples, and WAL volume;
+- terminal-history growth and cleanup duration.
+
+`worker.getHealth().database.healthy` currently reflects only consecutive claim and timer failures.
+An execution/completion persistence error is stored as `lastError` but does not make that boolean
+false. Alert on the error stream and stale success timestamps rather than the boolean alone.
+
+Run detail and timelines are diagnostic snapshots, not a complete event log. A known defect can
+leave workflow step attempts displayed as `running` after lease recovery or cancellation.
+
+## Local dashboard security
+
+The dashboard defaults to `127.0.0.1:3210` and exposes full inputs, outputs, errors, health, cancel,
+and retry. It has no authentication. Same-origin checks are not authentication, and requests without
+an `Origin` header are accepted.
+
+Do not bind it publicly. If access beyond loopback is unavoidable, use an authenticated trusted
+reverse proxy, TLS, network restrictions, and application-level payload redaction.
+
+The browser polls list, health, compatibility, and selected-run detail every three seconds; account
+for that read traffic during local diagnosis.
+
+## Retention
+
+Durlo never schedules cleanup. Run it from an operator-controlled process:
 
 ```ts
-const adapter = postgresAdapter({
-  connectionString: process.env.DATABASE_URL,
-  max: 12
+await durlo.runs.cleanup({
+  olderThan: "30d",
+  limit: 1_000,
+  statuses: ["completed", "failed", "dead_letter", "cancelled"]
 });
-
-const durlo = new Durlo({ id: "billing", adapter });
-
-await durlo.worker({
-  tasks: [sendInvoice],
-  workflows: [settleInvoice],
-  concurrency: 10,
-  pollInterval: "1s",
-  leaseDuration: "30s"
-}).start();
 ```
 
-## Starting Pool Size
+The operation is app-scoped, terminal-only, oldest-first, and protected with row locks plus
+`SKIP LOCKED`. Repeat while `limitReached` is true and pause between batches under load.
 
-For a dedicated worker adapter, use this as a starting point rather than a guarantee:
+Deletion cascades through attempts, steps, and timers and releases idempotency keys. The limit
+counts parent runs, not child rows or bytes; one batch can still generate substantial WAL and
+autovacuum work. Back up history first when audit retention matters.
 
-```txt
-pool max = min(worker concurrency + 2, per-process connection budget)
-```
+## Performance evidence
 
-The extra two connections allow claim and timer-promotion transactions to overlap ordinary run persistence. `concurrency + 2` also gives one connection per active slot during a synchronized burst of completions or checkpoints. Heartbeats can overlap those operations and will queue briefly; workloads with frequent durable steps may benefit from a larger measured pool.
+Run `pnpm benchmark:local` for the query-plan regression harness. Its default deterministic dataset
+contains 50,000 runs; `DURLO_BENCHMARK_RUNS`, `DURLO_BENCHMARK_SAMPLES`, and
+`DURLO_BENCHMARK_MAX_MS` configure it. At 50,000 or more rows it also asserts the intended claim,
+attempt, timer, list, detail, and backlog indexes.
 
-Do not increase the pool merely because `worker.concurrency` is high. Long HTTP or queueing tasks can use many execution slots while doing little database work. Conversely, short workflows with many checkpoints can need more pool capacity at lower execution concurrency.
+The harness uses `EXPLAIN (ANALYZE, BUFFERS)` for selector/read queries. It excludes network time,
+pool waiting, the per-run updates and inserts inside claim transactions, user execution, payload
+size, cleanup, and end-to-end throughput. Passing it is not a jobs-per-second or capacity claim.
 
-Pool `max: 2` is a reasonable lower starting bound for a continuously running worker because it lets the claim and timer loops make progress independently. `max: 1` remains semantically valid, but every claim, timer, heartbeat, step, and completion is serialized and lease headroom becomes more sensitive to a slow query.
+Before production use, measure realistic retained history, eligible-work distribution, resource
+registrations, payloads, connection contention, workflow length, failures, and outage recovery on
+the intended infrastructure.
 
-Tune from observed saturation:
+## Incident recovery
 
-- Increase the pool gradually when `pool.waitingCount` remains above zero, query latency is healthy, and Postgres has connection and CPU headroom.
-- Decrease the pool or worker concurrency when Postgres CPU, I/O, lock waits, or transaction latency rises.
-- Decrease worker concurrency when the external service or Node process is the bottleneck; more database connections will not fix that.
-- Run the [Postgres Performance Envelope](PERFORMANCE.md) on production-like storage before choosing a latency budget.
+After a worker or database interruption:
 
-## Fleet Connection Budget
+1. confirm claim and timer success timestamps advance again;
+2. inspect ready lag, expired leases, and due timer lag;
+3. check compatibility across the full worker fleet;
+4. inspect stalled attempts and business idempotency records for possible duplicate effects;
+5. keep compatible workers running until work is terminal, intentionally delayed, or sleeping on a
+   future timer.
 
-Every `postgresAdapter(...)` owns a `pg` pool. Budget the complete fleet, not one process:
-
-```txt
-Durlo connections = sum(adapter pool max across all application and worker processes)
-```
-
-Then add application query pools, migration/admin sessions, monitoring, and emergency access. Keep the total below the database or proxy connection limit with deliberate headroom. For example, four workers at `max: 12` can open 48 server connections before API processes are counted.
-
-When an API process creates runs and also hosts a worker, sharing one adapter shares one pool budget. Separate adapters isolate pressure but their `max` values add together. Call `adapter.close()` only during process shutdown, after workers have drained.
-
-PgBouncer transaction pooling fits the v1 worker query shape: Durlo uses short transactions and does not require session affinity while user code runs. Use a direct or appropriately privileged administrative connection for migrations. A caller-owned `durlo.tx(pgClient)` operation must remain inside the transaction associated with that checked-out client.
-
-## Lease And Heartbeat Headroom
-
-The default lease is 30 seconds. Each active run attempts renewal every one third of its lease duration. Renewals for one run are serialized. A failed renewal makes that worker abandon durable ownership; the run can be reclaimed after its stored lease expires.
-
-Choose a lease duration comfortably above all of these:
-
-- high-percentile Postgres query time
-- time waiting for a pool connection during a synchronized burst
-- expected network pauses or failovers
-- Node event-loop stalls and garbage-collection pauses
-
-Increasing `leaseDuration` reduces false stalls but delays crash recovery. Start with the 30-second default unless measurements justify a change. Alert on lease-loss logs and stalled attempts; either signal means the database, pool, network, or event loop missed the operational budget.
-
-CPU-bound JavaScript blocks all heartbeats in its Node process. Split CPU-heavy work, use worker threads or another service, or place it in a separate worker process with an appropriately measured lease. A longer lease is safety margin, not a substitute for keeping the event loop responsive.
-
-## Polling And Timer Lag
-
-The default `pollInterval` is one second. When a queue is idle, a worker process normally polls claims and timers independently at roughly that interval. More worker processes therefore multiply idle polling load.
-
-Lower intervals reduce pickup latency but increase empty-query traffic. Higher intervals reduce idle database work but add latency before new and due work is observed. Under backlog, claim slots replenish as executions finish, and the timer loop immediately continues while it keeps filling batches; each batch is bounded by worker concurrency.
-
-Timer timestamps and run eligibility use Postgres `now()`. Application clock drift does not make a row early or late, but database load, pool waiting, poll interval, and available execution slots can all add observed delay.
-
-## Database And Network Outages
-
-Claim and timer-promotion loops retry transient query failures independently with bounded
-exponential backoff and jitter. The Postgres adapter keeps internal pool and checked-out-client
-error listeners so a severed idle or active `pg` connection does not become an uncaught
-`EventEmitter` error. Applications may attach their own `adapter.pool.on("error", ...)` listener for
-metrics and alerting; active operations still reject and worker health still records polling
-failures.
-
-A failed heartbeat is treated conservatively as lease loss. The worker aborts the attempt signal,
-suppresses completion through that lease token, and stops scheduling more durable steps for the
-attempt. The stored run remains `running` until its lease expires, then a compatible worker records
-the old attempt as stalled and either reclaims it or terminally exhausts its retry budget. User
-JavaScript that ignores the abort signal can continue locally, so an outage can create the same
-duplicate-effect window as a process crash.
-
-Set `leaseDuration` above expected failover, network, pool-waiting, and database-recovery pauses when
-avoiding false stalls matters more than immediate crash recovery. Do not set it so high that a real
-crash leaves work unavailable beyond the application's recovery objective.
-
-After an outage:
-
-1. Confirm claim and timer success timestamps in `worker.getHealth()` are advancing again.
-2. Check backlog health for ready lag, expired leases, due timers, and timer lag.
-3. Check the complete fleet's compatibility reports before treating an old-version row as stranded.
-4. Inspect stalled attempt history and business-side idempotency records for possible duplicates.
-5. Keep workers running until every supported eligible row is terminal, sleeping on a future timer,
-   or intentionally delayed.
-
-## Retention And Maintenance
-
-`durlo.runs.cleanup()` uses a bounded transaction and never schedules itself. Run cleanup from an operator-controlled process, use modest batches, and pause between batches when the worker pool or database is busy. A separate adapter can isolate cleanup queueing, but its connections still count against the fleet budget.
-
-Run migrations before starting new-version workers. Migrations are serialized with a transaction-scoped advisory lock and should not be run continuously by every worker replica during normal operation.
-
-With the CLI, use `durlo migrate` as the deployment step and `durlo worker` for the long-lived process. `durlo worker` never migrates automatically. `durlo dev` does migrate before starting, but is a local workflow that also exposes the unauthenticated dashboard and should not replace the production separation.
-
-## What To Monitor
-
-At minimum, observe:
-
-- `worker.getHealth()` claim/timer failures and last successful poll times
-- `durlo.runs.getBacklogHealth()` ready-run lag, expired leases, due timers, and timer lag
-- `worker.getCompatibilityReport()` for bounded worker-relative unregistered resources and incompatible versions
-- structured lease-loss, stalled-attempt, and database-retry logs
-- `pool.totalCount`, `pool.idleCount`, and sustained `pool.waitingCount`
-- Postgres query latency, CPU, I/O, active connections, and lock waits
-- pending-run age, expired running leases, and due-timer lag
-- cleanup batch duration and retained terminal-row growth
-
-Pool waiting alone is not failure; brief bursts are expected. Sustained waiting combined with heartbeat loss or increasing timer lag is the signal that the current concurrency, pool, or database budget is too small.
-
-Backlog health aggregates the active rows for one app. Poll it at an operator or dashboard cadence rather than at the worker's claim interval. Run detail and compatibility reads are bounded; run list pages are limited to 200 summaries. See [Observability](OBSERVABILITY.md) for field definitions and scope.
-
-The exact beta outage, contention, timer-lag, and long-tail scenarios are recorded in
-[Beta Release Proof](BETA_RELEASE_PROOF.md).
+A failed heartbeat can leave the stored run `running` until its lease expires. That interval is
+expected. Permanent active step attempts after the run recovers are not expected and remain tracked
+as release-blocking work.

@@ -58,5 +58,5 @@ attempts, start a manual attempt with `POST /deliveries/:id/retry`.
 - Do not place destination credentials in task input. Add server-managed credentials at execution
   time if adapting this example for a real endpoint.
 
-This application supplies the direct-task half of the repeatable Phase 5 application proof. That is
-an engineering claim, not a claim that this sample has carried customer production traffic.
+This application is a direct-task regression fixture and integration example. It has not carried
+customer production traffic and does not establish a throughput or support claim.
