@@ -255,8 +255,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         ) values
           ('cancelled-run-attempt', 'cancelled-run', null, 'run', 1, 'cancelled',
            'old-worker', 'cancelled-lease', null, now() - interval '5 minutes', now() - interval '4 minutes'),
-          ('cancelled-step-attempt', 'cancelled-run', 'work', 'step', 1, 'running',
-           'old-worker', 'cancelled-lease', null, now() - interval '5 minutes', null),
+          ('cancelled-step-attempt', 'cancelled-run', 'work', 'step', 1, 'cancelled',
+           'old-worker', 'cancelled-lease', null, now() - interval '5 minutes', now() - interval '4 minutes'),
           ('timed-out-run-attempt', 'timed-out-run', null, 'run', 1, 'timed_out',
            'old-worker', 'timed-out-lease', '{"name":"AttemptTimeoutError","message":"timed out"}',
            now() - interval '5 minutes', now() - interval '4 minutes'),
@@ -291,43 +291,64 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         status: string;
         result_json: unknown;
         error_name: string | null;
+        completed: boolean;
       }>(
-        `select id, status, result_json, error_json->>'name' as error_name
+        `select id, status, result_json, error_json->>'name' as error_name,
+                completed_at is not null as completed
          from durlo_steps order by id`
       );
       expect(steps.rows).toEqual([
-        { id: "active-step", status: "running", result_json: null, error_name: null },
+        {
+          id: "active-step",
+          status: "running",
+          result_json: null,
+          error_name: null,
+          completed: false
+        },
         {
           id: "cancelled-step",
           status: "cancelled",
           result_json: null,
-          error_name: null
+          error_name: null,
+          completed: true
         },
         {
           id: "completed-step",
           status: "completed",
           result_json: "saved",
-          error_name: null
+          error_name: null,
+          completed: true
         },
-        { id: "stalled-step", status: "stalled", result_json: null, error_name: "StalledError" },
+        {
+          id: "stalled-step",
+          status: "stalled",
+          result_json: null,
+          error_name: "StalledError",
+          completed: true
+        },
         {
           id: "timed-out-step",
           status: "timed_out",
           result_json: null,
-          error_name: "AttemptTimeoutError"
+          error_name: "AttemptTimeoutError",
+          completed: true
         }
       ]);
-      const attempts = await adapter.pool.query<{ id: string; status: string }>(
-        `select id, status from durlo_attempts
+      const attempts = await adapter.pool.query<{
+        id: string;
+        status: string;
+        completed: boolean;
+      }>(
+        `select id, status, completed_at is not null as completed from durlo_attempts
          where kind = 'step' order by id`
       );
       expect(attempts.rows).toEqual([
-        { id: "active-step-attempt", status: "running" },
-        { id: "cancelled-step-attempt", status: "cancelled" },
-        { id: "completed-step-attempt-new", status: "succeeded" },
-        { id: "completed-step-attempt-old", status: "timed_out" },
-        { id: "stalled-step-attempt", status: "stalled" },
-        { id: "timed-out-step-attempt", status: "timed_out" }
+        { id: "active-step-attempt", status: "running", completed: false },
+        { id: "cancelled-step-attempt", status: "cancelled", completed: true },
+        { id: "completed-step-attempt-new", status: "succeeded", completed: true },
+        { id: "completed-step-attempt-old", status: "timed_out", completed: true },
+        { id: "stalled-step-attempt", status: "stalled", completed: true },
+        { id: "timed-out-step-attempt", status: "timed_out", completed: true }
       ]);
     } finally {
       await adapter.close();
