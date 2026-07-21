@@ -44,8 +44,9 @@ Repair the promises already exposed before adding product breadth.
 
 1. Replace `durlo.tx(client: unknown)` with an API that cannot mistake a `pg.Pool` or non-active
    client for a transaction. Prove business writes and run creation commit or roll back together.
-2. Close or transition workflow step attempts when a lease stalls, a run is cancelled, or an
-   attempt times out. Terminal run detail must not contain unexplained active attempts or steps.
+2. **Done:** workflow lease stalls, cancellations, and attempt timeouts now close the owned step
+   attempt and step row atomically. Recovery creates a distinct attempt, while completed
+   checkpoints remain reusable.
 3. Validate Standard Schema input once, persist its output, and represent schema input/output types
    correctly. A transforming schema must execute successfully.
 4. Replace the unescaped `$durlo.date` representation with collision-safe serialization and test

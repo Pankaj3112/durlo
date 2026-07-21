@@ -45,6 +45,11 @@ tables, review migration SQL and schedule an appropriate maintenance window. Mig
 stored, but their checksums are currently enforced by repository tests rather than stored in the
 database.
 
+Migration `0005_truthful_step_interruptions` expands the step-status constraint and repairs
+attributable stale step history from the matching run attempt and lease. It preserves a currently
+active step owned by the parent run's lease and any later completed checkpoint. The constraint
+change and backfill take ordinary table locks, so assess the affected table sizes before rollout.
+
 The runtime role requires normal read/write access to Durlo tables and sequences but should not own
 the schema.
 
@@ -127,8 +132,9 @@ At minimum collect:
 An execution/completion persistence error is stored as `lastError` but does not make that boolean
 false. Alert on the error stream and stale success timestamps rather than the boolean alone.
 
-Run detail and timelines are diagnostic snapshots, not a complete event log. A known defect can
-leave workflow step attempts displayed as `running` after lease recovery or cancellation.
+Run detail and timelines are diagnostic snapshots, not a complete event log. A displayed `running`
+step attempt should have a currently running parent run with the same lease; interruption close
+events are derived from the retained attempt records.
 
 ## Local dashboard security
 
@@ -188,5 +194,5 @@ After a worker or database interruption:
    future timer.
 
 A failed heartbeat can leave the stored run `running` until its lease expires. That interval is
-expected. Permanent active step attempts after the run recovers are not expected and remain tracked
-as release-blocking work.
+expected. Once recovery, timeout, or cancellation commits, the old owned step and attempt should be
+terminal. Treat any unexplained active step beneath a terminal run as an integrity incident.

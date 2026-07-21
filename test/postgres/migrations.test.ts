@@ -9,7 +9,9 @@ const releasedMigrationChecksums = {
   "0001_initial": "133725b6760c494097d1d04d3ffd372c8f994a4dbdc06affe3cf761c55acd2cf",
   "0002_resource_versions": "fa54ae3a3ccae6526a96151871bef1768b0f75dbf4ef1a8ca973d2e0c41a79fa",
   "0003_retention_cleanup": "031e38f84bfaa30a93e58fc87de0b626dcd74603db82034bed49bacab87288f8",
-  "0004_observability_reads": "bfd9dd7605c9a2997bef6c568ab0f355c2f1779dddbc58fd910ed3a4c7a612cb"
+  "0004_observability_reads": "bfd9dd7605c9a2997bef6c568ab0f355c2f1779dddbc58fd910ed3a4c7a612cb",
+  "0005_truthful_step_interruptions":
+    "135660d92c76d4d3f77479391fc3f4c09faa7fd2f2a0dcc549d39a95a694118e"
 } as const;
 
 describe("@durlo/postgres migration immutability", () => {
@@ -55,7 +57,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0001_initial", count: "1" },
         { version: "0002_resource_versions", count: "1" },
         { version: "0003_retention_cleanup", count: "1" },
-        { version: "0004_observability_reads", count: "1" }
+        { version: "0004_observability_reads", count: "1" },
+        { version: "0005_truthful_step_interruptions", count: "1" }
       ]);
 
       const tables = await admin.pool.query<{ count: string }>(
@@ -102,7 +105,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0001_initial" },
         { version: "0002_resource_versions" },
         { version: "0003_retention_cleanup" },
-        { version: "0004_observability_reads" }
+        { version: "0004_observability_reads" },
+        { version: "0005_truthful_step_interruptions" }
       ]);
     } finally {
       await adapter.close();
@@ -139,7 +143,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0001_initial" },
         { version: "0002_resource_versions" },
         { version: "0003_retention_cleanup" },
-        { version: "0004_observability_reads" }
+        { version: "0004_observability_reads" },
+        { version: "0005_truthful_step_interruptions" }
       ]);
     } finally {
       await adapter.close();
@@ -189,6 +194,141 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         "durlo_runs_status_list_idx",
         "durlo_timers_run_idx"
       ]);
+      const versions = await adapter.pool.query<{ version: string }>(
+        "select version from durlo_schema_migrations order by version"
+      );
+      expect(versions.rows.at(-1)).toEqual({ version: "0005_truthful_step_interruptions" });
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("upgrades 0004 history without rewriting active work or completed checkpoints", async () => {
+    const schema = await createSchema();
+    const adapter = schemaAdapter(schema);
+    try {
+      for (const migration of migrations.slice(0, 4)) {
+        await adapter.pool.query(migration.sql);
+      }
+      await adapter.pool.query(`
+        create table durlo_schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
+      await adapter.pool.query(
+        `insert into durlo_schema_migrations (version)
+         values ('0001_initial'), ('0002_resource_versions'),
+                ('0003_retention_cleanup'), ('0004_observability_reads')`
+      );
+      await adapter.pool.query(`
+        insert into durlo_runs (
+          id, app_id, kind, resource_id, status, input_json, options_json,
+          attempt_count, max_attempts, locked_by, lease_token, locked_until,
+          completed_at, cancelled_at
+        ) values
+          ('cancelled-run', 'legacy-app', 'workflow', 'legacy', 'cancelled', '{}', '{}',
+           1, 3, null, null, null, null, now()),
+          ('timed-out-run', 'legacy-app', 'workflow', 'legacy', 'pending', '{}', '{}',
+           1, 3, null, null, null, null, null),
+          ('stalled-run', 'legacy-app', 'workflow', 'legacy', 'running', '{}', '{}',
+           2, 3, 'new-worker', 'stalled-new-lease', now() + interval '1 hour', null, null),
+          ('active-run', 'legacy-app', 'workflow', 'legacy', 'running', '{}', '{}',
+           1, 3, 'active-worker', 'active-lease', now() + interval '1 hour', null, null),
+          ('completed-run', 'legacy-app', 'workflow', 'legacy', 'completed', '{}', '{}',
+           2, 3, null, null, null, now(), null)
+      `);
+      await adapter.pool.query(`
+        insert into durlo_steps (
+          id, run_id, step_id, status, result_json, attempt_count, started_at, completed_at
+        ) values
+          ('cancelled-step', 'cancelled-run', 'work', 'running', null, 1, now(), null),
+          ('timed-out-step', 'timed-out-run', 'work', 'running', null, 1, now(), null),
+          ('stalled-step', 'stalled-run', 'work', 'running', null, 1, now(), null),
+          ('active-step', 'active-run', 'work', 'running', null, 1, now(), null),
+          ('completed-step', 'completed-run', 'work', 'completed', '"saved"', 2, now(), now())
+      `);
+      await adapter.pool.query(`
+        insert into durlo_attempts (
+          id, run_id, step_id, kind, attempt_number, status, worker_id, lease_token,
+          error_json, started_at, completed_at
+        ) values
+          ('cancelled-run-attempt', 'cancelled-run', null, 'run', 1, 'cancelled',
+           'old-worker', 'cancelled-lease', null, now() - interval '5 minutes', now() - interval '4 minutes'),
+          ('cancelled-step-attempt', 'cancelled-run', 'work', 'step', 1, 'running',
+           'old-worker', 'cancelled-lease', null, now() - interval '5 minutes', null),
+          ('timed-out-run-attempt', 'timed-out-run', null, 'run', 1, 'timed_out',
+           'old-worker', 'timed-out-lease', '{"name":"AttemptTimeoutError","message":"timed out"}',
+           now() - interval '5 minutes', now() - interval '4 minutes'),
+          ('timed-out-step-attempt', 'timed-out-run', 'work', 'step', 1, 'running',
+           'old-worker', 'timed-out-lease', null, now() - interval '5 minutes', null),
+          ('stalled-run-attempt-old', 'stalled-run', null, 'run', 1, 'stalled',
+           'old-worker', 'stalled-old-lease', '{"name":"StalledError","message":"worker lease expired"}',
+           now() - interval '5 minutes', now() - interval '4 minutes'),
+          ('stalled-step-attempt', 'stalled-run', 'work', 'step', 1, 'running',
+           'old-worker', 'stalled-old-lease', null, now() - interval '5 minutes', null),
+          ('stalled-run-attempt-new', 'stalled-run', null, 'run', 2, 'running',
+           'new-worker', 'stalled-new-lease', null, now() - interval '1 minute', null),
+          ('active-run-attempt', 'active-run', null, 'run', 1, 'running',
+           'active-worker', 'active-lease', null, now() - interval '1 minute', null),
+          ('active-step-attempt', 'active-run', 'work', 'step', 1, 'running',
+           'active-worker', 'active-lease', null, now() - interval '1 minute', null),
+          ('completed-run-attempt-old', 'completed-run', null, 'run', 1, 'timed_out',
+           'old-worker', 'completed-old-lease', '{"name":"AttemptTimeoutError","message":"timed out"}',
+           now() - interval '5 minutes', now() - interval '4 minutes'),
+          ('completed-step-attempt-old', 'completed-run', 'work', 'step', 1, 'running',
+           'old-worker', 'completed-old-lease', null, now() - interval '5 minutes', null),
+          ('completed-run-attempt-new', 'completed-run', null, 'run', 2, 'succeeded',
+           'new-worker', 'completed-new-lease', null, now() - interval '3 minutes', now() - interval '1 minute'),
+          ('completed-step-attempt-new', 'completed-run', 'work', 'step', 2, 'succeeded',
+           'new-worker', 'completed-new-lease', null, now() - interval '3 minutes', now() - interval '2 minutes')
+      `);
+
+      await adapter.migrate();
+
+      const steps = await adapter.pool.query<{
+        id: string;
+        status: string;
+        result_json: unknown;
+        error_name: string | null;
+      }>(
+        `select id, status, result_json, error_json->>'name' as error_name
+         from durlo_steps order by id`
+      );
+      expect(steps.rows).toEqual([
+        { id: "active-step", status: "running", result_json: null, error_name: null },
+        {
+          id: "cancelled-step",
+          status: "cancelled",
+          result_json: null,
+          error_name: null
+        },
+        {
+          id: "completed-step",
+          status: "completed",
+          result_json: "saved",
+          error_name: null
+        },
+        { id: "stalled-step", status: "stalled", result_json: null, error_name: "StalledError" },
+        {
+          id: "timed-out-step",
+          status: "timed_out",
+          result_json: null,
+          error_name: "AttemptTimeoutError"
+        }
+      ]);
+      const attempts = await adapter.pool.query<{ id: string; status: string }>(
+        `select id, status from durlo_attempts
+         where kind = 'step' order by id`
+      );
+      expect(attempts.rows).toEqual([
+        { id: "active-step-attempt", status: "running" },
+        { id: "cancelled-step-attempt", status: "cancelled" },
+        { id: "completed-step-attempt-new", status: "succeeded" },
+        { id: "completed-step-attempt-old", status: "timed_out" },
+        { id: "stalled-step-attempt", status: "stalled" },
+        { id: "timed-out-step-attempt", status: "timed_out" }
+      ]);
     } finally {
       await adapter.close();
     }
@@ -212,7 +352,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("4");
+      expect(applied.rows[0]?.count).toBe("5");
     } finally {
       await adapter.close();
     }

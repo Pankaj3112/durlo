@@ -211,7 +211,8 @@ function exportAssertions(format) {
       "0001_initial",
       "0002_resource_versions",
       "0003_retention_cleanup",
-      "0004_observability_reads"
+      "0004_observability_reads",
+      "0005_truthful_step_interruptions"
     ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
     if (cli.cliPackageName !== "@durlo/cli") throw new Error("missing ${format} CLI marker");
   `;

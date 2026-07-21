@@ -114,12 +114,16 @@ Durable completion/failure currently checks token, worker, and `running` status 
 A worker may finish after the deadline if no competing claimant has rotated the token. Once another
 claim wins, the stale token cannot write.
 
-### Known workflow-history defect
+### Workflow interruption history
 
-Lease reclaim closes only the old run attempt. A workflow step attempt active during a crash or
-timeout can remain recorded as `running` after recovery, while a later entry creates another step
-attempt. Cancellation closes the current attempt record but leaves the durable step row `running`.
-Run detail can therefore show stale active step state. This is release-blocking roadmap work.
+Lease reclaim closes the old run attempt and any step attempt owned by the same lease as `stalled`.
+Attempt timeout uses `timed_out`, cancellation uses `cancelled`, and ordinary failure fallback uses
+`failed`. Each transition also closes the matching step row with its causal error and completion
+time in the same transaction as the run transition.
+
+An interrupted workflow may re-enter and call the step again. That creates a distinct step attempt
+and increments `attemptCount`; a successful checkpoint from any later attempt remains reusable.
+Completed checkpoints are not downgraded by interruption handling.
 
 ## Retries and failure
 
@@ -146,11 +150,13 @@ settings can overflow into an invalid retry date.
 
 Timeouts use `Promise.race` and abort the task/workflow signal with `AttemptTimeoutError`. The
 timed-out promise is not terminated; code that ignores the signal can continue and perform late
-external effects while a retry starts.
+external effects while a retry starts. Its lease token cannot complete or otherwise mutate the
+closed step after ownership changes.
 
 Cancellation is app-scoped and valid for pending, running, or sleeping work. It prevents future
-Durlo state transitions and cancels pending timers. Running code observes cancellation only after
-the next failed heartbeat, and arbitrary JavaScript may continue locally.
+Durlo state transitions, closes the owned active step as `cancelled`, and cancels pending timers.
+Running code observes cancellation only after the next failed heartbeat, and arbitrary JavaScript
+may continue locally.
 
 `WorkflowSleepError` and `LostLeaseError` are currently public exports used as internal worker
 sentinels. If user code throws them, the worker can suppress ordinary failure persistence. Do not
@@ -190,9 +196,9 @@ one worker, so it does not prove fleet-wide unavailability.
 - `runs.cancel()` and `runs.retry()` perform app-scoped state transitions.
 - `runs.cleanup()` deletes bounded terminal history.
 
-The timeline is derived from current durable records, not a complete event history. Because of the
-step-attempt defect above, it cannot yet guarantee that every displayed active step attempt is
-actually active.
+The timeline is derived from current durable records, not a complete event history. Its existing
+`step_attempt_stalled`, `step_attempt_timed_out`, and `step_attempt_cancelled` events come from the
+closed attempt records rather than from a second lifecycle-event store.
 
 ## Retention
 

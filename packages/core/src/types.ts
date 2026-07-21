@@ -230,7 +230,8 @@ export type FailRunInput = OwnedRunInput & {
   outcome: { status: "pending"; scheduledAt: Date } | { status: "failed" | "dead_letter" };
 };
 
-export type StepStatus = "pending" | "running" | "completed" | "failed";
+export type StepStatus =
+  "pending" | "running" | "completed" | "failed" | "stalled" | "timed_out" | "cancelled";
 
 export type StepRecord = {
   id: string;

@@ -639,6 +639,7 @@ export class PostgresAdapter implements DurloAdapter {
       const claimed: ClaimedRun[] = [];
       for (const candidate of candidates) {
         if (candidate.status === "running") {
+          const stalledError = { name: "StalledError", message: "worker lease expired" };
           await client.query(
             `
               update durlo_attempts
@@ -646,11 +647,14 @@ export class PostgresAdapter implements DurloAdapter {
                   error_json = $3::jsonb
               where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'
             `,
-            [
-              candidate.id,
-              candidate.lease_token,
-              JSON.stringify({ name: "StalledError", message: "worker lease expired" })
-            ]
+            [candidate.id, candidate.lease_token, JSON.stringify(stalledError)]
+          );
+          await this.closeOwnedSteps(
+            client,
+            candidate.id,
+            candidate.lease_token!,
+            "stalled",
+            stalledError
           );
           const failureResult = await client.query<{ count: string }>(
             `
@@ -671,10 +675,7 @@ export class PostgresAdapter implements DurloAdapter {
                     updated_at = now(), completed_at = now()
                 where id = $1
               `,
-              [
-                candidate.id,
-                JSON.stringify({ name: "StalledError", message: "worker lease expired" })
-              ]
+              [candidate.id, JSON.stringify(stalledError)]
             );
             continue;
           }
@@ -848,6 +849,13 @@ export class PostgresAdapter implements DurloAdapter {
         ]
       );
       if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      await this.closeOwnedSteps(
+        client,
+        input.runId,
+        input.leaseToken,
+        input.attemptStatus ?? "failed",
+        input.error
+      );
       await client.query(
         `
           update durlo_attempts
@@ -941,7 +949,8 @@ export class PostgresAdapter implements DurloAdapter {
         `
           update durlo_steps
           set status = 'running', attempt_count = attempt_count + 1,
-              error_json = null, updated_at = now(), started_at = coalesce(started_at, now()),
+              result_json = null, error_json = null,
+              updated_at = now(), started_at = coalesce(started_at, now()),
               completed_at = null
           where id = $1
           returning ${STEP_COLUMNS}
@@ -1005,7 +1014,8 @@ export class PostgresAdapter implements DurloAdapter {
       const result = await client.query(
         `
           update durlo_steps
-          set status = 'failed', error_json = $3::jsonb, updated_at = now(), completed_at = now()
+          set status = 'failed', result_json = null, error_json = $3::jsonb,
+              updated_at = now(), completed_at = now()
           where run_id = $1 and step_id = $2 and status = 'running'
         `,
         [input.runId, input.stepId, JSON.stringify(input.error)]
@@ -1158,6 +1168,7 @@ export class PostgresAdapter implements DurloAdapter {
         throw new RunStateError(`cannot cancel a ${current.status} run`);
       }
       if (current.status === "running") {
+        await this.closeOwnedSteps(client, input.runId, current.lease_token!, "cancelled", null);
         await client.query(
           `
             update durlo_attempts set status = 'cancelled', completed_at = now()
@@ -1292,6 +1303,41 @@ export class PostgresAdapter implements DurloAdapter {
       [input.runId, input.workerId, input.leaseToken]
     );
     if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+  }
+
+  private async closeOwnedSteps(
+    client: PoolClient,
+    runId: string,
+    leaseToken: string,
+    status: "failed" | "timed_out" | "stalled" | "cancelled",
+    error: SerializedError | null
+  ): Promise<void> {
+    await client.query(
+      `
+        update durlo_attempts
+        set status = $3, error_json = $4::jsonb, completed_at = now()
+        where run_id = $1 and lease_token = $2 and kind = 'step' and status = 'running'
+      `,
+      [runId, leaseToken, status, JSON.stringify(error)]
+    );
+    await client.query(
+      `
+        update durlo_steps as step
+        set status = $3, result_json = null, error_json = $4::jsonb,
+            updated_at = now(), completed_at = now()
+        where step.run_id = $1 and step.status = 'running'
+          and exists (
+            select 1
+            from durlo_attempts as attempt
+            where attempt.run_id = step.run_id
+              and attempt.step_id = step.step_id
+              and attempt.kind = 'step'
+              and attempt.lease_token = $2
+              and attempt.status = $3
+          )
+      `,
+      [runId, leaseToken, status, JSON.stringify(error)]
+    );
   }
 
   private async assertStepCapacity(
