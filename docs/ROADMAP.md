@@ -1,150 +1,229 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-20
+Updated: 2026-07-23
 
-## Product direction
+> **Current focus:** Make transaction-bound run creation safe. Do not start future roadmap work yet.
+
+## At a glance
+
+| Horizon | Outcome | Stages |
+| --- | --- | --- |
+| **Now** | Publish a trustworthy alpha | Safe transactions → integrity → public API → alpha |
+| **Next** | Produce credible operational proof | Production-proof laboratory → supported production envelope |
+| **Later** | Earn enough outside trust for v1 | Public beta → independent usage → `1.0` |
+
+Only one GitHub issue should be active at a time. The roadmap shows direction; each issue holds the
+implementation detail.
+
+## Product direction and v1 boundary
 
 Durlo should become the most trustworthy Postgres-native background task and direct workflow
 library for TypeScript applications. Its wedge is atomic creation of application data and durable
 work in one PostgreSQL transaction, combined with honest at-least-once execution and inspectable
 workflow checkpoints.
 
-The goal is BullMQ-level trust for a narrower use case, not immediate BullMQ or Inngest feature
-parity. Correctness, operability, release quality, and evidence come before events, cron, hosted
-execution, or a large adapter ecosystem.
+The project should be publicly credible as well as technically correct. Its claims should be
+verifiable through installable packages, deterministic tests, failure-injection evidence,
+benchmarks, operational guidance, and eventually independent usage.
 
-## V1 boundary
+V1 includes:
 
-V1 includes direct tasks and workflows, PostgreSQL persistence, Node.js workers, retries, delays,
-durable steps and sleeps, cancellation, manual retry, local inspection, bounded cleanup, and raw
-`pg` transaction integration.
+- direct tasks and sequential workflows;
+- PostgreSQL persistence and Node.js workers;
+- retries, delays, durable steps and sleeps;
+- cancellation, manual retry, local inspection, and bounded cleanup;
+- raw `pg` transaction integration;
+- cooperative, I/O-oriented handlers with honest at-least-once execution.
 
-V1 excludes events, schedules, other languages, hosted orchestration, framework adapters,
-distributed global/per-resource/per-tenant concurrency, rate limiting, and Temporal-style event
-history replay.
+V1 excludes events, schedules, framework adapters, hosted orchestration, distributed concurrency,
+rate limiting, fan-out/fan-in, additional languages, additional storage engines, and
+Temporal-style event replay.
 
 ## Current state
 
-The repository has a strong execution foundation: lease-token fencing, `FOR UPDATE SKIP LOCKED`,
-crash and outage recovery tests, resource-version compatibility, durable workflow checkpoints,
-bounded payloads, observability reads, a CLI, a local dashboard, and realistic example
-applications.
+The repository already has lease-token fencing, `FOR UPDATE SKIP LOCKED`, crash and outage recovery
+tests, resource-version compatibility, durable workflow checkpoints, bounded payloads,
+observability reads, a CLI, a local dashboard, and production-shaped reference applications.
 
-It is not yet a beta release. The current packages are `0.0.0`, release metadata is incomplete,
-throughput is not measured end to end, and the integrity issues below can violate or obscure public
-behavior. Earlier Phase 1–5 work remains useful engineering evidence, but the old “Phase 5 complete”
-claim is retired.
+Workflow interruption history now remains truthful across lease stalls, cancellation, and attempt
+timeout. The remaining blockers are concentrated around transaction safety, input and serialization
+integrity, public API clarity, packaging, and operational proof.
 
-## Now: Integrity repair
+The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported production library.
 
-Status: In progress
+## Now — Publish a trustworthy alpha
 
-Repair the promises already exposed before adding product breadth.
+### 1. Make the transaction boundary safe — **IN PROGRESS**
 
-1. Replace `durlo.tx(client: unknown)` with an API that cannot mistake a `pg.Pool` or non-active
-   client for a transaction. Prove business writes and run creation commit or roll back together.
-2. **Done:** workflow lease stalls, cancellations, and attempt timeouts now close the owned step
-   attempt and step row atomically. Recovery creates a distinct attempt, while completed
-   checkpoints remain reusable.
-3. Validate Standard Schema input once, persist its output, and represent schema input/output types
-   correctly. A transforming schema must execute successfully.
-4. Replace the unescaped `$durlo.date` representation with collision-safe serialization and test
-   round trips for every valid JSON shape.
-5. Make sleep and lease-loss sentinels internal or unforgeable so user exceptions always follow
-   normal failure persistence.
-6. Remove the ambiguous batch item union. Valid task payloads containing `input` and `options` must
-   never be interpreted as batch metadata.
-7. Make idempotency reuse explicit. Detect incompatible payload/options or return a result that says
-   whether a run was created or deduplicated.
-8. Track adapter connection ownership so closing Durlo never ends a caller-owned pool.
-9. Reject zero polling intervals and retry configurations that can overflow into invalid dates.
-10. Ensure worker health cannot report a healthy database while execution persistence repeatedly
-    fails.
+**Why:** Atomic business data plus durable work is Durlo's product wedge. The current
+`durlo.tx(client: unknown)` API can silently lose that guarantee.
 
-Done when every issue has a public-API regression test, no known state transition can silently
-corrupt input or durable history, and the complete audit passes.
+#### Work
 
-## Next: Public contract and first release
+- Replace the unsafe transaction API.
+- Make transaction ownership and lifecycle explicit.
+- Reject pools and non-transactional clients clearly.
+- Prove commit and rollback behavior for tasks, workflows, batches, and idempotent creation.
 
-Status: Blocked by integrity repair
+#### Done when
 
-1. Narrow the public exports before semver freezes internal adapter types, serializers, `_durlo`,
-   and control-flow errors.
-2. Add an abortable, timeout-aware, typed `durlo.runs.wait(handle)` or equivalent result API.
-3. Add explicit permanent failure and server-directed retry behavior without weakening retry
-   accounting.
-4. Decide and add the repository license; include package READMEs, license text, repository,
-   homepage, issue, keyword, and public publish metadata in every tarball.
-5. Derive the CLI version from the package manifest and introduce one version/release process with
-   changelog and provenance checks.
-6. Publish a non-placeholder prerelease and verify installation from the registry in an empty ESM,
-   CommonJS, and strict TypeScript consumer.
-7. Document priority ordering and every public option at the point of use.
+The documented transaction path is safe by default, misuse fails immediately, and public-API tests
+cover commit, rollback, conflict, and failure paths.
 
-Done when an outside TypeScript/Postgres user can install one documented prerelease, understand the
-support boundary, run a task, wait for its typed result, and identify every failure state without
-repository knowledge.
+### 2. Close the remaining integrity defects
 
-## Then: Production operations and scale proof
+#### Work
 
-Status: Future
+- Validate Standard Schema input once and persist the transformed output.
+- Use collision-safe serialization for every valid JSON shape.
+- Make internal sleep and lease-loss control flow unforgeable by user code.
+- Remove ambiguous batch item interpretation.
+- Report created versus deduplicated runs and reject incompatible idempotency reuse.
+- Never close a caller-owned PostgreSQL pool.
+- Reject unsafe polling and retry configurations.
+- Keep worker database health truthful when execution persistence fails.
 
-1. Make batch creation, run claiming/recovery, and timer promotion set-based with bounded claim
-   batches independent of configured worker concurrency.
-2. Add end-to-end benchmarks for jobs per second, pickup latency, checkpoint-heavy workflows,
-   recovery after outage, pool saturation, retained-history churn, and cleanup pressure.
-3. Add durable app/resource pause, worker drain, and bounded bulk retry/cancel controls.
-4. Provide standard Prometheus/OpenTelemetry recipes for backlog, polling, persistence failures,
-   lease loss, timer lag, pool waiting, and event-loop lag.
-5. Add connection-acquisition/query timeout guidance and tests that reserve enough capacity for
-   heartbeats under load.
-6. Define an online migration procedure for large tables and store migration checksums in the
-   database.
-7. Bound cleanup by actual child-row work or time, not only the number of parent runs.
-8. Decide the supported CPU-work boundary. Either add isolation or explicitly support only
-   cooperative I/O-oriented handlers in v1.
+Workflow interruption history is already repaired and must remain covered by regression tests.
 
-Done when capacity claims are reproducible on realistic workloads, operators can stop and recover
-work safely, and a worker fleet exposes actionable health rather than process-local hints alone.
+#### Done when
 
-## After v1: Adoption bridge
+No known path can silently corrupt input, ownership, retry behavior, or durable history, and the
+complete release audit passes.
 
-Status: Future
+### 3. Stabilize the public contract
 
-1. Publish standalone copies of the reference applications outside the monorepo package graph.
-2. Add a storage-adapter conformance suite before accepting alternate clients or engines.
-3. Add Drizzle transaction integration first, then evaluate Kysely, Prisma, and framework helpers
-   based on actual demand.
-4. Collect independent operating reports and convert every unexpected behavior into a deterministic
-   regression test or an explicit limitation.
-5. Build contributor, release, security-reporting, and support processes suitable for outside users.
+#### Work
 
-## Post-v1 product breadth
+- Remove internal adapter types, serializers, `_durlo`, and control-flow errors from public exports.
+- Add an abortable, timeout-aware, typed result-waiting API.
+- Add explicit permanent failure and server-directed retry behavior.
+- Document every public option, state, error, priority rule, compatibility rule, and limitation.
+- Define the compatibility and deprecation promises that begin with `1.0`.
 
-Status: Future
+#### Done when
 
-Only after the narrow product is trusted and adopted, evaluate in this order:
+An outside TypeScript/Postgres developer can create work, wait for its result, handle every terminal
+outcome, and understand the support boundary without reading Durlo internals.
 
-1. per-resource and keyed tenant concurrency
-2. global concurrency, rate limiting, and throttling
-3. durable progress and application logs
-4. an authenticated deployable operations surface
-5. parent/child fan-out and fan-in flows
-6. schedules and cron
-7. event ingestion and event-triggered workflows
-8. hosted orchestration or additional storage engines
+### 4. Publish an installable alpha
+
+#### Work
+
+- Choose a license and make the source and issue history publicly inspectable.
+- Add package READMEs, security reporting, contribution guidance, changelog policy, and complete
+  package metadata.
+- Use one version and release process across the packages.
+- Publish an alpha with provenance.
+- Test registry installation in empty ESM, CommonJS, and strict TypeScript consumers.
+- Provide one polished quickstart covering transactional creation, worker restart, retry, and
+  inspection.
+
+#### Done when
+
+A stranger can discover Durlo, install the published packages, complete the quickstart, and verify
+that the documented pre-release limitations match the observed behavior.
+
+## Next — Produce credible operational proof
+
+### 5. Build a production-proof laboratory
+
+This replaces unavailable production dogfooding with honest, controlled evidence. It does not count
+as independent adoption.
+
+#### Work
+
+- Run the task and workflow reference applications as independent processes against durable
+  PostgreSQL using published or packed packages, never workspace source imports.
+- Drive sustained and bursty work through retries, checkpoints, sleeps, cancellation, version
+  changes, and cleanup.
+- Inject worker termination, database interruption, pool saturation, lease expiry, slow handlers,
+  migration upgrades, and rolling deployments.
+- Measure throughput, pickup latency, timer lag, recovery time, duplicate-execution windows,
+  stranded work, pool pressure, history growth, and cleanup cost.
+- Publish the workload, infrastructure, commands, raw results, and limitations.
+
+#### Done when
+
+The environment can run for an extended period without silently losing eligible work, and another
+person can reproduce the published failure and recovery results.
+
+### 6. Establish the supported production envelope
+
+#### Work
+
+- Make creation, claiming, recovery, and timer promotion set-based where measurements show a real
+  bottleneck.
+- Add the pause, drain, bulk retry, and bulk cancellation controls needed for safe operations.
+- Publish Prometheus/OpenTelemetry recipes for backlog, persistence failure, lease loss, timer lag,
+  pool waiting, polling, and event-loop lag.
+- Prove that heartbeats retain sufficient database capacity under load.
+- Define online migration, rollback, and migration-checksum procedures.
+- Bound cleanup by child-row work or elapsed time.
+- Publish the measured workload envelope and the cooperative I/O-handler boundary.
+
+#### Done when
+
+Capacity claims are reproducible, operators can deploy and recover safely, and every operational
+claim names its tested conditions and limitations.
+
+## Later — Earn enough outside trust for v1
+
+### 7. Run a public beta
+
+#### Work
+
+- Publish a beta with a clear support boundary and feedback path.
+- Present the architecture, failure model, benchmark results, and durability demonstration in a
+  concise project site or technical report.
+- Help the first TypeScript/Postgres adopters integrate direct tasks and workflows.
+- Turn unexpected behavior into regression tests, documented limitations, or deliberate contract
+  changes.
+- Collect at least one independent operating report covering workload, duration, failures,
+  upgrades, and limitations.
+
+#### Done when
+
+At least one application outside the repository has run meaningful work with Durlo and the public
+contract has survived integration feedback.
+
+### 8. Release v1
+
+#### Release gate
+
+- No known correctness defect violates a documented guarantee.
+- Clean installation, migration, upgrade, rollback, and recovery are repeatable.
+- API compatibility and deprecation policy are documented.
+- The production envelope and limitations are measured and current.
+- At least one independent application has operated meaningful work.
+- Security reporting and realistic maintenance and support policies exist.
+
+The launch should make the evidence easy to inspect: packages, architecture documentation,
+benchmarks, failure-injection results, a short demonstration, and an honest comparison with
+alternatives.
+
+If independent usage does not exist, Durlo remains beta rather than weakening the `1.0` gate.
+
+## After v1
+
+Evaluate later, based on demonstrated demand:
+
+1. storage-adapter conformance suite and Drizzle integration;
+2. per-resource and tenant concurrency;
+3. global concurrency, rate limiting, and throttling;
+4. durable progress and application logs;
+5. authenticated deployable operations surface;
+6. parent/child fan-out and fan-in;
+7. schedules and cron;
+8. event-triggered workflows;
+9. hosted orchestration or additional storage engines.
 
 Each addition needs a concrete use case, durable semantics, operational controls, and failure tests.
-Feature count alone is not progress.
 
 ## Documentation ownership
 
-- `ROADMAP.md` owns future work and ordering.
-- `ARCHITECTURE.md` describes the implementation that exists.
-- `EXECUTION_SEMANTICS.md` describes public runtime behavior, including current limitations.
-- `OPERATIONS.md` owns deployment and PostgreSQL guidance.
-- `DECISIONS_AND_EDGE_CASES.md` records durable product decisions and non-goals.
-
-When code changes a promise, update the owning document in the same commit. Do not add a new
-top-level document when one of these five already owns the subject.
+- `ROADMAP.md`: future work, order, and release gates
+- `ARCHITECTURE.md`: current implementation
+- `EXECUTION_SEMANTICS.md`: public behavior and limitations
+- `OPERATIONS.md`: deployment and PostgreSQL guidance
+- `DECISIONS_AND_EDGE_CASES.md`: durable product decisions and non-goals
