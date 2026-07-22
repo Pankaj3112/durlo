@@ -349,6 +349,84 @@ describe("Durlo core API", () => {
     });
   });
 
+  it("derives close events for stalled, timed-out, and cancelled step attempts", async () => {
+    const adapter = createAdapter();
+    const at = (seconds: number) => new Date(1_752_652_800_000 + seconds * 1_000);
+    const run = recordFromInput({
+      id: "interrupted-steps",
+      appId: "details-app",
+      kind: "workflow",
+      resourceId: "interrupted-workflow",
+      resourceVersion: "1",
+      input: {},
+      options: {},
+      idempotencyKey: null,
+      priority: 0,
+      scheduledAt: at(0),
+      maxAttempts: 3
+    });
+    run.status = "cancelled";
+    run.createdAt = at(0);
+    run.cancelledAt = at(8);
+    const interruptionStatuses = ["stalled", "timed_out", "cancelled"] as const;
+    const stored = {
+      run,
+      steps: interruptionStatuses.map((status, index) => ({
+        id: `${status}-step`,
+        runId: run.id,
+        stepId: `${status}-work`,
+        status,
+        result: null,
+        error:
+          status === "cancelled"
+            ? null
+            : {
+                name: status === "stalled" ? "StalledError" : "AttemptTimeoutError",
+                message: status
+              },
+        options: {},
+        attemptCount: 1,
+        maxAttempts: 3,
+        createdAt: at(index + 1),
+        updatedAt: at(index + 4),
+        startedAt: at(index + 2),
+        completedAt: at(index + 4)
+      })),
+      attempts: interruptionStatuses.map((status, index) => ({
+        id: `${status}-step-attempt`,
+        runId: run.id,
+        stepId: `${status}-work`,
+        kind: "step" as const,
+        attemptNumber: 1,
+        status,
+        workerId: `worker-${index + 1}`,
+        error:
+          status === "cancelled"
+            ? null
+            : {
+                name: status === "stalled" ? "StalledError" : "AttemptTimeoutError",
+                message: status
+              },
+        startedAt: at(index + 2),
+        completedAt: at(index + 4)
+      })),
+      timers: [],
+      checkedAt: at(9)
+    } satisfies StoredRunDetails;
+    vi.spyOn(adapter, "getRunDetails").mockResolvedValue(stored);
+    const details = await new Durlo({ id: "details-app", adapter }).runs.getDetails(run.id);
+
+    expect(details?.steps.map(({ status }) => status)).toEqual(interruptionStatuses);
+    expect(details?.timeline.map(({ type }) => type)).toEqual(
+      expect.arrayContaining([
+        "step_attempt_stalled",
+        "step_attempt_timed_out",
+        "step_attempt_cancelled"
+      ])
+    );
+    expect(details?.attempts.some(({ status }) => status === "running")).toBe(false);
+  });
+
   it("explains terminal steps, cancelled timers, manual attempts, and released claims", async () => {
     const adapter = createAdapter();
     const at = (seconds: number) => new Date(1_752_652_800_000 + seconds * 1_000);

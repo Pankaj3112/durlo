@@ -280,9 +280,15 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       output: null
     });
     expect(await adapter.getStep(handle.id, "blocked")).toMatchObject({
-      status: "running",
-      result: null
+      status: "cancelled",
+      result: null,
+      error: null,
+      completedAt: expect.any(Date)
     });
+    const details = await durlo.runs.getDetails(handle);
+    expect(details?.timeline.map(({ type }) => type)).toContain("step_attempt_cancelled");
+    expect(details?.steps.some(({ status }) => status === "running")).toBe(false);
+    expect(details?.attempts.some(({ status }) => status === "running")).toBe(false);
     await expect(
       adapter.completeStep({
         runId: handle.id,

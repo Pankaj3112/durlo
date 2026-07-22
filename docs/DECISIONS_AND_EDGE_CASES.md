@@ -111,6 +111,12 @@ in those records and must not imply Temporal-style replay.
 Attempt state must remain truthful. A terminal run with an unexplained `running` step attempt is a
 correctness defect because it makes the chosen evidence model unreliable.
 
+Lease reclaim, attempt timeout, cancellation, and ordinary failure transition the active step
+attempt and its `durlo_steps` row to `stalled`, `timed_out`, `cancelled`, or `failed` in the same
+transaction as the run transition. The transition is scoped to the interrupted lease token.
+Re-entry creates a new numbered step attempt; a completed checkpoint always takes precedence over
+older interruption evidence and is never downgraded.
+
 ## Limits and retention are explicit
 
 Inputs, outputs, errors, batches, step results, and workflow step/sleep counts have configurable

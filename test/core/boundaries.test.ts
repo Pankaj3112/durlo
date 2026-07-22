@@ -18,6 +18,7 @@ import type {
   CreateRunInput,
   DurloAdapter,
   RunRecord,
+  StepStatus,
   TransactionalDurloAdapter
 } from "@durlo/core";
 
@@ -100,6 +101,28 @@ function pendingRecord(input: CreateRunInput): RunRecord {
 }
 
 describe("duration and id boundaries", () => {
+  it("publishes every durable workflow step status", () => {
+    const statuses = [
+      "pending",
+      "running",
+      "completed",
+      "failed",
+      "stalled",
+      "timed_out",
+      "cancelled"
+    ] satisfies StepStatus[];
+
+    expect(statuses).toEqual([
+      "pending",
+      "running",
+      "completed",
+      "failed",
+      "stalled",
+      "timed_out",
+      "cancelled"
+    ]);
+  });
+
   it("accepts exact duration forms and rejects non-finite, negative, or partial matches", () => {
     expect(parseDuration(0)).toBe(0);
     expect(parseDuration(12.5)).toBe(12.5);

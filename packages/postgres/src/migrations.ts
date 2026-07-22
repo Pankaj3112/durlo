@@ -134,5 +134,69 @@ export const migrations: readonly Migration[] = [
       create index durlo_timers_run_idx
         on durlo_timers (run_id, created_at);
     `
+  },
+  {
+    version: "0005_truthful_step_interruptions",
+    sql: `
+      alter table durlo_steps
+        drop constraint durlo_steps_status_check;
+      alter table durlo_steps
+        add constraint durlo_steps_status_check
+        check (status in ('pending', 'running', 'completed', 'failed', 'stalled', 'timed_out', 'cancelled'));
+
+      update durlo_attempts as step_attempt
+      set status = run_attempt.status,
+          error_json = run_attempt.error_json,
+          completed_at = coalesce(run_attempt.completed_at, now())
+      from durlo_attempts as run_attempt
+      where step_attempt.run_id = run_attempt.run_id
+        and step_attempt.kind = 'step'
+        and step_attempt.status = 'running'
+        and step_attempt.lease_token is not null
+        and run_attempt.kind = 'run'
+        and run_attempt.lease_token = step_attempt.lease_token
+        and run_attempt.status in ('failed', 'timed_out', 'stalled', 'cancelled');
+
+      with interrupted as (
+        select distinct on (attempt.run_id, attempt.step_id)
+          attempt.run_id,
+          attempt.step_id,
+          attempt.status,
+          attempt.error_json,
+          attempt.completed_at
+        from durlo_attempts as attempt
+        where attempt.kind = 'step'
+          and attempt.step_id is not null
+          and attempt.status in ('failed', 'timed_out', 'stalled', 'cancelled')
+        order by
+          attempt.run_id,
+          attempt.step_id,
+          attempt.attempt_number desc,
+          attempt.started_at desc,
+          attempt.id desc
+      )
+      update durlo_steps as step
+      set status = interrupted.status,
+          result_json = null,
+          error_json = interrupted.error_json,
+          updated_at = coalesce(interrupted.completed_at, now()),
+          completed_at = coalesce(interrupted.completed_at, now())
+      from interrupted
+      where interrupted.run_id = step.run_id
+        and interrupted.step_id = step.step_id
+        and step.status <> 'completed'
+        and not exists (
+          select 1
+          from durlo_attempts as active_attempt
+          join durlo_runs as active_run
+            on active_run.id = active_attempt.run_id
+           and active_run.status = 'running'
+           and active_run.lease_token = active_attempt.lease_token
+          where active_attempt.run_id = step.run_id
+            and active_attempt.step_id = step.step_id
+            and active_attempt.kind = 'step'
+            and active_attempt.status = 'running'
+        );
+    `
   }
 ];

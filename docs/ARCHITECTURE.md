@@ -89,6 +89,12 @@ due timers and returns the run to `pending`.
 V1 requires sequential, non-nested `step.*` calls. Durlo stores checkpoints, not a Temporal-style
 event history, so local variables and non-checkpointed reads are not replayed.
 
+An active step row is backed by a running attempt that carries the parent run's current lease
+token. Lease reclaim, timeout, cancellation, and ordinary failure close both records inside the
+run-transition transaction as `stalled`, `timed_out`, `cancelled`, or `failed`. Re-entry increments
+the step's attempt count and inserts a new attempt; interruption handling never downgrades a
+completed checkpoint.
+
 ## Worker loops
 
 One worker runs:
