@@ -392,6 +392,31 @@ export interface TransactionalDurloAdapter {
   createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]>;
 }
 
+export type RawPgTransactionClient = {
+  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: unknown[]
+  ): Promise<{ rows: TRow[]; rowCount: number | null }>;
+};
+
+export type DurloTransaction = {
+  readonly client: RawPgTransactionClient;
+  enqueue<TInput, TOutput>(
+    task: TaskDefinition<TInput, TOutput>,
+    input: TInput,
+    options?: RunOptions
+  ): Promise<RunHandle<TOutput>>;
+  start<TInput, TOutput>(
+    workflow: WorkflowDefinition<TInput, TOutput>,
+    input: TInput,
+    options?: RunOptions
+  ): Promise<RunHandle<TOutput>>;
+  batchEnqueue<TInput, TOutput>(
+    task: TaskDefinition<TInput, TOutput>,
+    items: Array<TInput | BatchItem<TInput>>
+  ): Promise<Array<RunHandle<TOutput>>>;
+};
+
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
@@ -417,7 +442,6 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
   sleepRun(input: StepInput & { fireAt: Date; maxSteps: number }): Promise<TimerRecord>;
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
-  withTransaction(client: unknown): TransactionalDurloAdapter;
 }
 
 export type StandardSchemaResult<T> =

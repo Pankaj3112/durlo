@@ -1,7 +1,7 @@
 # Durlo Operations
 
 Status: Current pre-release guidance
-Updated: 2026-07-20
+Updated: 2026-07-26
 
 Durlo has no supported production release yet. This document records the operating behavior that
 exists and the boundaries exercised by the repository.
@@ -73,9 +73,15 @@ Start conservatively:
 - alert on sustained `pool.waitingCount`, not brief bursts alone;
 - configure connection, query, and statement timeouts in the supplied `pg` options where needed.
 
-The `PostgresAdapter` currently closes a caller-supplied pool when `adapter.close()` is called. Use
-the `postgresAdapter(config)` factory with a Durlo-owned pool until ownership is fixed, and do not
-share that pool with unrelated application traffic.
+`postgresAdapter(config)` constructs an owned pool; calling `adapter.close()` more than once is safe
+and ends that pool once. `postgresAdapter({ pool })` borrows a caller-supplied `pg.Pool`; closing the
+adapter never calls `pool.end()`, so the caller remains responsible for the pool lifecycle. This is
+the supported way to share application pool capacity with Durlo.
+
+Each `durlo.transaction(...)` call checks out one client for `BEGIN`, application SQL, Durlo inserts,
+and `COMMIT` or `ROLLBACK`, then releases it. Account for that checked-out client when sizing a
+shared pool. Do not release the client inside the callback; the exposed surface intentionally omits
+`release()`.
 
 ## Polling and latency
 

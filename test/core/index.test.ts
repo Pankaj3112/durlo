@@ -52,7 +52,10 @@ function createAdapter(): DurloAdapter & {
       return inputs.map(recordFromInput);
     }
   };
-  return {
+  const adapter: DurloAdapter & {
+    created: CreateRunInput[];
+    transactionClient?: unknown;
+  } = {
     created,
     ...transactional,
     getRun: async () => null,
@@ -98,12 +101,21 @@ function createAdapter(): DurloAdapter & {
     sleepRun: async () => {
       throw new Error("not implemented by test adapter");
     },
-    fireDueTimers: async () => [],
-    withTransaction(client) {
-      this.transactionClient = client;
-      return transactional;
-    }
+    fireDueTimers: async () => []
   };
+  Object.defineProperty(adapter, Symbol.for("@durlo/core/transaction-provider"), {
+    value: async (
+      callback: (
+        adapter: TransactionalDurloAdapter,
+        client: { query: ReturnType<typeof vi.fn> }
+      ) => Promise<unknown>
+    ) => {
+      const client = { query: vi.fn() };
+      adapter.transactionClient = client;
+      return callback(transactional, client);
+    }
+  });
+  return adapter;
 }
 
 describe("Durlo core API", () => {
@@ -185,18 +197,21 @@ describe("Durlo core API", () => {
     ).rejects.toThrow("duplicate idempotency keys");
   });
 
-  it("binds enqueue and start to caller-owned transactions", async () => {
+  it("binds creation to an adapter-owned transaction callback and returns its result", async () => {
     const adapter = createAdapter();
     const durlo = new Durlo({ id: "test-app", adapter });
     const task = durlo.task({ id: "task", run: async (input: string) => input });
     const workflow = durlo.workflow({ id: "workflow", run: async () => undefined });
-    const client = { query: vi.fn() };
 
-    await durlo.tx(client).enqueue(task, "input");
-    await durlo.tx(client).start(workflow, { value: true });
-    await durlo.tx(client).batchEnqueue(task, ["one", "two"]);
+    const result = await durlo.transaction(async (transaction) => {
+      expect(transaction.client).toBe(adapter.transactionClient);
+      await transaction.enqueue(task, "input");
+      await transaction.start(workflow, { value: true });
+      await transaction.batchEnqueue(task, ["one", "two"]);
+      return { committed: true };
+    });
 
-    expect(adapter.transactionClient).toBe(client);
+    expect(result).toEqual({ committed: true });
     expect(adapter.created.map(({ kind }) => kind)).toEqual(["task", "workflow", "task", "task"]);
   });
 

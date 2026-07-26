@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import { adapter, durlo, orderWorkflow } from "./durlo.js";
 
 const orderId = randomUUID();
-const client = await adapter.pool.connect();
 
 try {
-  await client.query(`
+  await adapter.pool.query(`
     create table if not exists quickstart_orders (
       id text primary key,
       customer_email text not null,
@@ -24,23 +23,17 @@ try {
     );
   `);
 
-  await client.query("begin");
-  await client.query("insert into quickstart_orders (id, customer_email) values ($1, $2)", [
-    orderId,
-    "ada@example.com"
-  ]);
-  const handle = await durlo
-    .tx(client)
-    .start(orderWorkflow, { orderId }, { idempotencyKey: `order:${orderId}` });
-  await client.query("commit");
+  const handle = await durlo.transaction(async (transaction) => {
+    await transaction.client.query(
+      "insert into quickstart_orders (id, customer_email) values ($1, $2)",
+      [orderId, "ada@example.com"]
+    );
+    return transaction.start(orderWorkflow, { orderId }, { idempotencyKey: `order:${orderId}` });
+  });
 
   process.stdout.write(`ORDER_ID=${orderId}\n`);
   process.stdout.write(`RUN_ID=${handle.id}\n`);
   process.stdout.write("Business row and workflow run committed in one Postgres transaction.\n");
-} catch (error) {
-  await client.query("rollback");
-  throw error;
 } finally {
-  client.release();
   await adapter.close();
 }

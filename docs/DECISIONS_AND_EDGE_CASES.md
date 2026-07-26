@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
 Status: Current
-Updated: 2026-07-20
+Updated: 2026-07-26
 
 This file records decisions that should survive refactors. It explains why Durlo has its current
 boundary; it does not repeat every API rule or track unfinished work.
@@ -18,8 +18,8 @@ must be trustworthy before those systems are considered.
 ## PostgreSQL is the coordination system
 
 Durlo targets applications already using PostgreSQL. PostgreSQL owns run eligibility, lease time,
-timer time, row locking, and transactional run creation. User code never runs inside a Durlo-held
-database transaction.
+timer time, row locking, and transactional run creation. The application transaction callback runs
+inside a Durlo-held transaction; task and workflow handlers never do.
 
 Polling is the required wakeup mechanism. `LISTEN/NOTIFY` may someday reduce latency but cannot be
 the correctness path because notifications are not durable.
@@ -31,8 +31,15 @@ database transaction, without an outbox relay. An API that silently accepts a no
 connection invalidates that differentiator and is therefore a release blocker, not a minor type
 issue.
 
-Durlo should own or strongly type the transaction boundary so correct use is the default and misuse
-fails immediately.
+Durlo owns the raw-`pg` transaction lifecycle through `durlo.transaction(callback)`. It acquires and
+releases one client, begins before the callback, commits only after success, and attempts rollback
+for every failure after acquisition. The callback receives a query-only client surface and
+transaction-scoped creation operations, all bound to that same client. Callers cannot pass an
+arbitrary pool or unverified client as a transaction.
+
+Pools built from connection configuration are Durlo-owned. Caller-supplied pools are borrowed and
+remain usable after the adapter closes. Task and workflow handlers never execute inside the
+transaction callback.
 
 ## Execution is at-least-once
 
@@ -127,9 +134,10 @@ history and releases its idempotency key. Durlo will not add a hidden cleanup sc
 
 ## Public API before adapters
 
-Raw `pg` remains the canonical integration until transaction ownership and adapter semantics are
-stable and covered by a conformance suite. Drizzle is the first planned client integration; Prisma,
-Kysely, frameworks, and other storage engines depend on demonstrated demand and equal guarantees.
+Raw `pg` is the only v1 transaction integration. The transaction-provider seam stays internal;
+there is no public generic adapter SDK. Drizzle is the first possible later client integration;
+Prisma, Kysely, frameworks, and other storage engines depend on demonstrated demand and equal
+guarantees.
 
 ## Documentation ownership
 

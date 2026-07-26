@@ -1,6 +1,7 @@
 # Durlo crash-and-resume demo
 
-This demo creates an order and its workflow run in one raw `pg` transaction. The workflow then
+This demo uses `durlo.transaction(...)` to create an order and its workflow run through one raw
+`pg` client. Durlo owns begin, commit, rollback, and release. The workflow then
 checkpoints an inventory reservation, pauses so its worker can be killed, recovers after lease
 expiry, sleeps without holding compute, fails its first courier call, retries, and completes.
 

@@ -16,10 +16,8 @@ type ImportRow = {
 };
 
 export async function enqueueImport(request: CatalogImportRequest, contentHash: string) {
-  const client = await adapter.pool.connect();
-  try {
-    await client.query("begin");
-    const inserted = await client.query(
+  return durlo.transaction(async (transaction) => {
+    const inserted = await transaction.client.query(
       `insert into catalog_imports (id, content_hash, status, row_count)
        values ($1, $2, 'queued', $3)
        on conflict (id) do nothing`,
@@ -27,7 +25,7 @@ export async function enqueueImport(request: CatalogImportRequest, contentHash: 
     );
 
     if (inserted.rowCount === 1) {
-      await client.query(
+      await transaction.client.query(
         `insert into catalog_import_rows (import_id, row_number, sku, name, price_cents)
          select $1, (entry.ordinality - 1)::integer,
                 entry.value->>'sku', entry.value->>'name',
@@ -36,7 +34,7 @@ export async function enqueueImport(request: CatalogImportRequest, contentHash: 
         [request.importId, JSON.stringify(request.rows)]
       );
     } else {
-      const matching = await client.query(
+      const matching = await transaction.client.query(
         "select 1 from catalog_imports where id = $1 and content_hash = $2",
         [request.importId, contentHash]
       );
@@ -45,14 +43,12 @@ export async function enqueueImport(request: CatalogImportRequest, contentHash: 
       }
     }
 
-    const handle = await durlo
-      .tx(client)
-      .start(
-        catalogImportWorkflow,
-        { importId: request.importId, publicationDelayMs: config.publicationDelayMs },
-        { idempotencyKey: `catalog:${request.importId}` }
-      );
-    const linked = await client.query(
+    const handle = await transaction.start(
+      catalogImportWorkflow,
+      { importId: request.importId, publicationDelayMs: config.publicationDelayMs },
+      { idempotencyKey: `catalog:${request.importId}` }
+    );
+    const linked = await transaction.client.query(
       `update catalog_imports
        set run_id = coalesce(run_id, $2), updated_at = now()
        where id = $1 and (run_id is null or run_id = $2)`,
@@ -63,14 +59,8 @@ export async function enqueueImport(request: CatalogImportRequest, contentHash: 
         `catalog import '${request.importId}' could not be linked to run '${handle.id}'`
       );
     }
-    await client.query("commit");
     return handle;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getImport(importId: string) {

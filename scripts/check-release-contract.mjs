@@ -59,9 +59,11 @@ assert(readme.includes("PostgreSQL 14 through 18"), "README must declare Postgre
 assert(readme.includes("Durlo is pre-release"), "README must state the pre-release status");
 
 const roadmap = await readFile(new URL("../docs/ROADMAP.md", import.meta.url), "utf8");
-const currentPhase = roadmap.match(/## Now: Integrity repair[\s\S]*?(?=\n## )/)?.[0];
+const currentPhase = roadmap.match(
+  /### 2\. Close the remaining integrity defects[\s\S]*?(?=\n### |\n## )/
+)?.[0];
 assert(
-  currentPhase?.includes("Status: In progress"),
+  currentPhase?.includes("**IN PROGRESS**"),
   "roadmap must identify integrity repair as the current phase"
 );
 

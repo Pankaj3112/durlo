@@ -1,7 +1,7 @@
 # Durlo Architecture
 
 Status: Current
-Updated: 2026-07-20
+Updated: 2026-07-26
 
 This document describes the implementation that exists today. Public behavior belongs in
 [Execution Semantics](EXECUTION_SEMANTICS.md), deployment guidance in
@@ -113,14 +113,21 @@ settles after active executions drain. `worker.getHealth()` describes only that 
 
 ## Transactions and adapters
 
-`durlo.tx(client)` creates a transactional adapter bound to a caller-provided object with a
-`query()` method. Durlo does not begin, commit, or roll back the caller transaction.
+`durlo.transaction(callback)` asks the PostgreSQL adapter to acquire one pool client, execute
+`BEGIN`, and expose a query-only raw-`pg` client plus transaction-scoped task enqueue, workflow
+start, and task batch enqueue operations. Application statements and Durlo inserts therefore use
+the same client. A successful callback is committed before its result is returned; any callback,
+validation, serialization, batch, query, or commit failure triggers a rollback attempt. The client
+is released once even when commit or rollback fails, and rollback failure does not replace the
+primary error.
 
-The current runtime check cannot distinguish an active `pg.PoolClient` transaction from a
-`pg.Pool` or a client outside `BEGIN`. Atomic application-write plus run creation therefore depends
-on correct caller usage until the transaction API is replaced. The exported `PostgresAdapter`
-constructor also accepts a caller-owned pool, but `close()` currently ends it; ownership is not yet
-tracked.
+The callback never receives `release()`, and callers cannot bind arbitrary pools or clients as
+transactions. Task and workflow handlers still execute later in workers, outside this transaction.
+The adapter transaction-provider seam remains internal; raw `pg` is the only v1 integration.
+
+An adapter built from PostgreSQL connection configuration owns its pool. An adapter built from a
+caller-supplied `pg.Pool` borrows it. `close()` is idempotent and ends only an owned pool; closing a
+borrowed adapter leaves the caller's pool usable.
 
 ## Reads, controls, and cleanup
 

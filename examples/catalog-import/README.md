@@ -1,8 +1,9 @@
 # Catalog import
 
 This production-shaped reference application accepts a bounded product catalog, stores it in application
-tables, and starts a small Durlo workflow reference in the same Postgres transaction. Large business
-payloads stay out of workflow input and remain available after Durlo history retention.
+tables, and uses Durlo's raw-`pg` transaction callback to start a small workflow through the same
+client. Large business payloads stay out of workflow input and remain available after Durlo history
+retention.
 
 The workflow validates and checkpoints the source, enters a durable publication window that holds no
 worker slot, and publishes the catalog in an idempotent transaction. Imports are ordered by creation

@@ -1,7 +1,7 @@
 # Durlo Execution Semantics
 
 Status: Current pre-release behavior
-Updated: 2026-07-20
+Updated: 2026-07-26
 
 This document describes what the current public API does, including known defects. It is not a
 promise that roadmap work is already implemented.
@@ -59,14 +59,21 @@ shape until the API is replaced.
 
 ## Transaction-bound creation
 
-`durlo.tx(client).enqueue(...)`, `.start(...)`, and `.batchEnqueue(...)` issue run writes through the
-provided object's `query()` method. Durlo never begins, commits, or rolls back that transaction.
+`durlo.transaction(callback)` acquires one client from the adapter's raw-`pg` pool and begins a
+transaction before invoking the callback. The callback receives `client.query(...)` together with
+`enqueue(...)`, `start(...)`, and `batchEnqueue(...)`. All application SQL and Durlo creation calls
+inside it use that same client.
 
-Atomic application data plus run creation is achieved only when the caller passes a checked-out raw
-`pg` client that is already inside `BEGIN` and later commits or rolls back that same client. The
-current API accepts `unknown` and checks only for `query()`, so it also accepts `pg.Pool` and clients
-outside a transaction. Passing either silently loses atomicity. Treat this API as unsafe until the
-roadmap transaction repair lands.
+Durlo commits only after the callback resolves, then returns the callback result. A thrown or
+rejected callback, validation or serialization error, batch error, PostgreSQL error, or failed
+commit causes Durlo to attempt rollback. The client is released exactly once on every acquired-client
+path. If rollback also fails, the original callback, query, or commit error remains the reported
+error.
+
+Callers do not supply or release the transaction client, so a `pg.Pool` or a client outside `BEGIN`
+cannot be mistaken for an active transaction. Nested transactions and savepoints are unsupported.
+Task and workflow handlers do not run inside the callback transaction. Raw `pg` is the only v1
+transaction integration; Drizzle, Prisma, Kysely, and framework adapters are not implemented.
 
 ## Validation and serialization
 
