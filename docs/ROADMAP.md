@@ -1,9 +1,9 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-23
+Updated: 2026-07-26
 
-> **Current focus:** Make transaction-bound run creation safe. Do not start future roadmap work yet.
+> **Current focus:** Close the remaining integrity defects. Do not start future roadmap work yet.
 
 ## At a glance
 
@@ -46,18 +46,20 @@ The repository already has lease-token fencing, `FOR UPDATE SKIP LOCKED`, crash 
 tests, resource-version compatibility, durable workflow checkpoints, bounded payloads,
 observability reads, a CLI, a local dashboard, and production-shaped reference applications.
 
-Workflow interruption history now remains truthful across lease stalls, cancellation, and attempt
-timeout. The remaining blockers are concentrated around transaction safety, input and serialization
-integrity, public API clarity, packaging, and operational proof.
+Workflow interruption history remains truthful across lease stalls, cancellation, and attempt
+timeout. Transaction-bound creation now owns the raw-`pg` lifecycle and pool ownership is explicit.
+The remaining blockers are concentrated around input and serialization integrity, public API
+clarity, packaging, and operational proof.
 
 The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported production library.
 
 ## Now — Publish a trustworthy alpha
 
-### 1. Make the transaction boundary safe — **IN PROGRESS**
+### 1. Make the transaction boundary safe — **DONE**
 
-**Why:** Atomic business data plus durable work is Durlo's product wedge. The current
-`durlo.tx(client: unknown)` API can silently lose that guarantee.
+**Outcome:** `durlo.transaction(callback)` now acquires one raw-`pg` client, owns begin, commit,
+rollback, and release, and binds application SQL plus task, workflow, and batch creation to that
+client. Configured pools are owned; caller-supplied pools are borrowed.
 
 #### Work
 
@@ -71,7 +73,7 @@ The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported p
 The documented transaction path is safe by default, misuse fails immediately, and public-API tests
 cover commit, rollback, conflict, and failure paths.
 
-### 2. Close the remaining integrity defects
+### 2. Close the remaining integrity defects — **IN PROGRESS**
 
 #### Work
 
@@ -80,7 +82,6 @@ cover commit, rollback, conflict, and failure paths.
 - Make internal sleep and lease-loss control flow unforgeable by user code.
 - Remove ambiguous batch item interpretation.
 - Report created versus deduplicated runs and reject incompatible idempotency reuse.
-- Never close a caller-owned PostgreSQL pool.
 - Reject unsafe polling and retry configurations.
 - Keep worker database health truthful when execution persistence fails.
 

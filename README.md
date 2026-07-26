@@ -7,9 +7,9 @@ separate queue service.
 
 ## Project status
 
-Durlo is pre-release. The execution foundation is substantial, but the public transaction API,
-input handling, workflow attempt history, package metadata, and production operating surface still
-have release-blocking work tracked in the [roadmap](docs/ROADMAP.md). The packages remain at
+Durlo is pre-release. The execution foundation is substantial, but input handling, public API
+cleanup, package metadata, and the production operating surface still have release-blocking work
+tracked in the [roadmap](docs/ROADMAP.md). The packages remain at
 `0.0.0`; do not treat the current repository as a supported production release.
 
 The intended v1 scope is deliberately narrow:
@@ -66,6 +66,19 @@ const run = await sendInvoice.enqueue(
   { idempotencyKey: "invoice:inv_42" }
 );
 ```
+
+To commit application data and durable work atomically, use Durlo's raw-`pg` transaction callback:
+
+```ts
+const run = await durlo.transaction(async ({ client, enqueue }) => {
+  await client.query("insert into invoices (id) values ($1)", ["inv_42"]);
+  return enqueue(sendInvoice, { invoiceId: "inv_42" }, { idempotencyKey: "invoice:inv_42" });
+});
+```
+
+Durlo acquires and releases one client and owns `BEGIN`, `COMMIT`, and `ROLLBACK`. The callback's
+query surface and creation operations use that same client. Raw `pg` is the only transaction
+integration in v1.
 
 Calling `enqueue` or `workflow.start` only persists work. A separately running worker must register
 the matching definition and version before it can execute the run.

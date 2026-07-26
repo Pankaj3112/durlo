@@ -18,10 +18,8 @@ export type DeliveryRow = {
 };
 
 export async function enqueueDelivery(input: WebhookDeliveryInput) {
-  const client = await adapter.pool.connect();
-  try {
-    await client.query("begin");
-    const inserted = await client.query(
+  return durlo.transaction(async (transaction) => {
+    const inserted = await transaction.client.query(
       `insert into webhook_relay_deliveries (id, destination_url, payload, status)
        values ($1, $2, $3::jsonb, 'queued')
        on conflict (id) do nothing`,
@@ -29,7 +27,7 @@ export async function enqueueDelivery(input: WebhookDeliveryInput) {
     );
 
     if (inserted.rowCount === 0) {
-      const matching = await client.query(
+      const matching = await transaction.client.query(
         `select 1 from webhook_relay_deliveries
          where id = $1 and destination_url = $2 and payload = $3::jsonb`,
         [input.deliveryId, input.destinationUrl, JSON.stringify(input.payload)]
@@ -39,10 +37,10 @@ export async function enqueueDelivery(input: WebhookDeliveryInput) {
       }
     }
 
-    const handle = await durlo
-      .tx(client)
-      .enqueue(deliverWebhook, input, { idempotencyKey: `delivery:${input.deliveryId}` });
-    const linked = await client.query(
+    const handle = await transaction.enqueue(deliverWebhook, input, {
+      idempotencyKey: `delivery:${input.deliveryId}`
+    });
+    const linked = await transaction.client.query(
       `update webhook_relay_deliveries
        set run_id = coalesce(run_id, $2), updated_at = now()
        where id = $1 and (run_id is null or run_id = $2)`,
@@ -51,14 +49,8 @@ export async function enqueueDelivery(input: WebhookDeliveryInput) {
     if (linked.rowCount !== 1) {
       throw new Error(`delivery '${input.deliveryId}' could not be linked to run '${handle.id}'`);
     }
-    await client.query("commit");
     return handle;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function getDelivery(deliveryId: string) {

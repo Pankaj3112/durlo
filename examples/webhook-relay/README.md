@@ -1,8 +1,8 @@
 # Webhook relay
 
 This production-shaped reference application accepts authenticated delivery requests and sends them from a
-Durlo task. The API inserts its delivery row and Durlo run in one Postgres transaction, so a process
-crash cannot commit one without the other.
+Durlo task. The API uses Durlo's raw-`pg` transaction callback to insert its delivery row and Durlo
+run through one client, so a process crash cannot commit one without the other.
 
 The task retries transient errors and non-2xx responses, supports cancellation and manual retry,
 and sends the stable `Idempotency-Key` header to the destination. Durlo remains at-least-once: a
