@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Durlo } from "@durlo/core";
-import { PostgresAdapter, postgresAdapter } from "@durlo/postgres";
+import { postgresAdapter } from "@durlo/postgres";
+import type { PostgresAdapter } from "@durlo/postgres";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 

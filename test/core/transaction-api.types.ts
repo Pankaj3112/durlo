@@ -8,7 +8,9 @@ void durlo.transaction(async ({ client }) => {
   await client.query<{ answer: number }>("select 42 as answer");
 });
 
-if (false) {
+function assertLegacyApiRemoved() {
   // @ts-expect-error The unsafe caller-supplied transaction API was removed.
   durlo.tx(adapter.pool);
 }
+
+void assertLegacyApiRemoved;
