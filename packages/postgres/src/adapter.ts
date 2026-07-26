@@ -1246,30 +1246,35 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
     ) => Promise<TResult>
   ): Promise<TResult> {
     const client = await this.pool.connect();
+    let result: TResult;
+    let failed = false;
     let primaryError: unknown;
     try {
       await client.query("begin");
       const transactionClient: PostgresTransactionClient = {
         query: client.query.bind(client) as PoolClient["query"]
       };
-      const result = await callback(new PostgresAdapter(this.pool, client), transactionClient);
+      result = await callback(new PostgresAdapter(this.pool, client), transactionClient);
       await client.query("commit");
-      return result;
     } catch (error) {
+      failed = true;
       primaryError = error;
       try {
         await client.query("rollback");
       } catch {
         // Preserve the callback, query, or commit error that caused the rollback.
       }
-      throw error;
-    } finally {
-      try {
-        client.release();
-      } catch (releaseError) {
-        if (primaryError === undefined) throw releaseError;
+    }
+    try {
+      client.release();
+    } catch (releaseError) {
+      if (!failed) {
+        failed = true;
+        primaryError = releaseError;
       }
     }
+    if (failed) throw primaryError;
+    return result!;
   }
 
   private query(): Query {
