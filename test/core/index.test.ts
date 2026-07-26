@@ -99,9 +99,10 @@ function createAdapter(): DurloAdapter & {
       throw new Error("not implemented by test adapter");
     },
     fireDueTimers: async () => [],
-    withTransaction(client) {
+    async transaction(callback) {
+      const client = { query: vi.fn() };
       this.transactionClient = client;
-      return transactional;
+      return callback(transactional, client);
     }
   };
 }
@@ -185,18 +186,21 @@ describe("Durlo core API", () => {
     ).rejects.toThrow("duplicate idempotency keys");
   });
 
-  it("binds enqueue and start to caller-owned transactions", async () => {
+  it("binds creation to an adapter-owned transaction callback and returns its result", async () => {
     const adapter = createAdapter();
     const durlo = new Durlo({ id: "test-app", adapter });
     const task = durlo.task({ id: "task", run: async (input: string) => input });
     const workflow = durlo.workflow({ id: "workflow", run: async () => undefined });
-    const client = { query: vi.fn() };
 
-    await durlo.tx(client).enqueue(task, "input");
-    await durlo.tx(client).start(workflow, { value: true });
-    await durlo.tx(client).batchEnqueue(task, ["one", "two"]);
+    const result = await durlo.transaction(async (transaction) => {
+      expect(transaction.client).toBe(adapter.transactionClient);
+      await transaction.enqueue(task, "input");
+      await transaction.start(workflow, { value: true });
+      await transaction.batchEnqueue(task, ["one", "two"]);
+      return { committed: true };
+    });
 
-    expect(adapter.transactionClient).toBe(client);
+    expect(result).toEqual({ committed: true });
     expect(adapter.created.map(({ kind }) => kind)).toEqual(["task", "workflow", "task", "task"]);
   });
 

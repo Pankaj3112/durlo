@@ -76,7 +76,7 @@ function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
     getTimer: async () => null,
     sleepRun: unused,
     fireDueTimers: async () => [],
-    withTransaction: () => transactional
+    transaction: (callback) => callback(transactional, undefined)
   };
 }
 

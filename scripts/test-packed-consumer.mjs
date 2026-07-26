@@ -72,11 +72,21 @@ try {
     join(consumer, "typecheck.ts"),
     `
       import { Durlo, type DurloAdapter } from "@durlo/core";
-      import { migrations, postgresAdapter, type PostgresAdapter } from "@durlo/postgres";
+      import {
+        migrations,
+        postgresAdapter,
+        type PostgresAdapter,
+        type PostgresTransactionClient
+      } from "@durlo/postgres";
       import { cliPackageName } from "@durlo/cli";
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
-      const durlo: Durlo = new Durlo({ id: cliPackageName, adapter: contract });
+      const durlo: Durlo<PostgresTransactionClient> = new Durlo({ id: cliPackageName, adapter });
+      if (false) {
+        void durlo.transaction(async ({ client }) => client.query("select 1"));
+        // @ts-expect-error The unsafe caller-supplied transaction API must stay unavailable.
+        durlo.tx(adapter.pool);
+      }
       const migrationVersions: string[] = migrations.map(({ version }) => version);
       void migrationVersions;
       void durlo;

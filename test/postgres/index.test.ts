@@ -674,29 +674,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     });
   });
 
-  it("writes through a caller-owned raw pg transaction", async () => {
+  it("rolls back transaction-scoped task creation when the callback rejects", async () => {
     const durlo = new Durlo({ id: "integration", adapter });
     const task = durlo.task({ id: "transactional", run: async () => undefined });
-    const client = await adapter.pool.connect();
     let runId = "";
-    try {
-      await client.query("begin");
-      runId = (await durlo.tx(client).enqueue(task, { value: true })).id;
-      await durlo.tx(client).batchEnqueue(task, [{ value: "batch-1" }, { value: "batch-2" }]);
-      await client.query("rollback");
-    } finally {
-      client.release();
-    }
+    await expect(
+      durlo.transaction(async (transaction) => {
+        runId = (await transaction.enqueue(task, { value: true })).id;
+        await transaction.batchEnqueue(task, [{ value: "batch-1" }, { value: "batch-2" }]);
+        throw new Error("rollback transaction");
+      })
+    ).rejects.toThrow("rollback transaction");
 
     expect(await adapter.getRun({ appId: "integration", runId: runId })).toBeNull();
     const count = await adapter.pool.query<{ count: string }>(
       "select count(*)::text as count from durlo_runs where resource_id = 'transactional'"
     );
     expect(count.rows[0]?.count).toBe("0");
-  });
-
-  it("rejects invalid raw transaction clients", () => {
-    expect(() => adapter.withTransaction({})).toThrow("raw pg client");
   });
 
   it("claims and completes tasks with append-only attempt history", async () => {

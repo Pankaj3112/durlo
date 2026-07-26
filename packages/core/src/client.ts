@@ -16,6 +16,7 @@ import type {
   DurloAdapter,
   DurloLimits,
   DurloOptions,
+  DurloTransaction,
   Logger,
   NormalizedRetryPolicy,
   RetentionCleanupOptions,
@@ -105,9 +106,9 @@ function encodeRunCursor(cursor: RunListCursor): string {
   ).toString("base64url");
 }
 
-export class Durlo {
+export class Durlo<TTransactionClient = unknown> {
   readonly id: string;
-  readonly adapter: DurloAdapter;
+  readonly adapter: DurloAdapter<TTransactionClient>;
   readonly runs: {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
     getDetails: (handleOrId: RunHandle | string) => Promise<RunDetails | null>;
@@ -123,7 +124,7 @@ export class Durlo {
   private readonly limits: DurloLimits;
   private readonly resourceKeys = new Set<string>();
 
-  constructor(options: DurloOptions) {
+  constructor(options: DurloOptions<TTransactionClient>) {
     validateId(options.id, "app id");
     if (!options.adapter) throw new TypeError("adapter is required");
     this.id = options.id;
@@ -245,94 +246,83 @@ export class Durlo {
     };
   }
 
-  tx(client: unknown): {
-    enqueue: <TInput, TOutput>(
-      task: TaskDefinition<TInput, TOutput>,
-      input: TInput,
-      options?: RunOptions
-    ) => Promise<RunHandle<TOutput>>;
-    start: <TInput, TOutput>(
-      workflow: WorkflowDefinition<TInput, TOutput>,
-      input: TInput,
-      options?: RunOptions
-    ) => Promise<RunHandle<TOutput>>;
-    batchEnqueue: <TInput, TOutput>(
-      task: TaskDefinition<TInput, TOutput>,
-      items: Array<TInput | BatchItem<TInput>>
-    ) => Promise<Array<RunHandle<TOutput>>>;
-  } {
-    const adapter = this.adapter.withTransaction(client);
-    return {
-      enqueue: (task, input, options) => {
-        const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
-        const timeout =
-          task.options.timeout === undefined
-            ? this.defaultTimeout
-            : parseDuration(task.options.timeout);
-        return this.createRun(
-          adapter,
-          "task",
-          task.id,
-          task.version,
-          task.options.schema,
-          input,
-          options,
-          retry,
-          timeout
-        );
-      },
-      start: (workflow, input, options) => {
-        const retry = normalizeRetryPolicy(workflow.options.retry, this.defaultRetry);
-        const timeout =
-          workflow.options.timeout === undefined
-            ? this.defaultTimeout
-            : parseDuration(workflow.options.timeout);
-        return this.createRun(
-          adapter,
-          "workflow",
-          workflow.id,
-          workflow.version,
-          workflow.options.schema,
-          input,
-          options,
-          retry,
-          timeout
-        );
-      },
-      batchEnqueue: async <TInput, TOutput>(
-        task: TaskDefinition<TInput, TOutput>,
-        items: Array<TInput | BatchItem<TInput>>
-      ) => {
-        this.assertBatchCount(items.length);
-        const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
-        const timeout =
-          task.options.timeout === undefined
-            ? this.defaultTimeout
-            : parseDuration(task.options.timeout);
-        const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
-        const prepared = await Promise.all(
-          normalized.map(({ input, options }) =>
-            this.prepareRun(
-              "task",
-              task.id,
-              task.version,
-              task.options.schema,
-              input,
-              options,
-              retry,
-              timeout
+  transaction<TResult>(
+    callback: (transaction: DurloTransaction<TTransactionClient>) => TResult | Promise<TResult>
+  ): Promise<TResult> {
+    return this.adapter.transaction(async (adapter, client) =>
+      callback({
+        client,
+        enqueue: (task, input, options) => {
+          const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
+          const timeout =
+            task.options.timeout === undefined
+              ? this.defaultTimeout
+              : parseDuration(task.options.timeout);
+          return this.createRun(
+            adapter,
+            "task",
+            task.id,
+            task.version,
+            task.options.schema,
+            input,
+            options,
+            retry,
+            timeout
+          );
+        },
+        start: (workflow, input, options) => {
+          const retry = normalizeRetryPolicy(workflow.options.retry, this.defaultRetry);
+          const timeout =
+            workflow.options.timeout === undefined
+              ? this.defaultTimeout
+              : parseDuration(workflow.options.timeout);
+          return this.createRun(
+            adapter,
+            "workflow",
+            workflow.id,
+            workflow.version,
+            workflow.options.schema,
+            input,
+            options,
+            retry,
+            timeout
+          );
+        },
+        batchEnqueue: async <TInput, TOutput>(
+          task: TaskDefinition<TInput, TOutput>,
+          items: Array<TInput | BatchItem<TInput>>
+        ) => {
+          this.assertBatchCount(items.length);
+          const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
+          const timeout =
+            task.options.timeout === undefined
+              ? this.defaultTimeout
+              : parseDuration(task.options.timeout);
+          const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
+          const prepared = await Promise.all(
+            normalized.map(({ input, options }) =>
+              this.prepareRun(
+                "task",
+                task.id,
+                task.version,
+                task.options.schema,
+                input,
+                options,
+                retry,
+                timeout
+              )
             )
-          )
-        );
-        this.assertBatchBytes(prepared);
-        const keys = prepared
-          .map((item) => item.idempotencyKey)
-          .filter((key): key is string => key !== null);
-        if (new Set(keys).size !== keys.length)
-          throw new Error("duplicate idempotency keys in one batch are not allowed");
-        return (await adapter.createRuns(prepared)).map(toHandle<TOutput>);
-      }
-    };
+          );
+          this.assertBatchBytes(prepared);
+          const keys = prepared
+            .map((item) => item.idempotencyKey)
+            .filter((key): key is string => key !== null);
+          if (new Set(keys).size !== keys.length)
+            throw new Error("duplicate idempotency keys in one batch are not allowed");
+          return (await adapter.createRuns(prepared)).map(toHandle<TOutput>);
+        }
+      })
+    );
   }
 
   worker(options: WorkerOptions): Worker {

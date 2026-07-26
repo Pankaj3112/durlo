@@ -39,6 +39,8 @@ export type PostgresAdapterOptions = PoolConfig & {
   connectionString?: string;
 };
 
+export type PostgresTransactionClient = Pick<PoolClient, "query">;
+
 type RunRow = QueryResultRow & {
   id: string;
   app_id: string;
@@ -266,15 +268,19 @@ const ATTEMPT_COLUMNS = `
   started_at, completed_at
 `;
 
-export class PostgresAdapter implements DurloAdapter {
+export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> {
   readonly pool: Pool;
   private readonly boundClient?: PoolClient;
+  private readonly ownsPool: boolean;
+  private closePromise?: Promise<void>;
 
   constructor(options: PostgresAdapterOptions | Pool, boundClient?: PoolClient) {
     if (options instanceof Pool) {
       this.pool = options;
+      this.ownsPool = false;
     } else {
       this.pool = new Pool(options);
+      this.ownsPool = true;
       // pg emits idle-client failures on the pool rather than rejecting a query. Keep a transient
       // network failure from becoming an uncaught EventEmitter error. Checked-out clients also emit
       // before their active query rejects, so keep a listener attached across pool acquisitions.
@@ -319,7 +325,9 @@ export class PostgresAdapter implements DurloAdapter {
   }
 
   async close(): Promise<void> {
-    if (!this.boundClient) await this.pool.end();
+    if (!this.ownsPool) return;
+    this.closePromise ??= this.pool.end();
+    await this.closePromise;
   }
 
   async createRun(input: CreateRunInput): Promise<RunRecord> {
@@ -1231,16 +1239,37 @@ export class PostgresAdapter implements DurloAdapter {
     throw new RunStateError(`cannot manually retry a ${current.status} ${current.kind} run`);
   }
 
-  withTransaction(client: unknown): TransactionalDurloAdapter {
-    if (
-      !client ||
-      typeof client !== "object" ||
-      !("query" in client) ||
-      typeof client.query !== "function"
-    ) {
-      throw new TypeError("transaction client must be a raw pg client");
+  async transaction<TResult>(
+    callback: (
+      adapter: TransactionalDurloAdapter,
+      client: PostgresTransactionClient
+    ) => Promise<TResult>
+  ): Promise<TResult> {
+    const client = await this.pool.connect();
+    let primaryError: unknown;
+    try {
+      await client.query("begin");
+      const transactionClient: PostgresTransactionClient = {
+        query: client.query.bind(client) as PoolClient["query"]
+      };
+      const result = await callback(new PostgresAdapter(this.pool, client), transactionClient);
+      await client.query("commit");
+      return result;
+    } catch (error) {
+      primaryError = error;
+      try {
+        await client.query("rollback");
+      } catch {
+        // Preserve the callback, query, or commit error that caused the rollback.
+      }
+      throw error;
+    } finally {
+      try {
+        client.release();
+      } catch (releaseError) {
+        if (primaryError === undefined) throw releaseError;
+      }
     }
-    return new PostgresAdapter(this.pool, client as PoolClient);
   }
 
   private query(): Query {
@@ -1369,6 +1398,6 @@ export class PostgresAdapter implements DurloAdapter {
   }
 }
 
-export function postgresAdapter(options: PostgresAdapterOptions): PostgresAdapter {
+export function postgresAdapter(options: PostgresAdapterOptions | Pool): PostgresAdapter {
   return new PostgresAdapter(options);
 }

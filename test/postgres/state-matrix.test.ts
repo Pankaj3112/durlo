@@ -145,19 +145,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     await expect(adapter.createRuns([])).resolves.toEqual([]);
   });
 
-  it("commits caller-owned transaction writes without taking ownership of the transaction", async () => {
+  it("returns only after committing an owned transaction", async () => {
     const durlo = new Durlo({ id: "matrix-tests", adapter });
     const task = durlo.task({ id: "committed-transaction", run: async () => undefined });
-    const client = await adapter.pool.connect();
-    let runId = "";
-    try {
-      await client.query("begin");
-      runId = (await durlo.tx(client).enqueue(task, { committed: true })).id;
-      expect(await adapter.getRun({ appId: "matrix-tests", runId: runId })).toBeNull();
-      await client.query("commit");
-    } finally {
-      client.release();
-    }
+    const runId = await durlo.transaction(async (transaction) => {
+      const id = (await transaction.enqueue(task, { committed: true })).id;
+      expect(await adapter.getRun({ appId: "matrix-tests", runId: id })).toBeNull();
+      return id;
+    });
 
     expect(await adapter.getRun({ appId: "matrix-tests", runId: runId })).toMatchObject({
       status: "pending",

@@ -392,7 +392,25 @@ export interface TransactionalDurloAdapter {
   createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]>;
 }
 
-export interface DurloAdapter extends TransactionalDurloAdapter {
+export type DurloTransaction<TClient> = {
+  readonly client: TClient;
+  enqueue<TInput, TOutput>(
+    task: TaskDefinition<TInput, TOutput>,
+    input: TInput,
+    options?: RunOptions
+  ): Promise<RunHandle<TOutput>>;
+  start<TInput, TOutput>(
+    workflow: WorkflowDefinition<TInput, TOutput>,
+    input: TInput,
+    options?: RunOptions
+  ): Promise<RunHandle<TOutput>>;
+  batchEnqueue<TInput, TOutput>(
+    task: TaskDefinition<TInput, TOutput>,
+    items: Array<TInput | BatchItem<TInput>>
+  ): Promise<Array<RunHandle<TOutput>>>;
+};
+
+export interface DurloAdapter<TTransactionClient = unknown> extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
   getBacklogHealth(input: { appId: string }): Promise<BacklogHealth>;
@@ -417,7 +435,9 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
   sleepRun(input: StepInput & { fireAt: Date; maxSteps: number }): Promise<TimerRecord>;
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
-  withTransaction(client: unknown): TransactionalDurloAdapter;
+  transaction<TResult>(
+    callback: (adapter: TransactionalDurloAdapter, client: TTransactionClient) => Promise<TResult>
+  ): Promise<TResult>;
 }
 
 export type StandardSchemaResult<T> =
@@ -537,9 +557,9 @@ export type Logger = {
   error?: (message: string, data?: unknown) => void;
 };
 
-export type DurloOptions = {
+export type DurloOptions<TTransactionClient = unknown> = {
   id: string;
-  adapter: DurloAdapter;
+  adapter: DurloAdapter<TTransactionClient>;
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;
