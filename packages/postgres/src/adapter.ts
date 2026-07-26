@@ -1250,19 +1250,28 @@ export class PostgresAdapter implements DurloAdapter {
     let failed = false;
     let primaryError: unknown;
     let rollbackError: unknown;
+    let active = false;
     try {
       await client.query("begin");
-      const transactionClient: PostgresTransactionClient = {
-        query: client.query.bind(client) as PostgresTransactionClient["query"]
+      active = true;
+      const query: Query = (text, values) => {
+        if (!active) {
+          return Promise.reject(new Error("transaction is no longer active"));
+        }
+        return client.query(text, values);
       };
-      const query: Query = (text, values) => client.query(text, values);
+      const transactionClient: PostgresTransactionClient = {
+        query
+      };
       const transactionAdapter: TransactionalDurloAdapter = {
         createRun: (input) => this.insertRun(query, input),
         createRuns: (inputs) => this.insertRuns(query, inputs)
       };
       result = await callback(transactionAdapter, transactionClient);
+      active = false;
       await client.query("commit");
     } catch (error) {
+      active = false;
       failed = true;
       primaryError = error;
       try {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Durlo } from "@durlo/core";
-import type { TransactionalDurloAdapter } from "@durlo/core";
+import type { CreateRunInput, TransactionalDurloAdapter } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
 
@@ -246,6 +246,28 @@ describe("transaction lifecycle faults", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects retained transaction surfaces after commit without issuing SQL", async () => {
+    const { adapter, query, release } = adapterWithFakeClient();
+    let retainedAdapter: TransactionalDurloAdapter | undefined;
+    let retainedClient: PostgresTransactionClient | undefined;
+
+    await runAdapterTransaction(adapter, async (transactionAdapter, client) => {
+      retainedAdapter = transactionAdapter;
+      retainedClient = client;
+    });
+
+    const callsAfterCommit = query.mock.calls.length;
+    await expect(retainedClient!.query("after release")).rejects.toThrow(
+      "transaction is no longer active"
+    );
+    await expect(retainedAdapter!.createRun(fakeCreateRunInput())).rejects.toThrow(
+      "transaction is no longer active"
+    );
+
+    expect(query).toHaveBeenCalledTimes(callsAfterCommit);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the callback error when rollback also fails and still releases once", async () => {
     const primary = new Error("primary callback failure");
     const rollback = new Error("rollback failure");
@@ -287,6 +309,22 @@ function adapterWithFakeClient(failures: { commit?: Error; rollback?: Error } = 
   } as unknown as Awaited<ReturnType<PostgresAdapter["pool"]["connect"]>>;
   vi.spyOn(adapter.pool, "connect").mockResolvedValue(client);
   return { adapter, query, release };
+}
+
+function fakeCreateRunInput(): CreateRunInput {
+  return {
+    id: "retained-run",
+    appId: "transaction-tests",
+    kind: "task",
+    resourceId: "retained-task",
+    resourceVersion: "1",
+    input: null,
+    options: {},
+    idempotencyKey: null,
+    priority: 0,
+    scheduledAt: new Date(0),
+    maxAttempts: 1
+  };
 }
 
 function runAdapterTransaction<TResult>(
