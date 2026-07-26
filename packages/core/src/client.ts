@@ -30,6 +30,7 @@ import type {
   RunOptions,
   RunRecord,
   RunStatus,
+  RawPgTransactionClient,
   TaskDefinition,
   TaskDefinitionOptions,
   TransactionalDurloAdapter,
@@ -106,9 +107,20 @@ function encodeRunCursor(cursor: RunListCursor): string {
   ).toString("base64url");
 }
 
-export class Durlo<TTransactionClient = unknown> {
+const TRANSACTION_PROVIDER = Symbol.for("@durlo/core/transaction-provider");
+
+type InternalTransactionProvider = {
+  [TRANSACTION_PROVIDER]: <TResult>(
+    callback: (
+      adapter: TransactionalDurloAdapter,
+      client: RawPgTransactionClient
+    ) => Promise<TResult>
+  ) => Promise<TResult>;
+};
+
+export class Durlo {
   readonly id: string;
-  readonly adapter: DurloAdapter<TTransactionClient>;
+  readonly adapter: DurloAdapter;
   readonly runs: {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
     getDetails: (handleOrId: RunHandle | string) => Promise<RunDetails | null>;
@@ -124,7 +136,7 @@ export class Durlo<TTransactionClient = unknown> {
   private readonly limits: DurloLimits;
   private readonly resourceKeys = new Set<string>();
 
-  constructor(options: DurloOptions<TTransactionClient>) {
+  constructor(options: DurloOptions) {
     validateId(options.id, "app id");
     if (!options.adapter) throw new TypeError("adapter is required");
     this.id = options.id;
@@ -247,9 +259,13 @@ export class Durlo<TTransactionClient = unknown> {
   }
 
   transaction<TResult>(
-    callback: (transaction: DurloTransaction<TTransactionClient>) => TResult | Promise<TResult>
+    callback: (transaction: DurloTransaction) => TResult | Promise<TResult>
   ): Promise<TResult> {
-    return this.adapter.transaction(async (adapter, client) =>
+    const provider = (this.adapter as unknown as InternalTransactionProvider)[TRANSACTION_PROVIDER];
+    if (typeof provider !== "function") {
+      throw new TypeError("adapter does not support raw pg transactions");
+    }
+    return provider(async (adapter, client) =>
       callback({
         client,
         enqueue: (task, input, options) => {

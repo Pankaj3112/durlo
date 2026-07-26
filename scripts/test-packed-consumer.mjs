@@ -75,13 +75,12 @@ try {
       import {
         migrations,
         postgresAdapter,
-        type PostgresAdapter,
-        type PostgresTransactionClient
+        type PostgresAdapter
       } from "@durlo/postgres";
       import { cliPackageName } from "@durlo/cli";
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
-      const durlo: Durlo<PostgresTransactionClient> = new Durlo({ id: cliPackageName, adapter });
+      const durlo: Durlo = new Durlo({ id: cliPackageName, adapter });
       if (false) {
         void durlo.transaction(async ({ client }) => client.query("select 1"));
         // @ts-expect-error The unsafe caller-supplied transaction API must stay unavailable.

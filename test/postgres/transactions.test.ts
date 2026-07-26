@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Durlo } from "@durlo/core";
+import type { TransactionalDurloAdapter } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter } from "@durlo/postgres";
+import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 
@@ -71,6 +72,11 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
     ).toEqual(
       expect.arrayContaining([{ source: "single" }, { source: "batch-1" }, { source: "batch-2" }])
     );
+    const inputByRunId = new Map(runs.rows.map(({ id, input_json }) => [id, input_json]));
+    expect(result.batchHandles.map(({ id }) => inputByRunId.get(id))).toEqual([
+      { source: "batch-1" },
+      { source: "batch-2" }
+    ]);
   });
 
   it("rolls back application and Durlo rows when the callback throws", async () => {
@@ -198,11 +204,12 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
   it("leaves a borrowed pool open and queryable when the adapter closes", async () => {
     const pool = postgresAdapter({ connectionString: databaseUrl! }).pool;
     const end = vi.spyOn(pool, "end");
-    const borrowed = postgresAdapter(pool);
+    const borrowed = postgresAdapter({ pool });
 
     await borrowed.close();
     await borrowed.close();
 
+    expect(borrowed.pool).toBe(pool);
     expect(end).not.toHaveBeenCalled();
     await expect(pool.query("select 1")).resolves.toMatchObject({ rowCount: 1 });
     end.mockRestore();
@@ -225,7 +232,7 @@ describe("transaction lifecycle faults", () => {
     const { adapter, query, release } = adapterWithFakeClient();
 
     await expect(
-      adapter.transaction(async (_transactionAdapter, client) => {
+      runAdapterTransaction(adapter, async (_transactionAdapter, client) => {
         await client.query("application statement");
         return "committed";
       })
@@ -245,12 +252,13 @@ describe("transaction lifecycle faults", () => {
     const { adapter, query, release } = adapterWithFakeClient({ rollback });
 
     await expect(
-      adapter.transaction(async () => {
+      runAdapterTransaction(adapter, async () => {
         throw primary;
       })
     ).rejects.toBe(primary);
 
     expect(query.mock.calls.map(([text]) => text)).toEqual(["begin", "rollback"]);
+    expect(release).toHaveBeenCalledWith(rollback);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -258,7 +266,7 @@ describe("transaction lifecycle faults", () => {
     const commit = new Error("commit failure");
     const { adapter, query, release } = adapterWithFakeClient({ commit });
 
-    await expect(adapter.transaction(async () => "not returned")).rejects.toBe(commit);
+    await expect(runAdapterTransaction(adapter, async () => "not returned")).rejects.toBe(commit);
 
     expect(query.mock.calls.map(([text]) => text)).toEqual(["begin", "commit", "rollback"]);
     expect(release).toHaveBeenCalledTimes(1);
@@ -279,6 +287,28 @@ function adapterWithFakeClient(failures: { commit?: Error; rollback?: Error } = 
   } as unknown as Awaited<ReturnType<PostgresAdapter["pool"]["connect"]>>;
   vi.spyOn(adapter.pool, "connect").mockResolvedValue(client);
   return { adapter, query, release };
+}
+
+function runAdapterTransaction<TResult>(
+  adapter: PostgresAdapter,
+  callback: (
+    transactionAdapter: TransactionalDurloAdapter,
+    client: PostgresTransactionClient
+  ) => Promise<TResult>
+): Promise<TResult> {
+  const provider = (
+    adapter as unknown as Record<
+      symbol,
+      (
+        operation: (
+          transactionAdapter: TransactionalDurloAdapter,
+          client: PostgresTransactionClient
+        ) => Promise<TResult>
+      ) => Promise<TResult>
+    >
+  )[Symbol.for("@durlo/core/transaction-provider")];
+  if (!provider) throw new Error("transaction provider is missing");
+  return provider(callback);
 }
 
 async function expectPersistedCounts(

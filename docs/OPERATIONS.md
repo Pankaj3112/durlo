@@ -74,7 +74,7 @@ Start conservatively:
 - configure connection, query, and statement timeouts in the supplied `pg` options where needed.
 
 `postgresAdapter(config)` constructs an owned pool; calling `adapter.close()` more than once is safe
-and ends that pool once. `postgresAdapter(pool)` borrows a caller-supplied `pg.Pool`; closing the
+and ends that pool once. `postgresAdapter({ pool })` borrows a caller-supplied `pg.Pool`; closing the
 adapter never calls `pool.end()`, so the caller remains responsible for the pool lifecycle. This is
 the supported way to share application pool capacity with Durlo.
 

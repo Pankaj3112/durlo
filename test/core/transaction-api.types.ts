@@ -1,5 +1,5 @@
 import { Durlo } from "@durlo/core";
-import { postgresAdapter } from "@durlo/postgres";
+import { PostgresAdapter, postgresAdapter } from "@durlo/postgres";
 
 const adapter = postgresAdapter({ connectionString: "postgres://unused" });
 const durlo = new Durlo({ id: "type-test", adapter });
@@ -11,6 +11,8 @@ void durlo.transaction(async ({ client }) => {
 function assertLegacyApiRemoved() {
   // @ts-expect-error The unsafe caller-supplied transaction API was removed.
   durlo.tx(adapter.pool);
+  // @ts-expect-error The internal bound-client constructor path is not public.
+  new PostgresAdapter({ pool: adapter.pool }, { query: async () => ({ rows: [] }) });
 }
 
 void assertLegacyApiRemoved;

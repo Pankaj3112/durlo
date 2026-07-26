@@ -52,7 +52,10 @@ function createAdapter(): DurloAdapter & {
       return inputs.map(recordFromInput);
     }
   };
-  return {
+  const adapter: DurloAdapter & {
+    created: CreateRunInput[];
+    transactionClient?: unknown;
+  } = {
     created,
     ...transactional,
     getRun: async () => null,
@@ -98,13 +101,21 @@ function createAdapter(): DurloAdapter & {
     sleepRun: async () => {
       throw new Error("not implemented by test adapter");
     },
-    fireDueTimers: async () => [],
-    async transaction(callback) {
+    fireDueTimers: async () => []
+  };
+  Object.defineProperty(adapter, Symbol.for("@durlo/core/transaction-provider"), {
+    value: async (
+      callback: (
+        adapter: TransactionalDurloAdapter,
+        client: { query: ReturnType<typeof vi.fn> }
+      ) => Promise<unknown>
+    ) => {
       const client = { query: vi.fn() };
-      this.transactionClient = client;
+      adapter.transactionClient = client;
       return callback(transactional, client);
     }
-  };
+  });
+  return adapter;
 }
 
 describe("Durlo core API", () => {

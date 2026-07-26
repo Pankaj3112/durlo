@@ -392,8 +392,15 @@ export interface TransactionalDurloAdapter {
   createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]>;
 }
 
-export type DurloTransaction<TClient> = {
-  readonly client: TClient;
+export type RawPgTransactionClient = {
+  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: unknown[]
+  ): Promise<{ rows: TRow[]; rowCount: number | null }>;
+};
+
+export type DurloTransaction = {
+  readonly client: RawPgTransactionClient;
   enqueue<TInput, TOutput>(
     task: TaskDefinition<TInput, TOutput>,
     input: TInput,
@@ -410,7 +417,7 @@ export type DurloTransaction<TClient> = {
   ): Promise<Array<RunHandle<TOutput>>>;
 };
 
-export interface DurloAdapter<TTransactionClient = unknown> extends TransactionalDurloAdapter {
+export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
   getBacklogHealth(input: { appId: string }): Promise<BacklogHealth>;
@@ -435,9 +442,6 @@ export interface DurloAdapter<TTransactionClient = unknown> extends Transactiona
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
   sleepRun(input: StepInput & { fireAt: Date; maxSteps: number }): Promise<TimerRecord>;
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
-  transaction<TResult>(
-    callback: (adapter: TransactionalDurloAdapter, client: TTransactionClient) => Promise<TResult>
-  ): Promise<TResult>;
 }
 
 export type StandardSchemaResult<T> =
@@ -557,9 +561,9 @@ export type Logger = {
   error?: (message: string, data?: unknown) => void;
 };
 
-export type DurloOptions<TTransactionClient = unknown> = {
+export type DurloOptions = {
   id: string;
-  adapter: DurloAdapter<TTransactionClient>;
+  adapter: DurloAdapter;
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;

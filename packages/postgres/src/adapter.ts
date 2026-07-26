@@ -19,6 +19,7 @@ import type {
   RunRecord,
   RunStatus,
   RunSummary,
+  RawPgTransactionClient,
   SerializedError,
   StepInput,
   StepRecord,
@@ -35,11 +36,11 @@ import { Pool } from "pg";
 import type { PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
 import { migrations } from "./migrations.js";
 
-export type PostgresAdapterOptions = PoolConfig & {
-  connectionString?: string;
-};
+export type PostgresAdapterOptions = (PoolConfig & { pool?: never }) | { pool: Pool };
 
-export type PostgresTransactionClient = Pick<PoolClient, "query">;
+export type PostgresTransactionClient = RawPgTransactionClient;
+
+const TRANSACTION_PROVIDER = Symbol.for("@durlo/core/transaction-provider");
 
 type RunRow = QueryResultRow & {
   id: string;
@@ -268,15 +269,14 @@ const ATTEMPT_COLUMNS = `
   started_at, completed_at
 `;
 
-export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> {
+export class PostgresAdapter implements DurloAdapter {
   readonly pool: Pool;
-  private readonly boundClient?: PoolClient;
   private readonly ownsPool: boolean;
   private closePromise?: Promise<void>;
 
-  constructor(options: PostgresAdapterOptions | Pool, boundClient?: PoolClient) {
-    if (options instanceof Pool) {
-      this.pool = options;
+  constructor(options: PostgresAdapterOptions) {
+    if ("pool" in options) {
+      this.pool = options.pool;
       this.ownsPool = false;
     } else {
       this.pool = new Pool(options);
@@ -288,12 +288,21 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
       this.pool.on("error", () => undefined);
       this.pool.on("connect", (client) => client.on("error", () => undefined));
     }
-    if (boundClient) this.boundClient = boundClient;
+    Object.defineProperty(this, TRANSACTION_PROVIDER, {
+      configurable: false,
+      enumerable: false,
+      value: <TResult>(
+        callback: (
+          adapter: TransactionalDurloAdapter,
+          client: PostgresTransactionClient
+        ) => Promise<TResult>
+      ) => this.runTransaction(callback),
+      writable: false
+    });
   }
 
   async migrate(): Promise<void> {
-    const client = this.boundClient ?? (await this.pool.connect());
-    const release = this.boundClient ? undefined : () => client.release();
+    const client = await this.pool.connect();
     try {
       await client.query("begin");
       await client.query("select pg_advisory_xact_lock(hashtext('durlo:migrations'))");
@@ -320,7 +329,7 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
       await client.query("rollback");
       throw error;
     } finally {
-      release?.();
+      client.release();
     }
   }
 
@@ -335,20 +344,11 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
   }
 
   async createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]> {
-    const keys = inputs
-      .map((input) => input.idempotencyKey)
-      .filter((key): key is string => key !== null);
-    if (new Set(keys).size !== keys.length)
-      throw new Error("duplicate idempotency keys in one batch are not allowed");
-    if (this.boundClient)
-      return Promise.all(inputs.map((input) => this.insertRun(this.query(), input)));
-
     const client = await this.pool.connect();
     try {
       await client.query("begin");
       const query: Query = (text, values) => client.query(text, values);
-      const records: RunRecord[] = [];
-      for (const input of inputs) records.push(await this.insertRun(query, input));
+      const records = await this.insertRuns(query, inputs);
       await client.query("commit");
       return records;
     } catch (error) {
@@ -1239,7 +1239,7 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
     throw new RunStateError(`cannot manually retry a ${current.status} ${current.kind} run`);
   }
 
-  async transaction<TResult>(
+  private async runTransaction<TResult>(
     callback: (
       adapter: TransactionalDurloAdapter,
       client: PostgresTransactionClient
@@ -1249,24 +1249,37 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
     let result: TResult;
     let failed = false;
     let primaryError: unknown;
+    let rollbackError: unknown;
     try {
       await client.query("begin");
       const transactionClient: PostgresTransactionClient = {
-        query: client.query.bind(client) as PoolClient["query"]
+        query: client.query.bind(client) as PostgresTransactionClient["query"]
       };
-      result = await callback(new PostgresAdapter(this.pool, client), transactionClient);
+      const query: Query = (text, values) => client.query(text, values);
+      const transactionAdapter: TransactionalDurloAdapter = {
+        createRun: (input) => this.insertRun(query, input),
+        createRuns: (inputs) => this.insertRuns(query, inputs)
+      };
+      result = await callback(transactionAdapter, transactionClient);
       await client.query("commit");
     } catch (error) {
       failed = true;
       primaryError = error;
       try {
         await client.query("rollback");
-      } catch {
+      } catch (error) {
+        rollbackError = error;
         // Preserve the callback, query, or commit error that caused the rollback.
       }
     }
     try {
-      client.release();
+      client.release(
+        rollbackError === undefined
+          ? undefined
+          : rollbackError instanceof Error
+            ? rollbackError
+            : true
+      );
     } catch (releaseError) {
       if (!failed) {
         failed = true;
@@ -1278,8 +1291,19 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
   }
 
   private query(): Query {
-    const target = this.boundClient ?? this.pool;
-    return (text, values) => target.query(text, values);
+    return (text, values) => this.pool.query(text, values);
+  }
+
+  private async insertRuns(query: Query, inputs: CreateRunInput[]): Promise<RunRecord[]> {
+    const keys = inputs
+      .map((input) => input.idempotencyKey)
+      .filter((key): key is string => key !== null);
+    if (new Set(keys).size !== keys.length) {
+      throw new Error("duplicate idempotency keys in one batch are not allowed");
+    }
+    const records: RunRecord[] = [];
+    for (const input of inputs) records.push(await this.insertRun(query, input));
+    return records;
   }
 
   private async insertRun(query: Query, input: CreateRunInput): Promise<RunRecord> {
@@ -1403,6 +1427,6 @@ export class PostgresAdapter implements DurloAdapter<PostgresTransactionClient> 
   }
 }
 
-export function postgresAdapter(options: PostgresAdapterOptions | Pool): PostgresAdapter {
+export function postgresAdapter(options: PostgresAdapterOptions): PostgresAdapter {
   return new PostgresAdapter(options);
 }

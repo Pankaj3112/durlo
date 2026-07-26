@@ -31,8 +31,7 @@ function createWorkerAdapter(): DurloAdapter {
     failStep: vi.fn(async () => undefined),
     getTimer: vi.fn(async () => null),
     sleepRun: unsupported,
-    fireDueTimers: vi.fn(async () => []),
-    transaction: (callback) => callback(transactional, undefined)
+    fireDueTimers: vi.fn(async () => [])
   };
 }
 

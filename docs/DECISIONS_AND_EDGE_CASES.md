@@ -18,8 +18,8 @@ must be trustworthy before those systems are considered.
 ## PostgreSQL is the coordination system
 
 Durlo targets applications already using PostgreSQL. PostgreSQL owns run eligibility, lease time,
-timer time, row locking, and transactional run creation. User code never runs inside a Durlo-held
-database transaction.
+timer time, row locking, and transactional run creation. The application transaction callback runs
+inside a Durlo-held transaction; task and workflow handlers never do.
 
 Polling is the required wakeup mechanism. `LISTEN/NOTIFY` may someday reduce latency but cannot be
 the correctness path because notifications are not durable.
