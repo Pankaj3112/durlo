@@ -148,9 +148,9 @@ Completed checkpoints are not downgraded by interruption handling.
 exponential from 10 seconds with factor 2 and jitter 0.2. Run options override definition options,
 which override client defaults.
 
-Thrown errors, validation failures at execution, serialization failures, and timeouts all follow
-the same retry policy. There is currently no supported permanent-error, custom retry decision,
-`Retry-After`, or retry-at timestamp exception.
+Handler errors, execution-time serialization failures, and timeouts all follow the same retry
+policy. There is currently no supported permanent-error, custom retry decision, `Retry-After`, or
+retry-at timestamp exception.
 
 Task exhaustion becomes `dead_letter`; workflow exhaustion becomes `failed`. Manual retry is
 allowed only for those respective terminal states. It preserves history and schedules one more

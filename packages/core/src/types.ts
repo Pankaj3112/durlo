@@ -447,16 +447,15 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
 export type StandardSchemaPathSegment = PropertyKey | { readonly key: PropertyKey };
 
 export type StandardSchemaOptions = {
-  readonly libraryOptions?: Record<string, unknown>;
+  readonly libraryOptions?: Record<string, unknown> | undefined;
 };
 
 export type StandardSchemaResult<T> =
-  | { value: T; issues?: undefined }
+  | { readonly value: T; readonly issues?: undefined }
   | {
-      value?: undefined;
-      issues: ReadonlyArray<{
-        message: string;
-        path?: ReadonlyArray<StandardSchemaPathSegment>;
+      readonly issues: ReadonlyArray<{
+        readonly message: string;
+        readonly path?: ReadonlyArray<StandardSchemaPathSegment> | undefined;
       }>;
     };
 
@@ -466,12 +465,14 @@ export type StandardSchema<TInput = unknown, TOutput = TInput> = {
     readonly vendor: string;
     readonly validate: (
       value: unknown,
-      options?: StandardSchemaOptions
+      options?: StandardSchemaOptions | undefined
     ) => StandardSchemaResult<TOutput> | Promise<StandardSchemaResult<TOutput>>;
-    readonly types?: {
-      readonly input: TInput;
-      readonly output: TOutput;
-    };
+    readonly types?:
+      | {
+          readonly input: TInput;
+          readonly output: TOutput;
+        }
+      | undefined;
   };
 };
 

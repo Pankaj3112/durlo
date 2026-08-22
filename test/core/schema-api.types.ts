@@ -1,4 +1,5 @@
 import { Durlo } from "@durlo/core";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type {
   BatchItem,
   RunHandle,
@@ -119,6 +120,57 @@ void durlo.transaction(async (transaction) => {
   await Promise.all([inferredTransactionTask, inferredTransactionBatch]);
 });
 
+type DefaultedExternalInput = { name?: string };
+type DefaultedHandlerInput = { name: string };
+
+const defaultingSchema: StandardSchema<DefaultedExternalInput, DefaultedHandlerInput> = {
+  "~standard": {
+    version: 1,
+    vendor: "defaulting-inference-test",
+    validate: (input) => ({
+      value: { name: (input as DefaultedExternalInput).name ?? "anonymous" }
+    })
+  }
+};
+const defaultingTask = durlo.task({
+  id: "defaulting-task",
+  schema: defaultingSchema,
+  run: async (input) => {
+    const name: string = input.name;
+    return name;
+  }
+});
+const defaultingWorkflow = durlo.workflow({
+  id: "defaulting-workflow",
+  schema: defaultingSchema,
+  run: async ({ input }) => {
+    const name: string = input.name;
+    return name.length;
+  }
+});
+const defaultingTaskHandle: Promise<RunHandle<string>> = defaultingTask.enqueue({});
+const defaultingWorkflowHandle: Promise<RunHandle<number>> = defaultingWorkflow.start({});
+
+const officialSchema: StandardSchemaV1<ExternalInput, HandlerInput> = {
+  "~standard": {
+    version: 1,
+    vendor: "official-spec-test",
+    validate: (input) => ({ value: { normalized: (input as ExternalInput).raw.trim() } })
+  }
+};
+const officialTask = durlo.task({
+  id: "official-schema-task",
+  schema: officialSchema,
+  run: async (input) => input.normalized
+});
+const officialWorkflow = durlo.workflow({
+  id: "official-schema-workflow",
+  schema: officialSchema,
+  run: async ({ input }) => input.normalized.length
+});
+const officialTaskHandle: Promise<RunHandle<string>> = officialTask.enqueue(external);
+const officialWorkflowHandle: Promise<RunHandle<number>> = officialWorkflow.start(external);
+
 void taskHandle;
 void taskBatch;
 void workflowHandle;
@@ -128,4 +180,8 @@ void typedWorkflowHandle;
 void inferredTaskHandle;
 void inferredTaskBatch;
 void inferredWorkflowHandle;
+void defaultingTaskHandle;
+void defaultingWorkflowHandle;
+void officialTaskHandle;
+void officialWorkflowHandle;
 void adapter;
