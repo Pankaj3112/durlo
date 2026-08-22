@@ -147,15 +147,17 @@ describe("Durlo core API", () => {
       maxAttempts: 2,
       idempotencyKey: "email:1",
       priority: 10,
-      input: { email: "a@example.com" },
-      options: {
-        retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } },
-        limits: {
-          maxOutputBytes: 1_048_576,
-          maxErrorBytes: 65_536,
-          maxStepResultBytes: 1_048_576,
-          maxWorkflowSteps: 1_000
-        }
+      input: { $durlo: expect.any(Array) },
+      options: { $durlo: expect.any(Array) }
+    });
+    expect(deserialize(adapter.created[0]!.input)).toEqual({ email: "a@example.com" });
+    expect(deserialize(adapter.created[0]!.options)).toEqual({
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 5_000, jitter: 0 } },
+      limits: {
+        maxOutputBytes: 1_048_576,
+        maxErrorBytes: 65_536,
+        maxStepResultBytes: 1_048_576,
+        maxWorkflowSteps: 1_000
       }
     });
     expect(adapter.created[0]!.scheduledAt.getTime()).toBeGreaterThan(Date.now() + 9_000);
@@ -201,7 +203,7 @@ describe("Durlo core API", () => {
     await task.enqueue({ raw: "  ready  " });
 
     expect(validate).toHaveBeenCalledOnce();
-    expect(adapter.created[0]?.input).toEqual({ normalized: "ready" });
+    expect(deserialize(adapter.created[0]?.input!)).toEqual({ normalized: "ready" });
   });
 
   it("awaits asynchronous schema transforms once per batch item and preserves order", async () => {
@@ -223,7 +225,10 @@ describe("Durlo core API", () => {
     await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
 
     expect(validate).toHaveBeenCalledTimes(2);
-    expect(adapter.created.map(({ input }) => input)).toEqual([{ value: 2 }, { value: 4 }]);
+    expect(adapter.created.map(({ input }) => deserialize(input))).toEqual([
+      { value: 2 },
+      { value: 4 }
+    ]);
   });
 
   it("rejects issue results and schema rejections before persistence", async () => {

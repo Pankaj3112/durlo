@@ -256,16 +256,20 @@ describe("serialization boundaries", () => {
 
   it("supports repeated references, null prototypes, nested dates, and serialized Errors", () => {
     const shared = { value: 1 };
-    expect(serialize({ first: shared, second: shared })).toEqual({
+    expect(deserialize(serialize({ first: shared, second: shared }))).toEqual({
       first: { value: 1 },
       second: { value: 1 }
     });
     const nullPrototype = Object.assign(Object.create(null) as Record<string, unknown>, {
       value: true
     });
-    expect(serialize(nullPrototype)).toEqual({ value: true });
+    expect(deserialize(serialize(nullPrototype))).toEqual({ value: true });
     const error = new Error("boom", { cause: { code: 42 } });
-    expect(serialize(error)).toMatchObject({ name: "Error", message: "boom", cause: { code: 42 } });
+    expect(deserialize(serialize(error))).toMatchObject({
+      name: "Error",
+      message: "boom",
+      cause: { code: 42 }
+    });
     expect(deserialize(serialize({ when: new Date("2026-01-02T03:04:05.000Z") }))).toEqual({
       when: new Date("2026-01-02T03:04:05.000Z")
     });
@@ -273,6 +277,56 @@ describe("serialization boundaries", () => {
       "$durlo.date": "2026-01-02T03:04:05.000Z",
       extra: 1
     });
+  });
+
+  it("round-trips metadata-looking objects, reserved keys, and dates through JSON normalization", () => {
+    const literal = JSON.parse(
+      '{"$durlo.date":"2026-01-02T03:04:05.000Z","$durlo":["date","literal"],"__proto__":{"polluted":true},"constructor":"constructor","prototype":"prototype","":"empty","a.b":"dotted","💾":"unicode"}'
+    ) as Record<string, unknown>;
+    const value = {
+      literal,
+      nested: [literal, { value: new Date("2026-01-02T03:04:05.000Z") }]
+    };
+
+    const normalized = JSON.parse(JSON.stringify(serialize(value)));
+    const decoded = deserialize(normalized) as typeof value;
+
+    expect(decoded).toEqual({
+      literal,
+      nested: [literal, { value: new Date("2026-01-02T03:04:05.000Z") }]
+    });
+    expect(Object.prototype.hasOwnProperty.call(decoded.literal, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(decoded.literal)).toBe(Object.prototype);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(deserialize({ "$durlo.date": "2026-01-02T03:04:05.000Z" })).toEqual(
+      new Date("2026-01-02T03:04:05.000Z")
+    );
+  });
+
+  it.each([
+    ["null", null],
+    ["string", "text"],
+    ["number", 42.5],
+    ["boolean", true],
+    ["empty array", []],
+    ["nested array", [1, { value: "two" }, [false]]],
+    ["empty object", {}]
+  ])("round-trips each JSON shape: %s", (_name, value) => {
+    expect(deserialize(JSON.parse(JSON.stringify(serialize(value))))).toEqual(value);
+  });
+
+  it("measures limits against the collision-safe encoded representation", async () => {
+    const adapter = validationAdapter();
+    const durlo = new Durlo({ id: "encoded-limit", adapter, limits: { maxInputBytes: 3 } });
+    const task = durlo.task({ id: "encoded-limit-task", run: async () => undefined });
+
+    expect(JSON.stringify({})).toHaveLength(2);
+    expect(jsonByteSize(serialize({}))).toBeGreaterThan(3);
+    await expect(task.enqueue({})).rejects.toMatchObject({
+      name: "StorageLimitError",
+      limitName: "maxInputBytes"
+    });
+    expect(adapter.created).toHaveLength(0);
   });
 
   it("preserves Error details and safely falls back for unsupported causes", () => {
