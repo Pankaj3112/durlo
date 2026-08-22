@@ -203,7 +203,7 @@ describe("Durlo core API", () => {
     await task.enqueue({ raw: "  ready  " });
 
     expect(validate).toHaveBeenCalledOnce();
-    expect(deserialize(adapter.created[0]?.input!)).toEqual({ normalized: "ready" });
+    expect(deserialize(adapter.created[0]!.input)).toEqual({ normalized: "ready" });
   });
 
   it("awaits asynchronous schema transforms once per batch item and preserves order", async () => {
