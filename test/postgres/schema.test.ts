@@ -130,6 +130,46 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
     ).resolves.toMatchObject({ rows: [{ count: "0" }] });
   });
 
+  it("persists transformed input through transaction task, workflow, and batch creation", async () => {
+    const validate = vi.fn((input: { raw: string }) => ({
+      value: { normalized: input.raw.trim() }
+    }));
+    const durlo = new Durlo({ id: "schema-transaction-success", adapter });
+    const task = durlo.task({
+      id: "transaction-task-transform",
+      schema: {
+        "~standard": { version: 1, vendor: "test", validate }
+      },
+      run: async (input: { normalized: string }) => input.normalized
+    });
+    const workflow = durlo.workflow({
+      id: "transaction-workflow-transform",
+      schema: {
+        "~standard": { version: 1, vendor: "test", validate }
+      },
+      run: async ({ input }) => input.normalized
+    });
+
+    const created = await durlo.transaction(async (transaction) => ({
+      task: await transaction.enqueue(task, { raw: " task " }),
+      workflow: await transaction.start(workflow, { raw: " workflow " }),
+      batch: await transaction.batchEnqueue(task, [{ raw: " batch-1 " }, { raw: " batch-2 " }])
+    }));
+    const records = await Promise.all([
+      adapter.getRun({ appId: durlo.id, runId: created.task.id }),
+      adapter.getRun({ appId: durlo.id, runId: created.workflow.id }),
+      ...created.batch.map((handle) => adapter.getRun({ appId: durlo.id, runId: handle.id }))
+    ]);
+
+    expect(validate).toHaveBeenCalledTimes(4);
+    expect(records.map((record) => record?.input)).toEqual([
+      { normalized: "task" },
+      { normalized: "workflow" },
+      { normalized: "batch-1" },
+      { normalized: "batch-2" }
+    ]);
+  });
+
   it("rolls back application writes when a transaction schema rejects input", async () => {
     const durlo = new Durlo({ id: "schema-transaction-atomicity", adapter });
     const task = durlo.task({
