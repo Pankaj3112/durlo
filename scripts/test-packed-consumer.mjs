@@ -93,7 +93,9 @@ try {
         "~standard": {
           version: 1,
           vendor: "packed-consumer",
-          validate: (input) => ({ value: { normalized: input.raw.trim() } })
+          validate: (input) => ({
+            value: { normalized: (input as ExternalInput).raw.trim() }
+          })
         }
       };
       const task = durlo.task({
