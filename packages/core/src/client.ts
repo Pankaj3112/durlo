@@ -31,6 +31,7 @@ import type {
   RunRecord,
   RunStatus,
   RawPgTransactionClient,
+  StandardSchema,
   TaskDefinition,
   TaskDefinitionOptions,
   TransactionalDurloAdapter,
@@ -163,36 +164,52 @@ export class Durlo {
   }
 
   task<TInput, TOutput = void>(
-    options: TaskDefinitionOptions<TInput, TOutput>
-  ): TaskDefinition<TInput, TOutput> {
-    const version = normalizeResourceVersion(options.version, "task version");
-    this.register("task", options.id, version);
-    const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
+    options: Omit<TaskDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
+      schema?: undefined;
+    }
+  ): TaskDefinition<TInput, TOutput>;
+  task<TInput, TOutput = void, THandlerInput = TInput>(
+    options: TaskDefinitionOptions<TInput, TOutput, THandlerInput> & {
+      schema: StandardSchema<TInput, THandlerInput>;
+    }
+  ): TaskDefinition<TInput, TOutput, THandlerInput>;
+  task<TInput, TOutput = void, THandlerInput = TInput>(
+    options:
+      | (Omit<TaskDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
+          schema?: undefined;
+        })
+      | (TaskDefinitionOptions<TInput, TOutput, THandlerInput> & {
+          schema: StandardSchema<TInput, THandlerInput>;
+        })
+  ): TaskDefinition<TInput, TOutput, THandlerInput> {
+    const definitionOptions = options as TaskDefinitionOptions<TInput, TOutput, THandlerInput>;
+    const version = normalizeResourceVersion(definitionOptions.version, "task version");
+    this.register("task", definitionOptions.id, version);
+    const definitionRetry = normalizeRetryPolicy(definitionOptions.retry, this.defaultRetry);
     const definitionTimeout =
-      options.timeout === undefined
+      definitionOptions.timeout === undefined
         ? this.defaultTimeout
-        : parseDuration(options.timeout, "task timeout");
+        : parseDuration(definitionOptions.timeout, "task timeout");
     const create = (adapter: TransactionalDurloAdapter, input: TInput, runOptions?: RunOptions) =>
-      this.createRun<TInput, TOutput>(
+      this.createRun<TInput, THandlerInput, TOutput>(
         adapter,
         "task",
-        options.id,
+        definitionOptions.id,
         version,
-        options.schema,
+        definitionOptions.schema,
         input,
         runOptions,
         definitionRetry,
         definitionTimeout
       );
     return {
-      id: options.id,
+      id: definitionOptions.id,
       version,
-      ...(options.name === undefined ? {} : { name: options.name }),
+      ...(definitionOptions.name === undefined ? {} : { name: definitionOptions.name }),
       kind: "task",
-      options,
+      options: definitionOptions,
       _durlo: {
-        validate: (input) => validateSchema(options.schema, input),
-        run: async (input, context) => options.run(input as TInput, context)
+        run: async (input, context) => definitionOptions.run(input as THandlerInput, context)
       },
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
@@ -202,9 +219,9 @@ export class Durlo {
           normalized.map(({ input, options: runOptions }) =>
             this.prepareRun(
               "task",
-              options.id,
+              definitionOptions.id,
               version,
-              options.schema,
+              definitionOptions.schema,
               input,
               runOptions,
               definitionRetry,
@@ -224,32 +241,49 @@ export class Durlo {
   }
 
   workflow<TInput, TOutput = void>(
-    options: WorkflowDefinitionOptions<TInput, TOutput>
-  ): WorkflowDefinition<TInput, TOutput> {
-    const version = normalizeResourceVersion(options.version, "workflow version");
-    this.register("workflow", options.id, version);
-    const definitionRetry = normalizeRetryPolicy(options.retry, this.defaultRetry);
+    options: Omit<WorkflowDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
+      schema?: undefined;
+    }
+  ): WorkflowDefinition<TInput, TOutput>;
+  workflow<TInput, TOutput = void, THandlerInput = TInput>(
+    options: WorkflowDefinitionOptions<TInput, TOutput, THandlerInput> & {
+      schema: StandardSchema<TInput, THandlerInput>;
+    }
+  ): WorkflowDefinition<TInput, TOutput, THandlerInput>;
+  workflow<TInput, TOutput = void, THandlerInput = TInput>(
+    options:
+      | (Omit<WorkflowDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
+          schema?: undefined;
+        })
+      | (WorkflowDefinitionOptions<TInput, TOutput, THandlerInput> & {
+          schema: StandardSchema<TInput, THandlerInput>;
+        })
+  ): WorkflowDefinition<TInput, TOutput, THandlerInput> {
+    const definitionOptions = options as WorkflowDefinitionOptions<TInput, TOutput, THandlerInput>;
+    const version = normalizeResourceVersion(definitionOptions.version, "workflow version");
+    this.register("workflow", definitionOptions.id, version);
+    const definitionRetry = normalizeRetryPolicy(definitionOptions.retry, this.defaultRetry);
     const definitionTimeout =
-      options.timeout === undefined
+      definitionOptions.timeout === undefined
         ? this.defaultTimeout
-        : parseDuration(options.timeout, "workflow timeout");
+        : parseDuration(definitionOptions.timeout, "workflow timeout");
     return {
-      id: options.id,
+      id: definitionOptions.id,
       version,
-      ...(options.name === undefined ? {} : { name: options.name }),
+      ...(definitionOptions.name === undefined ? {} : { name: definitionOptions.name }),
       kind: "workflow",
-      options,
+      options: definitionOptions,
       _durlo: {
-        validate: (input) => validateSchema(options.schema, input),
-        run: async (context) => options.run(context as Parameters<typeof options.run>[0])
+        run: async (context) =>
+          definitionOptions.run(context as Parameters<typeof definitionOptions.run>[0])
       },
       start: (input, runOptions) =>
         this.createRun(
           this.adapter,
           "workflow",
-          options.id,
+          definitionOptions.id,
           version,
-          options.schema,
+          definitionOptions.schema,
           input,
           runOptions,
           definitionRetry,
@@ -304,8 +338,8 @@ export class Durlo {
             timeout
           );
         },
-        batchEnqueue: async <TInput, TOutput>(
-          task: TaskDefinition<TInput, TOutput>,
+        batchEnqueue: async <TInput, TOutput, THandlerInput>(
+          task: TaskDefinition<TInput, TOutput, THandlerInput>,
           items: Array<TInput | BatchItem<TInput>>
         ) => {
           this.assertBatchCount(items.length);
@@ -421,12 +455,12 @@ export class Durlo {
     };
   }
 
-  private async createRun<TInput, TOutput>(
+  private async createRun<TInput, THandlerInput, TOutput>(
     adapter: TransactionalDurloAdapter,
     kind: "task" | "workflow",
     resourceId: string,
     resourceVersion: string,
-    schema: TaskDefinitionOptions<TInput, TOutput>["schema"],
+    schema: StandardSchema<TInput, THandlerInput> | undefined,
     input: TInput,
     options: RunOptions | undefined,
     retry: NormalizedRetryPolicy,
@@ -448,11 +482,11 @@ export class Durlo {
     );
   }
 
-  private async prepareRun<TInput>(
+  private async prepareRun<TInput, THandlerInput>(
     kind: "task" | "workflow",
     resourceId: string,
     resourceVersion: string,
-    schema: TaskDefinitionOptions<TInput, unknown>["schema"],
+    schema: StandardSchema<TInput, THandlerInput> | undefined,
     input: TInput,
     options: RunOptions | undefined,
     definitionRetry: NormalizedRetryPolicy,

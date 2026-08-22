@@ -180,6 +180,77 @@ describe("Durlo core API", () => {
     expect(workflow.version).toBe("1");
   });
 
+  it("persists a transformed task input from one synchronous schema call", async () => {
+    const adapter = createAdapter();
+    const validate = vi.fn((input: { raw: string }) => ({
+      value: { normalized: input.raw.trim() }
+    }));
+    const durlo = new Durlo({ id: "test-app", adapter });
+    const task = durlo.task({
+      id: "normalize-task",
+      schema: {
+        "~standard": { version: 1, vendor: "test", validate }
+      },
+      run: async (input: { normalized: string }) => input.normalized
+    });
+
+    await task.enqueue({ raw: "  ready  " });
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(adapter.created[0]?.input).toEqual({ normalized: "ready" });
+  });
+
+  it("awaits asynchronous schema transforms once per batch item and preserves order", async () => {
+    const adapter = createAdapter();
+    const validate = vi.fn(async (input: { value: number }) => ({
+      value: { value: input.value * 2 }
+    }));
+    const task = new Durlo({ id: "test-app", adapter }).task({
+      id: "async-normalize-task",
+      schema: {
+        "~standard": { version: 1, vendor: "test", validate }
+      },
+      run: async (input: { value: number }) => input.value
+    });
+
+    await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
+
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(adapter.created.map(({ input }) => input)).toEqual([{ value: 2 }, { value: 4 }]);
+  });
+
+  it("rejects issue results and schema rejections before persistence", async () => {
+    const adapter = createAdapter();
+    const issueSchema = new Durlo({ id: "test-app", adapter }).task({
+      id: "issue-schema-task",
+      schema: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: () => ({ issues: [{ message: "invalid input" }] })
+        }
+      },
+      run: async () => undefined
+    });
+    const rejectingSchema = new Durlo({ id: "test-app", adapter }).task({
+      id: "rejecting-schema-task",
+      schema: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: async () => {
+            throw new Error("schema rejected");
+          }
+        }
+      },
+      run: async () => undefined
+    });
+
+    await expect(issueSchema.enqueue({})).rejects.toThrow("invalid input");
+    await expect(rejectingSchema.enqueue({})).rejects.toThrow("schema rejected");
+    expect(adapter.created).toHaveLength(0);
+  });
+
   it("atomically prepares batches and rejects duplicate in-batch idempotency keys", async () => {
     const adapter = createAdapter();
     const task = new Durlo({ id: "test-app", adapter }).task({
