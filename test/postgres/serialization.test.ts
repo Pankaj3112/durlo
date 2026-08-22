@@ -47,10 +47,18 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
       retry: { attempts: 1 },
       run: async (input) => input
     });
+    let workflowStepCalls = 0;
     const workflow = durlo.workflow<Payload, Payload>({
       id: "codec-workflow",
-      retry: { attempts: 1 },
-      run: async ({ input, step }) => step.run("payload", () => input)
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      run: async ({ attempt, input, step }) => {
+        const checkpoint = await step.run("payload", () => {
+          workflowStepCalls += 1;
+          return input;
+        });
+        if (attempt.number === 1) throw new Error("retry after checkpoint");
+        return checkpoint;
+      }
     });
     const errorTask = durlo.task<Payload, void>({
       id: "codec-error",
@@ -84,6 +92,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
       workerId: "serialization-worker"
     });
     await expect(worker.runOnce()).resolves.toBe(3);
+    await expect(worker.runOnce()).resolves.toBe(1);
+    expect(workflowStepCalls).toBe(1);
 
     const rawOutput = await adapter.pool.query<{ output_json: JsonValue }>(
       "select output_json from durlo_runs where id = $1",
@@ -100,6 +110,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     );
     expect(deserialize(rawStep.rows[0]!.result_json)).toEqual(payload);
     expect(await adapter.getStep(workflowHandle.id, "payload")).toMatchObject({ result: payload });
+    expect(await adapter.getRun({ appId: durlo.id, runId: workflowHandle.id })).toMatchObject({
+      output: payload
+    });
 
     const rawError = await adapter.pool.query<{ error_json: JsonValue }>(
       "select error_json from durlo_runs where id = $1",
