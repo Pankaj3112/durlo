@@ -71,7 +71,13 @@ try {
   await writeFile(
     join(consumer, "typecheck.ts"),
     `
-      import { Durlo, type DurloAdapter } from "@durlo/core";
+      import {
+        Durlo,
+        type BatchItem,
+        type DurloAdapter,
+        type RunHandle,
+        type StandardSchema
+      } from "@durlo/core";
       import {
         migrations,
         postgresAdapter,
@@ -81,13 +87,47 @@ try {
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
       const durlo: Durlo = new Durlo({ id: cliPackageName, adapter });
+      type ExternalInput = { raw: string };
+      type HandlerInput = { normalized: string };
+      const schema: StandardSchema<ExternalInput, HandlerInput> = {
+        "~standard": {
+          version: 1,
+          vendor: "packed-consumer",
+          validate: (input) => ({ value: { normalized: input.raw.trim() } })
+        }
+      };
+      const task = durlo.task({
+        id: "packed-transform-task",
+        schema,
+        run: async (input: HandlerInput) => input.normalized
+      });
+      const workflow = durlo.workflow({
+        id: "packed-transform-workflow",
+        schema,
+        run: async ({ input }) => input.normalized.length
+      });
+      const input: ExternalInput = { raw: " value " };
+      const taskHandle: Promise<RunHandle<string>> = task.enqueue(input);
+      const batchHandles: Promise<Array<RunHandle<string>>> = task.batchEnqueue([
+        input,
+        { input } satisfies BatchItem<ExternalInput>
+      ]);
+      const workflowHandle: Promise<RunHandle<number>> = workflow.start(input);
       if (false) {
         void durlo.transaction(async ({ client }) => client.query("select 1"));
+        void durlo.transaction(async (transaction) => {
+          await transaction.enqueue(task, input);
+          await transaction.start(workflow, input);
+          await transaction.batchEnqueue(task, [input]);
+        });
         // @ts-expect-error The unsafe caller-supplied transaction API must stay unavailable.
         durlo.tx(adapter.pool);
       }
       const migrationVersions: string[] = migrations.map(({ version }) => version);
       void migrationVersions;
+      void taskHandle;
+      void batchHandles;
+      void workflowHandle;
       void durlo;
     `
   );

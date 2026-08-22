@@ -1,7 +1,7 @@
 # Durlo Execution Semantics
 
 Status: Current pre-release behavior
-Updated: 2026-07-26
+Updated: 2026-08-22
 
 This document describes what the current public API does, including known defects. It is not a
 promise that roadmap work is already implemented.
@@ -53,6 +53,9 @@ releases its key.
 transaction. Returned handles preserve order. Duplicate idempotency keys inside one batch are
 rejected.
 
+When a task has a Standard Schema, every batch item is validated once and its transformed output is
+persisted in the corresponding run. Transaction-bound creation uses the same input/output contract.
+
 The current `Array<TInput | { input: TInput; options?: RunOptions }>` API is ambiguous. An object
 input whose only keys are `input` and `options` is interpreted as batch metadata. Avoid that payload
 shape until the API is replaced.
@@ -77,10 +80,17 @@ transaction integration; Drizzle, Prisma, Kysely, and framework adapters are not
 
 ## Validation and serialization
 
-A Standard Schema, when configured, is run before creation. Its returned value is serialized and
-stored. The worker currently deserializes that value and runs the same schema again before user
-code. Transforming schemas must therefore accept their own output or execution can fail after a
-successful enqueue. This double-validation behavior is a known defect.
+A Standard Schema, when configured, separates the value accepted by `enqueue`/`start` from the value
+received by the handler. It runs exactly once during creation, including batch and transaction-bound
+creation. Its successful output is serialized, size-checked, and stored as the durable run input.
+Workers deserialize that persisted value and pass it directly to the handler; they do not re-run the
+schema. Schema issues or rejected validation prevent the run from being persisted, and batch or
+transaction creation remains all-or-nothing.
+
+Stored transformed input is part of the definition's compatibility contract. If a deployed schema
+changes the persisted output shape incompatibly, publish a new resource version and keep workers for
+the previous version available until its active runs finish. Durlo does not revalidate legacy,
+manually edited, or corrupted stored rows.
 
 Durlo stores compact JSON plus tagged `Date` values and serialized `Error` objects. It rejects
 non-finite numbers, `BigInt`, `undefined`, functions, symbols, circular objects, invalid dates, and
@@ -188,9 +198,10 @@ Definition versions are opaque strings, defaulting to `"1"`. Runs retain their c
 through delays, retries, sleeps, lease recovery, and manual retry. Workers claim exact matches.
 
 Keep a version only when new code can read every active input and checkpoint and preserves existing
-step meanings. For a breaking change, deploy new-version workers, switch producers, and retain old
-workers until old active runs finish. `worker.getCompatibilityReport()` is bounded and relative to
-one worker, so it does not prove fleet-wide unavailability.
+step meanings, including the transformed input persisted by a Standard Schema. For a breaking
+change, deploy new-version workers, switch producers, and retain old workers until old active runs
+finish. `worker.getCompatibilityReport()` is bounded and relative to one worker, so it does not
+prove fleet-wide unavailability.
 
 ## Reads and controls
 
