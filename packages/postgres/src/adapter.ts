@@ -30,7 +30,13 @@ import type {
   TransactionalDurloAdapter,
   UnavailableRun
 } from "@durlo/core";
-import { LostLeaseError, RunStateError, StorageLimitError, ValidationError } from "@durlo/core";
+import {
+  deserialize,
+  LostLeaseError,
+  RunStateError,
+  StorageLimitError,
+  ValidationError
+} from "@durlo/core";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import type { PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";
@@ -155,10 +161,10 @@ function mapRun(row: RunRow): RunRecord {
     resourceId: row.resource_id,
     resourceVersion: row.resource_version,
     status: row.status,
-    input: row.input_json,
-    output: row.output_json,
-    error: row.error_json,
-    options: row.options_json,
+    input: deserialize(row.input_json) as JsonValue,
+    output: row.output_json === null ? null : (deserialize(row.output_json) as JsonValue),
+    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
+    options: deserialize(row.options_json) as JsonValue,
     idempotencyKey: row.idempotency_key,
     priority: row.priority,
     scheduledAt: row.scheduled_at,
@@ -182,9 +188,9 @@ function mapStep(row: StepRow): StepRecord {
     runId: row.run_id,
     stepId: row.step_id,
     status: row.status,
-    result: row.result_json,
-    error: row.error_json,
-    options: row.options_json,
+    result: row.result_json === null ? null : (deserialize(row.result_json) as JsonValue),
+    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
+    options: deserialize(row.options_json) as JsonValue,
     attemptCount: row.attempt_count,
     maxAttempts: row.max_attempts,
     createdAt: row.created_at,
@@ -236,7 +242,7 @@ function mapAttempt(row: AttemptRow): AttemptRecord {
     attemptNumber: row.attempt_number,
     status: row.status,
     workerId: row.worker_id,
-    error: row.error_json,
+    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
     startedAt: row.started_at,
     completedAt: row.completed_at
   };

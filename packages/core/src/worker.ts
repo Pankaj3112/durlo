@@ -490,13 +490,13 @@ export class Worker {
   }
 
   private retryFor(run: ClaimedRun): NormalizedRetryPolicy {
-    const options = run.options as { retry?: NormalizedRetryPolicy };
+    const options = this.optionsFor(run) as { retry?: NormalizedRetryPolicy };
     if (!options.retry) throw new Error(`run ${run.id} is missing its retry policy`);
     return options.retry;
   }
 
   private limitsFor(run: ClaimedRun): DurloLimits {
-    const options = run.options as { limits?: unknown };
+    const options = this.optionsFor(run) as { limits?: unknown };
     if (options.limits === undefined) return this.defaultLimits;
     if (!options.limits || typeof options.limits !== "object" || Array.isArray(options.limits)) {
       throw new ValidationError(`run ${run.id} has invalid storage limits`);
@@ -505,8 +505,16 @@ export class Worker {
   }
 
   private timeoutFor(run: ClaimedRun): number | undefined {
-    const options = run.options as { timeout?: unknown };
+    const options = this.optionsFor(run) as { timeout?: unknown };
     return typeof options.timeout === "number" ? options.timeout : undefined;
+  }
+
+  private optionsFor(run: ClaimedRun): Record<string, unknown> {
+    const options = deserialize(run.options);
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new ValidationError(`run ${run.id} has invalid options`);
+    }
+    return options as Record<string, unknown>;
   }
 
   private async withTimeout<T>(

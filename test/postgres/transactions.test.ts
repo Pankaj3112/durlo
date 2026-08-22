@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { Durlo } from "@durlo/core";
+import { deserialize, Durlo } from "@durlo/core";
 import type { CreateRunInput, TransactionalDurloAdapter } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
@@ -68,11 +68,18 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
       ])
     );
     expect(
-      runs.rows.filter(({ kind }) => kind === "task").map(({ input_json }) => input_json)
+      runs.rows
+        .filter(({ kind }) => kind === "task")
+        .map(({ input_json }) => deserialize(input_json as Parameters<typeof deserialize>[0]))
     ).toEqual(
       expect.arrayContaining([{ source: "single" }, { source: "batch-1" }, { source: "batch-2" }])
     );
-    const inputByRunId = new Map(runs.rows.map(({ id, input_json }) => [id, input_json]));
+    const inputByRunId = new Map(
+      runs.rows.map(({ id, input_json }) => [
+        id,
+        deserialize(input_json as Parameters<typeof deserialize>[0])
+      ])
+    );
     expect(result.batchHandles.map(({ id }) => inputByRunId.get(id))).toEqual([
       { source: "batch-1" },
       { source: "batch-2" }

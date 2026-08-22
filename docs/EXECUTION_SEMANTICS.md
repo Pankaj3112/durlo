@@ -92,13 +92,18 @@ changes the persisted output shape incompatibly, publish a new resource version 
 the previous version available until its active runs finish. Durlo does not revalidate legacy,
 manually edited, or corrupted stored rows.
 
-Durlo stores compact JSON plus tagged `Date` values and serialized `Error` objects. It rejects
-non-finite numbers, `BigInt`, `undefined`, functions, symbols, circular objects, invalid dates, and
-unsupported class instances.
+Durlo stores compact JSON plus serialized `Error` objects. Dates and objects use a versioned,
+collision-safe `$durlo` envelope: object properties are stored as key/value entry arrays so
+PostgreSQL `jsonb` key normalization cannot change their meaning. This preserves every legal JSON
+object key, including metadata-looking and prototype-looking names. The same codec is used for run
+inputs, outputs, options, workflow step results, and error causes.
 
-The current date tag is a one-key object named `$durlo.date`. A valid user object with that exact
-shape is deserialized as a `Date`; there is no escape mechanism. Do not use that shape in inputs or
-results until collision-safe serialization lands.
+Readers remain compatible with dates written by older releases as a one-key `$durlo.date` object.
+That legacy shape is inherently ambiguous: an old literal object with exactly that shape cannot be
+distinguished from an intended date and therefore continues to decode as a `Date`. New writes use
+the versioned envelope and preserve that literal object shape. The codec rejects non-finite
+numbers, `BigInt`, `undefined`, functions, symbols, circular objects, invalid dates, and unsupported
+class instances.
 
 ## Storage limits
 
