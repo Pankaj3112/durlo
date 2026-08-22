@@ -401,18 +401,18 @@ export type RawPgTransactionClient = {
 
 export type DurloTransaction = {
   readonly client: RawPgTransactionClient;
-  enqueue<TInput, TOutput>(
-    task: TaskDefinition<TInput, TOutput>,
+  enqueue<TInput, TOutput, THandlerInput>(
+    task: TaskDefinition<TInput, TOutput, THandlerInput>,
     input: TInput,
     options?: RunOptions
   ): Promise<RunHandle<TOutput>>;
-  start<TInput, TOutput>(
-    workflow: WorkflowDefinition<TInput, TOutput>,
+  start<TInput, TOutput, THandlerInput>(
+    workflow: WorkflowDefinition<TInput, TOutput, THandlerInput>,
     input: TInput,
     options?: RunOptions
   ): Promise<RunHandle<TOutput>>;
-  batchEnqueue<TInput, TOutput>(
-    task: TaskDefinition<TInput, TOutput>,
+  batchEnqueue<TInput, TOutput, THandlerInput>(
+    task: TaskDefinition<TInput, TOutput, THandlerInput>,
     items: Array<TInput | BatchItem<TInput>>
   ): Promise<Array<RunHandle<TOutput>>>;
 };
@@ -444,20 +444,35 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
 }
 
+export type StandardSchemaPathSegment = PropertyKey | { readonly key: PropertyKey };
+
+export type StandardSchemaOptions = {
+  readonly libraryOptions?: Record<string, unknown> | undefined;
+};
+
 export type StandardSchemaResult<T> =
-  | { value: T; issues?: undefined }
+  | { readonly value: T; readonly issues?: undefined }
   | {
-      value?: undefined;
-      issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey> }>;
+      readonly issues: ReadonlyArray<{
+        readonly message: string;
+        readonly path?: ReadonlyArray<StandardSchemaPathSegment> | undefined;
+      }>;
     };
 
-export type StandardSchema<TInput> = {
+export type StandardSchema<TInput = unknown, TOutput = TInput> = {
   readonly "~standard": {
     readonly version: 1;
     readonly vendor: string;
     readonly validate: (
-      value: unknown
-    ) => StandardSchemaResult<TInput> | Promise<StandardSchemaResult<TInput>>;
+      value: unknown,
+      options?: StandardSchemaOptions | undefined
+    ) => StandardSchemaResult<TOutput> | Promise<StandardSchemaResult<TOutput>>;
+    readonly types?:
+      | {
+          readonly input: TInput;
+          readonly output: TOutput;
+        }
+      | undefined;
   };
 };
 
@@ -493,24 +508,24 @@ export type WorkflowContext<TInput> = {
   signal: AbortSignal;
 };
 
-export type TaskDefinitionOptions<TInput, TOutput> = {
+export type TaskDefinitionOptions<TInput, TOutput, THandlerInput = TInput> = {
   id: string;
   version?: string;
   name?: string;
-  schema?: StandardSchema<TInput>;
+  schema?: StandardSchema<TInput, THandlerInput>;
   retry?: RetryPolicy;
   timeout?: DurationInput;
-  run: (input: TInput, context: TaskContext) => Promise<TOutput> | TOutput;
+  run: (input: THandlerInput, context: TaskContext) => Promise<TOutput> | TOutput;
 };
 
-export type WorkflowDefinitionOptions<TInput, TOutput> = {
+export type WorkflowDefinitionOptions<TInput, TOutput, THandlerInput = TInput> = {
   id: string;
   version?: string;
   name?: string;
-  schema?: StandardSchema<TInput>;
+  schema?: StandardSchema<TInput, THandlerInput>;
   retry?: RetryPolicy;
   timeout?: DurationInput;
-  run: (context: WorkflowContext<TInput>) => Promise<TOutput> | TOutput;
+  run: (context: WorkflowContext<THandlerInput>) => Promise<TOutput> | TOutput;
 };
 
 export type BatchItem<TInput> = { input: TInput; options?: RunOptions };
@@ -520,17 +535,20 @@ export interface RegisteredTaskDefinition {
   readonly version: string;
   readonly kind: "task";
   readonly _durlo: {
-    validate(input: unknown): Promise<unknown>;
     run(input: unknown, context: TaskContext): Promise<unknown>;
   };
 }
 
-export interface TaskDefinition<TInput, TOutput> extends RegisteredTaskDefinition {
+export interface TaskDefinition<
+  TInput,
+  TOutput,
+  THandlerInput = TInput
+> extends RegisteredTaskDefinition {
   readonly id: string;
   readonly version: string;
   readonly name?: string;
   readonly kind: "task";
-  readonly options: TaskDefinitionOptions<TInput, TOutput>;
+  readonly options: TaskDefinitionOptions<TInput, TOutput, THandlerInput>;
   enqueue(input: TInput, options?: RunOptions): Promise<RunHandle<TOutput>>;
   batchEnqueue(items: Array<TInput | BatchItem<TInput>>): Promise<Array<RunHandle<TOutput>>>;
 }
@@ -540,17 +558,20 @@ export interface RegisteredWorkflowDefinition {
   readonly version: string;
   readonly kind: "workflow";
   readonly _durlo: {
-    validate(input: unknown): Promise<unknown>;
     run(context: WorkflowContext<unknown>): Promise<unknown>;
   };
 }
 
-export interface WorkflowDefinition<TInput, TOutput> extends RegisteredWorkflowDefinition {
+export interface WorkflowDefinition<
+  TInput,
+  TOutput,
+  THandlerInput = TInput
+> extends RegisteredWorkflowDefinition {
   readonly id: string;
   readonly version: string;
   readonly name?: string;
   readonly kind: "workflow";
-  readonly options: WorkflowDefinitionOptions<TInput, TOutput>;
+  readonly options: WorkflowDefinitionOptions<TInput, TOutput, THandlerInput>;
   start(input: TInput, options?: RunOptions): Promise<RunHandle<TOutput>>;
 }
 

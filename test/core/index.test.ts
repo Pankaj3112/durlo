@@ -13,6 +13,7 @@ import type {
   CreateRunInput,
   DurloAdapter,
   RunRecord,
+  StandardSchema,
   StoredRunDetails,
   TransactionalDurloAdapter
 } from "@durlo/core";
@@ -178,6 +179,83 @@ describe("Durlo core API", () => {
     await expect(workflow.start({} as { userId: string })).rejects.toThrow("userId is required");
     expect(validate).toHaveBeenCalledTimes(2);
     expect(workflow.version).toBe("1");
+  });
+
+  it("persists a transformed task input from one synchronous schema call", async () => {
+    const adapter = createAdapter();
+    type ExternalInput = { raw: string };
+    type HandlerInput = { normalized: string };
+    const validate = vi.fn((input: unknown) => ({
+      value: { normalized: (input as ExternalInput).raw.trim() }
+    }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
+    const durlo = new Durlo({ id: "test-app", adapter });
+    const task = durlo.task({
+      id: "normalize-task",
+      schema,
+      run: async (input: HandlerInput) => input.normalized
+    });
+
+    await task.enqueue({ raw: "  ready  " });
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(adapter.created[0]?.input).toEqual({ normalized: "ready" });
+  });
+
+  it("awaits asynchronous schema transforms once per batch item and preserves order", async () => {
+    const adapter = createAdapter();
+    type ExternalInput = { value: number };
+    type HandlerInput = { value: number };
+    const validate = vi.fn(async (input: unknown) => ({
+      value: { value: (input as ExternalInput).value * 2 }
+    }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
+    const task = new Durlo({ id: "test-app", adapter }).task({
+      id: "async-normalize-task",
+      schema,
+      run: async (input: HandlerInput) => input.value
+    });
+
+    await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
+
+    expect(validate).toHaveBeenCalledTimes(2);
+    expect(adapter.created.map(({ input }) => input)).toEqual([{ value: 2 }, { value: 4 }]);
+  });
+
+  it("rejects issue results and schema rejections before persistence", async () => {
+    const adapter = createAdapter();
+    const issueSchema = new Durlo({ id: "test-app", adapter }).task({
+      id: "issue-schema-task",
+      schema: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: () => ({ issues: [{ message: "invalid input" }] })
+        }
+      },
+      run: async () => undefined
+    });
+    const rejectingSchema = new Durlo({ id: "test-app", adapter }).task({
+      id: "rejecting-schema-task",
+      schema: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: async () => {
+            throw new Error("schema rejected");
+          }
+        }
+      },
+      run: async () => undefined
+    });
+
+    await expect(issueSchema.enqueue({})).rejects.toThrow("invalid input");
+    await expect(rejectingSchema.enqueue({})).rejects.toThrow("schema rejected");
+    expect(adapter.created).toHaveLength(0);
   });
 
   it("atomically prepares batches and rejects duplicate in-batch idempotency keys", async () => {

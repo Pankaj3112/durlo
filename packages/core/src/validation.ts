@@ -91,11 +91,11 @@ export function validateRunOptions(options: RunOptions): void {
   }
 }
 
-export async function validateSchema<T>(
-  schema: StandardSchema<T> | undefined,
-  input: unknown
-): Promise<T> {
-  if (!schema) return input as T;
+export async function validateSchema<TInput, TOutput>(
+  schema: StandardSchema<TInput, TOutput> | undefined,
+  input: TInput
+): Promise<TOutput> {
+  if (!schema) return input as unknown as TOutput;
   const result = await schema["~standard"].validate(input);
   if (result.issues) {
     const detail = result.issues.map((issue) => issue.message).join(", ");

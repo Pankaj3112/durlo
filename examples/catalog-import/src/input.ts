@@ -17,6 +17,11 @@ export type CatalogWorkflowInput = {
   publicationDelayMs: number;
 };
 
+export type CatalogWorkflowRequest = {
+  importId: string;
+  publicationDelayMs: number | string;
+};
+
 const IMPORT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const SKU = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
 
@@ -85,23 +90,27 @@ function parseWorkflowInput(value: unknown): { value: CatalogWorkflowInput } | I
   if (typeof candidate.importId !== "string" || !IMPORT_ID.test(candidate.importId)) {
     return issue("workflow importId is invalid");
   }
+  const publicationDelayMs =
+    typeof candidate.publicationDelayMs === "string"
+      ? Number(candidate.publicationDelayMs)
+      : candidate.publicationDelayMs;
   if (
-    typeof candidate.publicationDelayMs !== "number" ||
-    !Number.isInteger(candidate.publicationDelayMs) ||
-    candidate.publicationDelayMs < 100 ||
-    candidate.publicationDelayMs > 86_400_000
+    typeof publicationDelayMs !== "number" ||
+    !Number.isInteger(publicationDelayMs) ||
+    publicationDelayMs < 100 ||
+    publicationDelayMs > 86_400_000
   ) {
     return issue("workflow publicationDelayMs must be an integer from 100 to 86400000");
   }
   return {
     value: {
       importId: candidate.importId,
-      publicationDelayMs: candidate.publicationDelayMs
+      publicationDelayMs
     }
   };
 }
 
-export const catalogWorkflowSchema: StandardSchema<CatalogWorkflowInput> = {
+export const catalogWorkflowSchema: StandardSchema<CatalogWorkflowRequest, CatalogWorkflowInput> = {
   "~standard": {
     version: 1,
     vendor: "durlo-catalog-import",

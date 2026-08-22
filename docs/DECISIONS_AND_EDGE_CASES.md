@@ -89,8 +89,10 @@ attempt accounting are stable.
 Each definition has an opaque version, defaulting to `"1"`. Workers claim exact kind/id/version
 matches. Breaking code gets a new version, and old workers remain available for old active runs.
 
-Versions are routing compatibility tokens, not necessarily package or semantic versions. Durlo
-does not rewrite old inputs or checkpoints during deployment.
+Versions are routing compatibility tokens, not necessarily package or semantic versions. A
+Standard Schema may transform creation input before it is stored; an incompatible change to that
+persisted output requires a new resource version. Durlo does not rewrite old inputs or checkpoints
+during deployment, and workers trust persisted input rather than revalidating it.
 
 ## Cancellation and timeout are cooperative
 

@@ -199,6 +199,34 @@ describe("worker lifecycle", () => {
     );
   });
 
+  it("passes persisted schema output directly to the handler", async () => {
+    const adapter = createWorkerAdapter();
+    const validate = vi.fn(() => {
+      throw new Error("worker must not validate persisted input");
+    });
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "persisted-schema-output",
+      schema: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate
+        }
+      },
+      run: async (input: { normalized: string }) => input.normalized
+    });
+    adapter.claimRuns = vi.fn(async () => [
+      { ...claimedTask(task.id), input: { normalized: "ready-for-handler" } }
+    ]);
+
+    await expect(durlo.worker({ tasks: [task], workerId: "worker-1" }).runOnce()).resolves.toBe(1);
+    expect(validate).not.toHaveBeenCalled();
+    expect(adapter.completeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ output: "ready-for-handler" })
+    );
+  });
+
   it("rejects a second start while running and can restart after stopping", async () => {
     const adapter = createWorkerAdapter();
     let releaseClaim!: (runs: ClaimedRun[]) => void;

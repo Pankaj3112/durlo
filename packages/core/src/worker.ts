@@ -382,8 +382,7 @@ export class Worker {
 
     try {
       limits = this.limitsFor(run);
-      const definition = task ?? workflow!;
-      const input = await definition._durlo.validate(deserialize(run.input));
+      const input = deserialize(run.input);
       const context = {
         run: {
           id: run.id,

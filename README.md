@@ -67,6 +67,41 @@ const run = await sendInvoice.enqueue(
 );
 ```
 
+With a Standard Schema, the creation input and handler input can be different. Durlo validates the
+external value once, persists the transformed output, and passes that output directly to the worker:
+
+```ts
+import type { StandardSchema } from "@durlo/core";
+
+type InvoiceRequest = { invoiceId: string };
+type InvoiceInput = { invoiceId: string; normalized: true };
+
+const invoiceSchema: StandardSchema<InvoiceRequest, InvoiceInput> = {
+  "~standard": {
+    version: 1,
+    vendor: "billing",
+    validate: (input) => {
+      const request = input as InvoiceRequest;
+      return { value: { invoiceId: request.invoiceId.trim(), normalized: true } };
+    }
+  }
+};
+
+const sendNormalizedInvoice = durlo.task({
+  id: "send-normalized-invoice",
+  schema: invoiceSchema,
+  run: async (input: InvoiceInput, { signal }) => {
+    await deliverInvoice(input.invoiceId, signal);
+  }
+});
+
+await sendNormalizedInvoice.enqueue({ invoiceId: " inv_42 " });
+```
+
+The persisted transformed shape is part of resource compatibility. If it changes incompatibly,
+publish a new definition version and keep workers for the previous version until its active runs
+finish.
+
 To commit application data and durable work atomically, use Durlo's raw-`pg` transaction callback:
 
 ```ts

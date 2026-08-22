@@ -5,9 +5,9 @@ tables, and uses Durlo's raw-`pg` transaction callback to start a small workflow
 client. Large business payloads stay out of workflow input and remain available after Durlo history
 retention.
 
-The workflow validates and checkpoints the source, enters a durable publication window that holds no
-worker slot, and publishes the catalog in an idempotent transaction. Imports are ordered by creation
-time and id so a recovered older workflow cannot overwrite a newer product value.
+The workflow validates and normalizes its input, checkpoints the source, enters a durable publication
+window that holds no worker slot, and publishes the catalog in an idempotent transaction. Imports are
+ordered by creation time and id so a recovered older workflow cannot overwrite a newer product value.
 
 ## Run locally
 
@@ -50,8 +50,9 @@ event-loop latency in production; the automated smoke test lowers it only to mak
 finish quickly.
 
 `CATALOG_IMPORT_WORKFLOW_VERSION` controls the opaque compatibility version. During a breaking
-deployment, keep workers for the previous value available until their active workflows complete;
-use the worker compatibility report before removing them.
+deployment, including a change to the normalized workflow input, keep workers for the previous value
+available until their active workflows complete; use the worker compatibility report before removing
+them.
 
 ## Production boundaries
 
