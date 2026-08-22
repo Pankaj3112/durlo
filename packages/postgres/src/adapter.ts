@@ -153,7 +153,7 @@ type Query = <R extends QueryResultRow = QueryResultRow>(
   values?: unknown[]
 ) => Promise<QueryResult<R>>;
 
-function mapRun(row: RunRow): RunRecord {
+function mapRun(row: RunRow, decode = true): RunRecord {
   return {
     id: row.id,
     appId: row.app_id,
@@ -161,10 +161,16 @@ function mapRun(row: RunRow): RunRecord {
     resourceId: row.resource_id,
     resourceVersion: row.resource_version,
     status: row.status,
-    input: deserialize(row.input_json) as JsonValue,
-    output: row.output_json === null ? null : (deserialize(row.output_json) as JsonValue),
-    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
-    options: deserialize(row.options_json) as JsonValue,
+    input: (decode ? deserialize(row.input_json) : row.input_json) as JsonValue,
+    output:
+      row.output_json === null
+        ? null
+        : ((decode ? deserialize(row.output_json) : row.output_json) as JsonValue),
+    error:
+      row.error_json === null
+        ? null
+        : ((decode ? deserialize(row.error_json) : row.error_json) as SerializedError),
+    options: (decode ? deserialize(row.options_json) : row.options_json) as JsonValue,
     idempotencyKey: row.idempotency_key,
     priority: row.priority,
     scheduledAt: row.scheduled_at,
@@ -182,15 +188,21 @@ function mapRun(row: RunRow): RunRecord {
   };
 }
 
-function mapStep(row: StepRow): StepRecord {
+function mapStep(row: StepRow, decode = true): StepRecord {
   return {
     id: row.id,
     runId: row.run_id,
     stepId: row.step_id,
     status: row.status,
-    result: row.result_json === null ? null : (deserialize(row.result_json) as JsonValue),
-    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
-    options: deserialize(row.options_json) as JsonValue,
+    result:
+      row.result_json === null
+        ? null
+        : ((decode ? deserialize(row.result_json) : row.result_json) as JsonValue),
+    error:
+      row.error_json === null
+        ? null
+        : ((decode ? deserialize(row.error_json) : row.error_json) as SerializedError),
+    options: (decode ? deserialize(row.options_json) : row.options_json) as JsonValue,
     attemptCount: row.attempt_count,
     maxAttempts: row.max_attempts,
     createdAt: row.created_at,
@@ -402,7 +414,7 @@ export class PostgresAdapter implements DurloAdapter {
       await client.query("commit");
       return {
         run: mapRun(row),
-        steps: steps.rows.map(mapStep),
+        steps: steps.rows.map((step) => mapStep(step)),
         attempts: attempts.rows.map(mapAttempt),
         timers: timers.rows.map(mapTimer),
         checkedAt: clock.rows[0]!.checked_at
@@ -737,7 +749,7 @@ export class PostgresAdapter implements DurloAdapter {
           `,
           [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken]
         );
-        claimed.push({ ...mapRun(row), failureCount } as ClaimedRun);
+        claimed.push({ ...mapRun(row, false), failureCount } as ClaimedRun);
       }
       await client.query("commit");
       return claimed;
@@ -928,8 +940,29 @@ export class PostgresAdapter implements DurloAdapter {
     return result.rows[0] ? mapStep(result.rows[0]) : null;
   }
 
+  async getStepRaw(runId: string, stepId: string): Promise<StepRecord | null> {
+    const result = await this.query()<StepRow>(
+      `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2`,
+      [runId, stepId]
+    );
+    return result.rows[0] ? mapStep(result.rows[0], false) : null;
+  }
+
   async startStep(
     input: StepInput & { maxAttempts: number; maxSteps: number }
+  ): Promise<StepRecord> {
+    return this.startStepInternal(input, true);
+  }
+
+  async startStepRaw(
+    input: StepInput & { maxAttempts: number; maxSteps: number }
+  ): Promise<StepRecord> {
+    return this.startStepInternal(input, false);
+  }
+
+  private async startStepInternal(
+    input: StepInput & { maxAttempts: number; maxSteps: number },
+    decode: boolean
   ): Promise<StepRecord> {
     const client = await this.pool.connect();
     try {
@@ -957,7 +990,7 @@ export class PostgresAdapter implements DurloAdapter {
       if (!current) throw new Error(`step '${input.stepId}' could not be created`);
       if (current.status === "completed") {
         await client.query("commit");
-        return mapStep(current);
+        return mapStep(current, decode);
       }
       const updated = await client.query<StepRow>(
         `
@@ -989,7 +1022,7 @@ export class PostgresAdapter implements DurloAdapter {
         ]
       );
       await client.query("commit");
-      return mapStep(row);
+      return mapStep(row, decode);
     } catch (error) {
       await client.query("rollback");
       throw error;

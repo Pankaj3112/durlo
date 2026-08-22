@@ -9,6 +9,8 @@ const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 type Payload = {
   date: Date;
   literal: Record<string, unknown>;
+  legacyLiteral: { "$durlo.date": string };
+  envelopeLiteral: { $durlo: [number, string, string] };
   nested: Array<Record<string, unknown>>;
 };
 
@@ -35,6 +37,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     const payload: Payload = {
       date: new Date("2026-01-02T03:04:05.000Z"),
       literal,
+      legacyLiteral: { "$durlo.date": "2026-01-02T03:04:05.000Z" },
+      envelopeLiteral: { $durlo: [2, "date", "literal"] },
       nested: [literal, { value: "nested" }]
     };
     const durlo = new Durlo({ id: "serialization-postgres", adapter });

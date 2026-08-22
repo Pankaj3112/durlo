@@ -42,14 +42,23 @@ export function createStepTools(
         if (await adapter.getTimer(run.id, stepId)) {
           throw new ValidationError(`step '${stepId}' is already used by a sleep`);
         }
-        const existing = await adapter.getStep(run.id, stepId);
+        const existing = adapter.getStepRaw
+          ? await adapter.getStepRaw(run.id, stepId)
+          : await adapter.getStep(run.id, stepId);
         if (existing?.status === "completed") return deserialize(existing.result!) as T;
-        const step = await adapter.startStep({
-          ...ownership,
-          stepId,
-          maxAttempts: run.maxAttempts,
-          maxSteps: limits.maxWorkflowSteps
-        });
+        const step = adapter.startStepRaw
+          ? await adapter.startStepRaw({
+              ...ownership,
+              stepId,
+              maxAttempts: run.maxAttempts,
+              maxSteps: limits.maxWorkflowSteps
+            })
+          : await adapter.startStep({
+              ...ownership,
+              stepId,
+              maxAttempts: run.maxAttempts,
+              maxSteps: limits.maxWorkflowSteps
+            });
         if (step.status === "completed") return deserialize(step.result!) as T;
 
         insideStepCallback = true;

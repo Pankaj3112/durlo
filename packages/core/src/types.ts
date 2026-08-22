@@ -437,6 +437,9 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   releaseRun(input: OwnedRunInput): Promise<boolean>;
   getStep(runId: string, stepId: string): Promise<StepRecord | null>;
   startStep(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
+  /** Encoded step access used by the worker before it performs one decode. */
+  getStepRaw?(runId: string, stepId: string): Promise<StepRecord | null>;
+  startStepRaw?(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
   completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
   failStep(input: StepInput & { error: SerializedError }): Promise<void>;
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;
