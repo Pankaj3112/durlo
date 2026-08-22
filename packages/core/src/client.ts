@@ -164,9 +164,7 @@ export class Durlo {
   }
 
   task<TInput, TOutput = void>(
-    options: Omit<TaskDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
-      schema?: undefined;
-    }
+    options: TaskDefinitionOptions<TInput, TOutput, TInput>
   ): TaskDefinition<TInput, TOutput>;
   task<TInput, TOutput = void, THandlerInput = TInput>(
     options: TaskDefinitionOptions<TInput, TOutput, THandlerInput> & {
@@ -175,9 +173,7 @@ export class Durlo {
   ): TaskDefinition<TInput, TOutput, THandlerInput>;
   task<TInput, TOutput = void, THandlerInput = TInput>(
     options:
-      | (Omit<TaskDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
-          schema?: undefined;
-        })
+      | TaskDefinitionOptions<TInput, TOutput, TInput>
       | (TaskDefinitionOptions<TInput, TOutput, THandlerInput> & {
           schema: StandardSchema<TInput, THandlerInput>;
         })
@@ -241,9 +237,7 @@ export class Durlo {
   }
 
   workflow<TInput, TOutput = void>(
-    options: Omit<WorkflowDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
-      schema?: undefined;
-    }
+    options: WorkflowDefinitionOptions<TInput, TOutput, TInput>
   ): WorkflowDefinition<TInput, TOutput>;
   workflow<TInput, TOutput = void, THandlerInput = TInput>(
     options: WorkflowDefinitionOptions<TInput, TOutput, THandlerInput> & {
@@ -252,9 +246,7 @@ export class Durlo {
   ): WorkflowDefinition<TInput, TOutput, THandlerInput>;
   workflow<TInput, TOutput = void, THandlerInput = TInput>(
     options:
-      | (Omit<WorkflowDefinitionOptions<TInput, TOutput, TInput>, "schema"> & {
-          schema?: undefined;
-        })
+      | WorkflowDefinitionOptions<TInput, TOutput, TInput>
       | (WorkflowDefinitionOptions<TInput, TOutput, THandlerInput> & {
           schema: StandardSchema<TInput, THandlerInput>;
         })

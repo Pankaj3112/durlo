@@ -444,20 +444,34 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   fireDueTimers(input: { appId: string; limit: number }): Promise<TimerRecord[]>;
 }
 
+export type StandardSchemaPathSegment = PropertyKey | { readonly key: PropertyKey };
+
+export type StandardSchemaOptions = {
+  readonly libraryOptions?: Record<string, unknown>;
+};
+
 export type StandardSchemaResult<T> =
   | { value: T; issues?: undefined }
   | {
       value?: undefined;
-      issues: ReadonlyArray<{ message: string; path?: ReadonlyArray<PropertyKey> }>;
+      issues: ReadonlyArray<{
+        message: string;
+        path?: ReadonlyArray<StandardSchemaPathSegment>;
+      }>;
     };
 
-export type StandardSchema<TInput, TOutput = TInput> = {
+export type StandardSchema<TInput = unknown, TOutput = TInput> = {
   readonly "~standard": {
     readonly version: 1;
     readonly vendor: string;
     readonly validate: (
-      value: TInput
+      value: unknown,
+      options?: StandardSchemaOptions
     ) => StandardSchemaResult<TOutput> | Promise<StandardSchemaResult<TOutput>>;
+    readonly types?: {
+      readonly input: TInput;
+      readonly output: TOutput;
+    };
   };
 };
 

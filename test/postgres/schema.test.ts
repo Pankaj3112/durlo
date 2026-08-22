@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Durlo } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
+import type { StandardSchema } from "@durlo/core";
 import type { PostgresAdapter } from "@durlo/postgres";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
@@ -30,20 +31,21 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
   });
 
   it("persists synchronous transformed JSONB input and executes it without revalidation", async () => {
-    const validate = vi.fn((input: { raw: string }) => ({
-      value: {
-        normalized: input.raw.trim(),
-        characters: [...input.raw.trim()]
-      }
-    }));
+    type ExternalInput = { raw: string };
+    type HandlerInput = { normalized: string; characters: string[] };
+    const validate = vi.fn((input: unknown) => {
+      const raw = (input as ExternalInput).raw.trim();
+      return { value: { normalized: raw, characters: [...raw] } };
+    });
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const observed: Array<{ normalized: string; characters: string[] }> = [];
     const durlo = new Durlo({ id: "schema-roundtrip", adapter });
     const task = durlo.task({
       id: "sync-transform",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
-      run: async (input: { normalized: string; characters: string[] }) => {
+      schema,
+      run: async (input: HandlerInput) => {
         observed.push(input);
         return input.normalized;
       }
@@ -74,16 +76,19 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
   });
 
   it("awaits an asynchronous workflow transform once and exposes it through context.input", async () => {
-    const validate = vi.fn(async (input: { raw: string }) => ({
-      value: { normalized: input.raw.trim().toUpperCase() }
+    type ExternalInput = { raw: string };
+    type HandlerInput = { normalized: string };
+    const validate = vi.fn(async (input: unknown) => ({
+      value: { normalized: (input as ExternalInput).raw.trim().toUpperCase() }
     }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const observed: string[] = [];
     const durlo = new Durlo({ id: "schema-roundtrip", adapter });
     const workflow = durlo.workflow({
       id: "async-transform",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
+      schema,
       run: async ({ input }) => {
         observed.push(input.normalized);
         return input.normalized;
@@ -104,18 +109,21 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
   });
 
   it("validates every batch item before PostgreSQL persistence", async () => {
-    const validate = vi.fn(async (input: { value: number }) =>
-      input.value === 2
+    type ExternalInput = { value: number };
+    type HandlerInput = { doubled: number };
+    const validate = vi.fn(async (input: unknown) =>
+      (input as ExternalInput).value === 2
         ? { issues: [{ message: "value 2 is not allowed" }] }
-        : { value: { doubled: input.value * 2 } }
+        : { value: { doubled: (input as ExternalInput).value * 2 } }
     );
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const durlo = new Durlo({ id: "schema-atomicity", adapter });
     const task = durlo.task({
       id: "atomic-batch-transform",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
-      run: async (input: { doubled: number }) => input.doubled
+      schema,
+      run: async (input: HandlerInput) => input.doubled
     });
 
     await expect(task.batchEnqueue([{ value: 1 }, { value: 2 }])).rejects.toThrow(
@@ -131,22 +139,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
   });
 
   it("persists transformed input through transaction task, workflow, and batch creation", async () => {
-    const validate = vi.fn((input: { raw: string }) => ({
-      value: { normalized: input.raw.trim() }
+    type ExternalInput = { raw: string };
+    type HandlerInput = { normalized: string };
+    const validate = vi.fn((input: unknown) => ({
+      value: { normalized: (input as ExternalInput).raw.trim() }
     }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const durlo = new Durlo({ id: "schema-transaction-success", adapter });
     const task = durlo.task({
       id: "transaction-task-transform",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
-      run: async (input: { normalized: string }) => input.normalized
+      schema,
+      run: async (input: HandlerInput) => input.normalized
     });
     const workflow = durlo.workflow({
       id: "transaction-workflow-transform",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
+      schema,
       run: async ({ input }) => input.normalized
     });
 

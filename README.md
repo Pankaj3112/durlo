@@ -80,7 +80,10 @@ const invoiceSchema: StandardSchema<InvoiceRequest, InvoiceInput> = {
   "~standard": {
     version: 1,
     vendor: "billing",
-    validate: (input) => ({ value: { invoiceId: input.invoiceId.trim(), normalized: true } })
+    validate: (input) => {
+      const request = input as InvoiceRequest;
+      return { value: { invoiceId: request.invoiceId.trim(), normalized: true } };
+    }
   }
 };
 

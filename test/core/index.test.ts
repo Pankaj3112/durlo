@@ -13,6 +13,7 @@ import type {
   CreateRunInput,
   DurloAdapter,
   RunRecord,
+  StandardSchema,
   StoredRunDetails,
   TransactionalDurloAdapter
 } from "@durlo/core";
@@ -182,16 +183,19 @@ describe("Durlo core API", () => {
 
   it("persists a transformed task input from one synchronous schema call", async () => {
     const adapter = createAdapter();
-    const validate = vi.fn((input: { raw: string }) => ({
-      value: { normalized: input.raw.trim() }
+    type ExternalInput = { raw: string };
+    type HandlerInput = { normalized: string };
+    const validate = vi.fn((input: unknown) => ({
+      value: { normalized: (input as ExternalInput).raw.trim() }
     }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const durlo = new Durlo({ id: "test-app", adapter });
     const task = durlo.task({
       id: "normalize-task",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
-      run: async (input: { normalized: string }) => input.normalized
+      schema,
+      run: async (input: HandlerInput) => input.normalized
     });
 
     await task.enqueue({ raw: "  ready  " });
@@ -202,15 +206,18 @@ describe("Durlo core API", () => {
 
   it("awaits asynchronous schema transforms once per batch item and preserves order", async () => {
     const adapter = createAdapter();
-    const validate = vi.fn(async (input: { value: number }) => ({
-      value: { value: input.value * 2 }
+    type ExternalInput = { value: number };
+    type HandlerInput = { value: number };
+    const validate = vi.fn(async (input: unknown) => ({
+      value: { value: (input as ExternalInput).value * 2 }
     }));
+    const schema: StandardSchema<ExternalInput, HandlerInput> = {
+      "~standard": { version: 1, vendor: "test", validate }
+    };
     const task = new Durlo({ id: "test-app", adapter }).task({
       id: "async-normalize-task",
-      schema: {
-        "~standard": { version: 1, vendor: "test", validate }
-      },
-      run: async (input: { value: number }) => input.value
+      schema,
+      run: async (input: HandlerInput) => input.value
     });
 
     await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
