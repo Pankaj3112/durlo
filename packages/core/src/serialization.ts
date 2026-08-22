@@ -17,8 +17,9 @@ function envelope(value: SerializationEnvelope): { [ENVELOPE_KEY]: Serialization
   return { [ENVELOPE_KEY]: value };
 }
 
-function isEnvelope(value: JsonValue): value is { [ENVELOPE_KEY]: SerializationEnvelope } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function isEnvelope(
+  value: Record<string, JsonValue>
+): value is { [ENVELOPE_KEY]: SerializationEnvelope } {
   if (
     Object.keys(value).length !== 1 ||
     !Object.prototype.hasOwnProperty.call(value, ENVELOPE_KEY)
@@ -31,11 +32,7 @@ function isEnvelope(value: JsonValue): value is { [ENVELOPE_KEY]: SerializationE
   if (candidate[1] === DATE_KIND) return typeof candidate[2] === "string";
   if (candidate[1] !== OBJECT_KIND || !Array.isArray(candidate[2])) return false;
   return candidate[2].every(
-    (entry) =>
-      Array.isArray(entry) &&
-      entry.length === 2 &&
-      typeof entry[0] === "string" &&
-      entry[1] !== undefined
+    (entry) => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string"
   );
 }
 
@@ -59,22 +56,22 @@ export function serialize(value: unknown): JsonValue {
       return envelope([SERIALIZATION_VERSION, DATE_KIND, current.toISOString()]);
     }
     if (current instanceof Error) return serializeError(current) as unknown as JsonValue;
-    if (typeof current !== "object") throw new SerializationError(`${path} is not serializable`);
-    if (seen.has(current)) throw new SerializationError(`${path} contains a circular reference`);
-    seen.add(current);
+    const object = current as object;
+    if (seen.has(object)) throw new SerializationError(`${path} contains a circular reference`);
+    seen.add(object);
     try {
-      if (Array.isArray(current))
-        return current.map((item, index) => visit(item, `${path}[${index}]`));
-      const prototype = Object.getPrototypeOf(current) as object | null;
+      if (Array.isArray(object))
+        return object.map((item, index) => visit(item, `${path}[${index}]`));
+      const prototype = Object.getPrototypeOf(object) as object | null;
       if (prototype !== Object.prototype && prototype !== null) {
         throw new SerializationError(`${path} contains an unsupported class instance`);
       }
-      const entries = Object.entries(current).map(
+      const entries = Object.entries(object).map(
         ([key, item]) => [key, visit(item, `${path}.${key}`)] as [string, JsonValue]
       );
       return envelope([SERIALIZATION_VERSION, OBJECT_KIND, entries]);
     } finally {
-      seen.delete(current);
+      seen.delete(object);
     }
   };
 
@@ -85,17 +82,20 @@ export function deserialize(value: JsonValue): unknown {
   if (value instanceof Date) return value;
   if (Array.isArray(value)) return value.map(deserialize);
   if (value && typeof value === "object") {
-    if (isEnvelope(value)) {
-      const [, kind, payload] = value[ENVELOPE_KEY];
+    const record = value as Record<string, JsonValue>;
+    if (isEnvelope(record)) {
+      const [, kind, payload] = record[ENVELOPE_KEY] as SerializationEnvelope;
       if (kind === DATE_KIND) return new Date(payload as string);
       return Object.fromEntries(
         (payload as Array<[string, JsonValue]>).map(([key, item]) => [key, deserialize(item)])
       );
     }
-    if (Object.keys(value).length === 1 && typeof value[LEGACY_DATE_TAG] === "string") {
-      return new Date(value[LEGACY_DATE_TAG]);
+    if (Object.keys(record).length === 1 && typeof record[LEGACY_DATE_TAG] === "string") {
+      return new Date(record[LEGACY_DATE_TAG]);
     }
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, deserialize(item)]));
+    return Object.fromEntries(
+      Object.entries(record).map(([key, item]) => [key, deserialize(item)])
+    );
   }
   return value;
 }

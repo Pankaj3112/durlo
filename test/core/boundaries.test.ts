@@ -17,6 +17,7 @@ import {
 import type {
   CreateRunInput,
   DurloAdapter,
+  JsonValue,
   RunRecord,
   StepStatus,
   TransactionalDurloAdapter
@@ -301,6 +302,55 @@ describe("serialization boundaries", () => {
     expect(deserialize({ "$durlo.date": "2026-01-02T03:04:05.000Z" })).toEqual(
       new Date("2026-01-02T03:04:05.000Z")
     );
+  });
+
+  it("uses versioned date and object envelopes and rejects malformed envelopes as literals", () => {
+    const date = new Date("2026-01-02T03:04:05.000Z");
+    expect(serialize(date)).toEqual({ $durlo: [2, "date", date.toISOString()] });
+    expect(serialize({ value: 1 })).toEqual({
+      $durlo: [2, "object", [["value", 1]]]
+    });
+
+    const malformed = [
+      { $durlo: [2, "date"] },
+      { $durlo: [1, "date", date.toISOString()] },
+      { $durlo: [2, "date", 42] },
+      { $durlo: [2, "unknown", "value"] },
+      { $durlo: [2, "object", "value"] },
+      { $durlo: [2, "object", [["missing-value"]]] },
+      { $durlo: [2, "object", [[42, "value"]]] },
+      { $durlo: [2, "date", date.toISOString()], extra: true }
+    ] as JsonValue[];
+    for (const value of malformed) expect(deserialize(value)).toEqual(value);
+
+    const decoded = deserialize({
+      $durlo: [
+        2,
+        "object",
+        [
+          ["__proto__", { polluted: true }],
+          ["constructor", "constructor"]
+        ]
+      ]
+    } as JsonValue) as Record<string, unknown>;
+    expect(Object.keys(decoded)).toEqual(["__proto__", "constructor"]);
+    expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(decoded, "__proto__")).toBe(true);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(deserialize(date as unknown as JsonValue)).toBe(date);
+  });
+
+  it("keeps array paths and conditional Error fields precise", () => {
+    expect(() => serialize([{ nested: Number.NaN }])).toThrow(
+      "value[0].nested contains a non-finite"
+    );
+    const withStack = new Error("with stack");
+    expect(serializeError(withStack)).toMatchObject({
+      name: "Error",
+      message: "with stack",
+      stack: withStack.stack
+    });
+    expect(serializeError(withStack)).not.toHaveProperty("cause");
   });
 
   it.each([
