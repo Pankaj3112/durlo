@@ -186,6 +186,8 @@ try {
         schema,
         run: async ({ input }) => input.normalized.length
       });
+      const voidTask = durlo.task({ id: "packed-void-task", run: async () => undefined });
+      const nullTask = durlo.task({ id: "packed-null-task", run: async (): Promise<null> => null });
       const input: ExternalInput = { raw: " value " };
       const taskHandle: Promise<RunCreation<string>> = task.enqueue(input);
       const batchHandles: Promise<Array<RunCreation<string>>> = task.batchEnqueue([
@@ -193,6 +195,24 @@ try {
         { input } satisfies BatchItem<ExternalInput>
       ]);
       const workflowHandle: Promise<RunCreation<number>> = workflow.start(input);
+      taskHandle.then(({ run }) => {
+        const waited: Promise<string> = durlo.runs.wait(run, { timeout: "5s" });
+        void waited;
+      });
+      workflowHandle.then(({ run }) => {
+        const waited: Promise<number> = durlo.runs.wait(run, { signal: new AbortController().signal });
+        void waited;
+      });
+      voidTask.enqueue({}).then(({ run }) => {
+        const waited: Promise<void> = durlo.runs.wait(run);
+        void waited;
+      });
+      nullTask.enqueue({}).then(({ run }) => {
+        const waited: Promise<null> = durlo.runs.wait(run);
+        void waited;
+      });
+      // @ts-expect-error Waiting accepts a typed handle, not a bare run id.
+      durlo.runs.wait("run-id", { timeout: 1_000 });
       const config: DurloConfig = defineConfig({ durlo, tasks: [task], workflows: [workflow] });
       const dashboard: DashboardOptions = { host: "127.0.0.1", port: 3210 };
       if (false) {
@@ -449,7 +469,8 @@ function exportAssertions(format) {
       "0005_truthful_step_interruptions",
       "0006_serialization_versions",
       "0007_idempotency_comparison_metadata",
-      "0008_idempotency_metadata_presence"
+      "0008_idempotency_metadata_presence",
+      "0009_run_output_kind"
     ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
     if (typeof cli.defineConfig !== "function") throw new Error("missing ${format} defineConfig");
   `;

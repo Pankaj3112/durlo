@@ -693,7 +693,8 @@ describe("worker heartbeats", () => {
         runId: "run-1",
         workerId: "worker-1",
         leaseToken: "lease-1",
-        output: "completed result"
+        output: "completed result",
+        outputKind: "value"
       });
       expect(adapter.failRun).not.toHaveBeenCalled();
     } finally {

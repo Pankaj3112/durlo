@@ -39,7 +39,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
         runId: handle.run.id,
         workerId: "worker",
         leaseToken: claim!.leaseToken,
-        output: "completed"
+        output: "completed",
+        outputKind: "value"
       })
     ]);
 

@@ -65,7 +65,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
             runId: claim.id,
             workerId: claim.lockedBy,
             leaseToken: claim.leaseToken,
-            output: { seed }
+            output: { seed },
+            outputKind: "value"
           });
         if (random() < 0.5) {
           await completion();

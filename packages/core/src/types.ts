@@ -119,6 +119,12 @@ export type RunHandle<TOutput = unknown> = Pick<
   "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
 
+export type WaitRunSnapshot = {
+  run: RunRecord;
+  outputKind: "value" | "undefined" | null;
+  storedError: SerializedError | null;
+};
+
 export type RunCreation<TOutput = unknown> = {
   readonly run: RunHandle<TOutput>;
   readonly created: boolean;
@@ -464,6 +470,7 @@ export type DurloTransaction = {
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
+  getRunForWait?(input: AppRunInput): Promise<WaitRunSnapshot | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
   getBacklogHealth(input: { appId: string }): Promise<BacklogHealth>;
   listRuns(input: RunListInput): Promise<RunSummary[]>;
@@ -477,7 +484,9 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
     limit: number;
   }): Promise<UnavailableRun[]>;
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
-  completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
+  completeRun(
+    input: OwnedRunInput & { output: JsonValue; outputKind: "value" | "undefined" }
+  ): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
   releaseRun(input: OwnedRunInput): Promise<boolean>;
   isLeaseLoss?(error: unknown): boolean;

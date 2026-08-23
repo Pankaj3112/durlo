@@ -238,5 +238,15 @@ export const migrations: readonly Migration[] = [
       alter table durlo_runs
         add column idempotency_metadata_version integer;
     `
+  },
+  {
+    version: "0009_run_output_kind",
+    sql: `
+      alter table durlo_runs
+        add column output_kind text;
+      alter table durlo_runs
+        add constraint durlo_runs_output_kind_check
+        check (output_kind in ('value', 'undefined'));
+    `
   }
 ];

@@ -459,7 +459,8 @@ export class Worker {
           runId: run.id,
           workerId: this.id,
           leaseToken: run.leaseToken,
-          output: serializedOutput
+          output: serializedOutput,
+          outputKind: output === undefined ? "undefined" : "value"
         });
       } catch (error) {
         this.notePersistenceFailure(error);

@@ -954,9 +954,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     for (const invalidOwner of invalidOwners) {
       expect(await adapter.extendRunLease({ ...invalidOwner, leaseDuration: 10_000 })).toBe(false);
       expect(await adapter.releaseRun(invalidOwner)).toBe(false);
-      await expect(adapter.completeRun({ ...invalidOwner, output: "stale" })).rejects.toThrow(
-        "lease lost"
-      );
+      await expect(
+        adapter.completeRun({ ...invalidOwner, output: "stale", outputKind: "value" })
+      ).rejects.toThrow("lease lost");
       await expect(
         adapter.failRun({
           ...invalidOwner,
@@ -981,7 +981,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
       runId: handle.run.id,
       workerId: "owner",
       leaseToken: claim!.leaseToken,
-      output: "current"
+      output: "current",
+      outputKind: "value"
     });
     expect(await adapter.getRun({ appId: "integration", runId: handle.run.id })).toMatchObject({
       status: "completed",
@@ -1052,14 +1053,16 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
         runId: handle.run.id,
         workerId: "worker-old",
         leaseToken: first!.leaseToken,
-        output: "stale"
+        output: "stale",
+        outputKind: "value"
       })
     ).rejects.toThrow("lease lost");
     await adapter.completeRun({
       runId: handle.run.id,
       workerId: "worker-new",
       leaseToken: second!.leaseToken,
-      output: "current"
+      output: "current",
+      outputKind: "value"
     });
 
     expect(await adapter.getRun({ appId: "integration", runId: handle.run.id })).toMatchObject({
@@ -1400,7 +1403,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
         runId: handle.run.id,
         workerId: "cancellable-worker",
         leaseToken: claim!.leaseToken,
-        output: "late"
+        output: "late",
+        outputKind: "value"
       })
     ).rejects.toThrow("lease lost");
     expect(await adapter.getRun({ appId: "integration", runId: handle.run.id })).toMatchObject({
