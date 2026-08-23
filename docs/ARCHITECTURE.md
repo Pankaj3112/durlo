@@ -38,12 +38,17 @@ Core depends on an adapter contract rather than PostgreSQL. The Postgres adapter
 user definitions. The CLI uses the same core worker and read/control APIs as library consumers; it
 does not implement another execution state machine.
 
+Package root indexes are explicit allowlists. Core keeps adapter/storage protocols in internal
+types, and task/workflow handler registration lives in module-private `WeakMap` registries rather
+than `_durlo` or another forgeable public property. CLI configuration carries public definition
+objects; worker construction resolves them through that private registry and rejects imitations.
+
 ## Durable records
 
 The schema in `packages/postgres/src/migrations.ts` contains:
 
 - `durlo_runs`: scheduling state, current status, input/output/error, lease, retained summary,
-  internal serialization-generation routing, and idempotency comparison metadata
+  internal serialization-generation and output-kind metadata, and idempotency comparison metadata
 - `durlo_steps`: workflow checkpoint state and result
 - `durlo_timers`: durable sleep state
 - `durlo_attempts`: run and step execution evidence
@@ -65,6 +70,11 @@ it cannot prevent a late external side effect.
 Workflow sleep and lease-loss control flow is represented by module-private identity signals rather
 than public error classes or forgeable names. The Postgres adapter uses the same private lease-loss
 identity for its storage errors; the worker never trusts an error's public name or shape.
+
+Intentional handler outcomes use separately branded exact `PermanentError` and `RetryError`
+instances. The worker checks both private brand membership and exact prototype identity. A
+subclass, copied shape, or matching `name` cannot enter control flow. Step callbacks persist the
+structured error before rethrowing it to the run-level decision.
 
 Claiming currently selects a bounded group and then performs failure counts, state updates, and
 attempt inserts sequentially for each run while row locks remain held. Timer promotion and batch
@@ -122,6 +132,12 @@ settles after active executions drain. `worker.getHealth()` describes only that 
 `durlo.runs.getBacklogHealth()` describes stored work for one app; and
 `worker.getCompatibilityReport()` compares active stored work with one worker's registrations.
 
+Failure handling computes the consumed failure count first. Permanent outcomes select the normal
+task/workflow terminal state immediately. Directed retries use their normalized timestamp only
+while budget remains; exhaustion selects the same terminal state as an ordinary failure. Storage
+transitions remain lease-token fenced, so cancellation, timeout, or lease rotation can defeat a
+late intentional outcome without a stale write.
+
 ## Transactions and adapters
 
 `durlo.transaction(callback)` asks the PostgreSQL adapter to acquire one pool client, execute
@@ -146,6 +162,12 @@ Run list uses app-scoped keyset pagination. Run details read the run, steps, att
 one short repeatable-read transaction, then core derives a timeline and diagnostics. Backlog health
 aggregates active state using the PostgreSQL clock.
 
+Typed waiting uses repeated app-scoped single-run reads. Every poll acquires and returns a pool
+connection through a normal query; no transaction or client is retained between polls. The adapter
+returns internal output-kind and structured-error metadata alongside the public record. `value`
+preserves JSON `null`, `undefined` returns JavaScript `undefined`, and absent metadata follows the
+legacy decoded record without inference.
+
 Cancellation and manual retry are app-scoped storage transitions. Retention cleanup deletes a
 bounded set of terminal parent runs and cascades to their steps, timers, and attempts. There is no
 automatic cleanup scheduler.
@@ -159,6 +181,8 @@ them are returned as `legacy_unverifiable` conflicts rather than guessed compati
 
 - public surface and records: `packages/core/src/types.ts`
 - client behavior: `packages/core/src/client.ts`
+- private definition registration: `packages/core/src/definitions.ts`
+- intentional outcome branding: `packages/core/src/outcomes.ts`
 - worker behavior: `packages/core/src/worker.ts`
 - workflow checkpoints: `packages/core/src/steps.ts`
 - derived diagnostics: `packages/core/src/observability.ts`

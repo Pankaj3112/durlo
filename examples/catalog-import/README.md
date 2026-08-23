@@ -8,6 +8,8 @@ retention.
 The workflow validates and normalizes its input, checkpoints the source, enters a durable publication
 window that holds no worker slot, and publishes the catalog in an idempotent transaction. Imports are
 ordered by creation time and id so a recovered older workflow cannot overwrite a newer product value.
+Missing source rows or a vanished import are permanent business failures and use `PermanentError`,
+so the workflow records the failed checkpoint and stops automatic retries.
 
 ## Run locally
 

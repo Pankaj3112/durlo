@@ -34,6 +34,10 @@ The CLI loads the first `durlo.config.ts`, `.mts`, `.js`, `.mjs`, or `.cjs` in t
 unless `--config`/`-c` is provided. A config exports one `Durlo` instance, explicit task/workflow
 registrations, and optional worker/dashboard settings.
 
+The supported CLI package API is only `defineConfig` plus the `DurloConfig` and `DashboardOptions`
+types. Use the executable for init, migration, worker, and dev process behavior; internal config,
+dashboard, and process-lifecycle helpers are not supported imports.
+
 ## Migrations
 
 Run `durlo migrate` once as a deployment step with a schema-owner connection before starting
@@ -62,6 +66,11 @@ rows without those fields are intentionally not guessed to be compatible; reuse 
 
 Migration `0008_idempotency_metadata_presence` distinguishes complete comparison metadata from SQL
 `NULL` and JSONB `null`, so a new run whose durable input is `null` remains idempotently reusable.
+
+Migration `0009_run_output_kind` adds nullable output-kind metadata. New completions record `value`
+or `undefined`, allowing typed waiters to distinguish JavaScript `undefined` from JSON `null`.
+Existing completed rows remain `NULL` and retain their current decoded output; the migration does
+not guess or rewrite them.
 
 The runtime role requires normal read/write access to Durlo tables and sequences but should not own
 the schema.
@@ -95,6 +104,10 @@ Each `durlo.transaction(...)` call checks out one client for `BEGIN`, applicatio
 and `COMMIT` or `ROLLBACK`, then releases it. Account for that checked-out client when sizing a
 shared pool. Do not release the client inside the callback; the exposed surface intentionally omits
 `release()`.
+
+Each `runs.wait(...)` poll is one independent app-scoped query. No connection or transaction stays
+checked out between polls. Large waiter populations still create query load, so include them in pool
+and database capacity planning; Durlo does not use `LISTEN/NOTIFY`, WebSockets, or a push service.
 
 ## Polling and latency
 
@@ -141,6 +154,17 @@ Definition versions are exact compatibility tokens. For a breaking change from v
 Manual retry preserves the original version. Restore matching code before retrying an old terminal
 run. A version bump does not change idempotency scope; an existing key still returns its original
 run.
+
+Package versions and resource compatibility versions are separate. Alpha package releases may make
+documented breaking changes only when changelog or migration notes call them out. Beginning with
+`1.0`, breaking documented exports, configuration, CLI behavior, supported Node.js/PostgreSQL
+ranges, or removal of a deprecated API requires the applicable later major release. Dropping a
+supported Node.js or PostgreSQL major is breaking.
+
+Never edit a released migration. Add a forward migration and document its rollout order. For
+`0009`, deploy schema first, then code that writes and reads output-kind metadata; old rows remain
+readable and new code treats absent metadata conservatively. Compatibility policy is not a
+production-support, SLA, or exactly-once promise.
 
 ## What to monitor
 

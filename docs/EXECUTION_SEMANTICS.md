@@ -17,6 +17,71 @@ This document describes the current public API and its deliberate pre-release bo
 - Durlo does not provide exactly-once effects, process isolation, deterministic replay, or a hosted
   control plane.
 
+## Supported package contract
+
+The package root entry points are allowlists. Anything not named here is internal and may move
+without notice.
+
+- `@durlo/core` runtime: `Durlo`, `Worker`, `DEFAULT_RETRY_POLICY`, `DEFAULT_DURLO_LIMITS`,
+  `DurloError`, `ValidationError`, `SerializationError`, `StorageLimitError`, `RunStateError`,
+  `AttemptTimeoutError`, `IdempotencyConflictError`, `RunWaitTimeoutError`, `RunNotFoundError`,
+  `RunFailedError`, `RunCancelledError`, `PermanentError`, and `RetryError`.
+- `@durlo/core` types: `DurationInput`, `FixedBackoffPolicy`, `ExponentialBackoffPolicy`,
+  `BackoffPolicy`, `RetryPolicy`, `RunOptions`, `DurloLimits`, `Logger`, `DurloOptions`,
+  `WorkerOptions`, `RunKind`, `RunStatus`, `TerminalRunStatus`, `RunRecord`, `RunHandle`,
+  `RunCreation`, `RunSummary`, `RunListOptions`, `RunListPage`, `JsonPrimitive`, `JsonValue`,
+  `SerializedError`, `UnavailableRunReason`, `UnavailableRun`, `WorkerCompatibilityReport`,
+  `RetentionCleanupOptions`, `RetentionCleanupResult`, `StepStatus`, `StepRecord`, `AttemptKind`,
+  `AttemptStatus`, `AttemptRecord`, `TimerStatus`, `TimerRecord`, `RunTimelineEventType`,
+  `RunTimelineEvent`, `RunDiagnostics`, `RunDetails`, `BacklogHealth`, `WorkerHealth`,
+  `RawPgTransactionClient`, `DurloTransaction`, `StandardSchemaResult`, `StandardSchema`,
+  `RunContext`, `AttemptContext`, `TaskContext`, `StepTools`, `WorkflowContext`,
+  `TaskDefinitionOptions`, `WorkflowDefinitionOptions`, `BatchItem`, `TaskDefinition`, and
+  `WorkflowDefinition`.
+- `@durlo/postgres` runtime: `PostgresAdapter`, `postgresAdapter`, and immutable `migrations`;
+  types: `PostgresAdapterOptions` and `PostgresTransactionClient`.
+- `@durlo/cli` runtime: `defineConfig`; types: `DurloConfig` and `DashboardOptions`. The `durlo`
+  executable, not programmatic helper functions, is the supported interface for `init`, `migrate`,
+  `worker`, and `dev`.
+
+`new Durlo(options)` is the application client constructor. `durlo.task(options)` and
+`durlo.workflow(options)` create definitions; their private handler registration is not an object
+field and cannot be forged by reproducing a public shape. Create workers with
+`durlo.worker(options)`; the exported `Worker` class identifies returned workers and remains usable
+with the official PostgreSQL adapter. `new PostgresAdapter(options)` and `postgresAdapter(options)`
+are equivalent construction forms. The generic adapter/provider protocol, codecs, normalization
+helpers, registered-definition internals, and private control signals are not public contracts.
+
+### Construction and configuration
+
+- `new Durlo({ id, adapter, logger?, defaultRetry?, defaultTimeout?, limits? })` validates the app
+  id, uses the official adapter, applies client defaults to newly created runs, and accepts
+  `logger: false` to disable structured logs. Limits may override any `DurloLimits` field.
+- `durlo.task({ id, version?, name?, schema?, retry?, timeout?, run })` and
+  `durlo.workflow(...)` default `version` to `"1"`. A task handler receives `(input, context)`; a
+  workflow handler receives `{ input, step, run, attempt, signal }`. Definition ids/versions must
+  be unique within one `Durlo` instance. `name` is descriptive and does not affect routing.
+- `durlo.worker({ tasks?, workflows?, concurrency?, pollInterval?, leaseDuration?, workerId? })`
+  registers genuine definitions. Concurrency defaults to 10, poll interval to one second, lease
+  duration to 30 seconds, and worker id to a UUID. `new Worker(appId, adapter, options, logger?,
+  limits?)` is the corresponding direct constructor for the official adapter.
+- `new PostgresAdapter(options)` and `postgresAdapter(options)` accept either `pg.PoolConfig` or
+  `{ pool }`. Configuration creates an owned pool; a supplied pool is borrowed. `migrate()` applies
+  immutable migrations and idempotent `close()` closes only an owned pool.
+- `defineConfig({ durlo, tasks?, workflows?, worker?, dashboard? })` preserves the typed CLI
+  configuration. Dashboard options are `host?` and `port?`; worker fields reuse `WorkerOptions`
+  except registrations come from the top-level lists.
+
+All public error classes extend `DurloError`. `DurloError`, `ValidationError`,
+`SerializationError`, `RunStateError`, and `AttemptTimeoutError` use the normal `Error` constructor.
+`StorageLimitError(message, limitName, actual, limit)` exposes its measurements;
+`IdempotencyConflictError(key, existingRunId, mismatches)` exposes conflict evidence;
+`RunWaitTimeoutError(runId, timeout)`, `RunNotFoundError(runId)`,
+`RunFailedError(runId, status, error)`, and `RunCancelledError(runId)` expose terminal wait data.
+Applications normally receive those errors rather than construct them. The two intended handler
+constructors are `PermanentError(message?, { cause? })` and the exact `RetryError` schedule unions
+documented below.
+
 ## Run creation
 
 `task.enqueue(input, options?)` creates a task run. `workflow.start(input, options?)` creates a
@@ -29,8 +94,17 @@ Supported options are `delay`, `runAt`, `attempts`, `backoff`, `idempotencyKey`,
 continuous high-priority work can starve lower priorities.
 
 If creation throws after an uncertain connection failure, use an idempotency key before retrying.
-The handle's output type is currently phantom: `runs.get()` returns a `RunRecord` whose output is
-`DurableValue` (JSON plus `Date`), and there is no public wait-for-result method.
+`runs.wait(handle, { signal?, timeout? })` retains the handle's `TOutput`. It polls app-scoped reads
+without holding a connection or transaction between polls. A supplied timeout is a positive,
+finite timer-compatible duration. Abort rejects with `signal.reason` when present, otherwise an
+`AbortError`. Settlement removes its timer and listener and begins no later reads.
+
+A completed run resolves to its decoded output. New rows persist internal output-kind metadata so a
+`void`/`undefined` handler resolves to JavaScript `undefined`, while an actual JSON `null` resolves
+to `null`. A legacy completed row without metadata returns its existing decoded output, including
+legacy `null`; Durlo does not guess from erased TypeScript generics. Failed and dead-lettered runs
+reject with `RunFailedError`, cancellation with `RunCancelledError`, missing or cleaned-up rows with
+`RunNotFoundError`, and wait timeout with `RunWaitTimeoutError`.
 
 ### Idempotency
 
@@ -168,9 +242,18 @@ Completed checkpoints are not downgraded by interruption handling.
 exponential from 10 seconds with factor 2 and jitter 0.2. Run options override definition options,
 which override client defaults.
 
-Handler errors, execution-time serialization failures, and timeouts all follow the same retry
-policy. There is currently no supported permanent-error, custom retry decision, `Retry-After`, or
-retry-at timestamp exception.
+Ordinary handler errors, execution-time serialization failures, and timeouts follow the configured
+retry policy. A genuine `PermanentError(message?, { cause? })` consumes the current failure and
+immediately sends a task to `dead_letter` or a workflow to `failed`. A genuine
+`RetryError({ after, message?, cause? })` or `RetryError({ at, message?, cause? })` exposes a
+normalized readonly `retryAt` and persists that exact next schedule. Past times are immediately
+eligible. Both controls persist their name, message, and serialized cause in run and active-step
+history subject to `maxErrorBytes`.
+
+Directed retry consumes the current failure and never resets or bypasses `attempts`. On exhaustion,
+the normal task/workflow terminal state wins over the requested time. Invalid or conflicting
+schedules fail in the constructor. Only exact library-created instances activate control behavior;
+matching names, lookalikes, subclasses, and invalid instances use ordinary retry handling.
 
 Task exhaustion becomes `dead_letter`; workflow exhaustion becomes `failed`. Manual retry is
 allowed only for those respective terminal states. It preserves history and schedules one more
@@ -231,9 +314,20 @@ change, deploy new-version workers, switch producers, and retain old workers unt
 finish. `worker.getCompatibilityReport()` is bounded and relative to one worker, so it does not
 prove fleet-wide unavailability.
 
+Resource versions are not npm/package semantic versions. Before `1.0`, documented APIs may break
+between alpha releases, and every break must appear in changelog or migration notes. Beginning with
+`1.0`, documented runtime/type exports, configuration, CLI behavior, and supported Node.js and
+PostgreSQL ranges follow Semantic Versioning. Breaking changes require a major release; deprecated
+APIs are removed only in a later major; dropping a supported Node.js or PostgreSQL major is
+breaking. Released migration files remain byte-for-byte immutable. Schema changes use forward,
+normally additive migrations, and each release must state its code/schema compatibility order.
+These compatibility promises do not imply production support or exactly-once execution.
+
 ## Reads and controls
 
 - `runs.get()` returns one app-scoped run or `null`.
+- `runs.wait(handle, { signal?, timeout? })` polls one typed handle to a terminal result or typed
+  terminal error without reserving a connection between reads.
 - `runs.list()` returns payload-free newest-first keyset pages; default 50, maximum 200.
 - `runs.getDetails()` returns one repeatable-read snapshot plus a derived timeline and diagnostics.
 - `runs.getBacklogHealth()` aggregates active state and lag for one app.
@@ -245,6 +339,13 @@ prove fleet-wide unavailability.
 - `worker.getCompatibilityReport()` returns at most 1,000 worker-relative unavailable runs.
 - `runs.cancel()` and `runs.retry()` perform app-scoped state transitions.
 - `runs.cleanup()` deletes bounded terminal history.
+
+All exported errors extend `DurloError`. `ValidationError`, `SerializationError`,
+`StorageLimitError`, `RunStateError`, `AttemptTimeoutError`, and `IdempotencyConflictError` describe
+creation, storage, state, execution, or idempotency failures. `RunWaitTimeoutError` has readonly
+`runId` and normalized `timeout`; `RunNotFoundError` and `RunCancelledError` have readonly `runId`;
+`RunFailedError` has readonly `runId`, terminal `status`, and structured stored `error`. Durlo does
+not reconstruct arbitrary stored `Error` subclasses.
 
 The timeline is derived from current durable records, not a complete event history. Its existing
 `step_attempt_stalled`, `step_attempt_timed_out`, and `step_attempt_cancelled` events come from the

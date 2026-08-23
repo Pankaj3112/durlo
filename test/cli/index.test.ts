@@ -175,6 +175,7 @@ describe("CLI shell", () => {
     const help = capture();
     expect(await runCli([], help)).toBe(0);
     expect(help.stdoutText()).toContain("durlo dev");
+    expect(help.stdoutText()).toContain("defineConfig");
 
     const invalid = capture();
     expect(await runCli(["unknown"], invalid)).toBe(1);

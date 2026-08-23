@@ -1,4 +1,4 @@
-import { Durlo } from "@durlo/core";
+import { Durlo, RetryError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -65,7 +65,12 @@ export const orderWorkflow = durlo.workflow<OrderInput, OrderOutput>({
         [run.id]
       );
       const attempt = result.rows[0]!.attempt_count;
-      if (attempt === 1) throw new Error("courier sandbox rejected its first request");
+      if (attempt === 1) {
+        throw new RetryError({
+          after: "400ms",
+          message: "courier sandbox requested a retry"
+        });
+      }
       return { provider: "Parcel Kite", bookingId: `PK-${order.id.slice(0, 8)}` };
     });
 

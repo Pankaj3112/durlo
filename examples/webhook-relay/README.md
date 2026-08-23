@@ -9,6 +9,11 @@ and sends the stable `Idempotency-Key` header to the destination. Durlo remains 
 destination that performs side effects must deduplicate that key because a worker can die after the
 HTTP request succeeds but before completion is persisted.
 
+A valid HTTP `Retry-After` header becomes a durable `RetryError` schedule. Other retryable responses
+use the configured exponential policy. Non-retryable 4xx responses use `PermanentError` and move
+the task directly to `dead_letter`; both controls still consume the current failure budget and keep
+their structured cause in history.
+
 ## Run locally
 
 Set the following environment variables:

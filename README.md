@@ -7,9 +7,9 @@ separate queue service.
 
 ## Project status
 
-Durlo is pre-release. The execution foundation is substantial, but input handling, public API
-cleanup, package metadata, and the production operating surface still have release-blocking work
-tracked in the [roadmap](docs/ROADMAP.md). The packages remain at
+Durlo is pre-release. The execution foundation and alpha public contract are implemented, but
+package metadata, publication, and the production operating surface still have release-blocking
+work tracked in the [roadmap](docs/ROADMAP.md). The packages remain at
 `0.0.0`; do not treat the current repository as a supported production release.
 
 The intended v1 scope is deliberately narrow:
@@ -61,11 +61,18 @@ const sendInvoice = durlo.task({
   }
 });
 
-const run = await sendInvoice.enqueue(
+const creation = await sendInvoice.enqueue(
   { invoiceId: "inv_42" },
   { idempotencyKey: "invoice:inv_42" }
 );
+
+const result = await durlo.runs.wait(creation.run, { timeout: "30s" });
 ```
+
+`runs.wait(handle, { signal?, timeout? })` preserves the handle's output type. It resolves `void`
+handlers to JavaScript `undefined` and actual JSON `null` to `null`; terminal failures reject with
+`RunFailedError`, cancellation with `RunCancelledError`, missing or cleaned-up rows with
+`RunNotFoundError`, and an elapsed wait timeout with `RunWaitTimeoutError`.
 
 With a Standard Schema, the creation input and handler input can be different. Durlo validates the
 external value once, persists the transformed output, and passes that output directly to the worker:
@@ -118,6 +125,12 @@ integration in v1.
 Calling `enqueue` or `workflow.start` only persists work. A separately running worker must register
 the matching definition and version before it can execute the run.
 
+Handlers may throw `PermanentError` to consume the current failure and stop automatic retries, or
+`RetryError({ after: "30s" })` / `RetryError({ at: retryAt })` to persist an intentional next retry
+time. Directed retries still consume the normal failure budget. Tasks end in `dead_letter` and
+workflows in `failed` when permanent or exhausted. Matching names, lookalikes, and subclasses do
+not activate these controls.
+
 ## Execution honesty
 
 Durlo is at-least-once. A worker can perform an external side effect and die before recording
@@ -141,9 +154,28 @@ known limitations. It is intentionally more conservative than the roadmap.
 - `durlo worker` to run registered definitions
 - `durlo dev` to migrate, run a worker, and serve the local dashboard
 
+The executable is the supported interface for those commands. `defineConfig` plus the
+`DurloConfig` and `DashboardOptions` types are the only supported programmatic `@durlo/cli`
+entry-point exports.
+
 The dashboard binds to `127.0.0.1:3210` by default. It has no authentication and exposes payloads
 plus cancel/retry controls. Keep it on loopback or place it behind an authenticated trusted proxy.
 It is not a production control plane.
+
+## Compatibility policy
+
+Definition `version` values are opaque resource-routing tokens and are independent of package
+versions. Change a definition version when persisted inputs, checkpoints, or behavior become
+incompatible, and keep matching workers until old active runs finish.
+
+Before `1.0`, documented APIs may break between alpha releases; every break must be called out in
+the changelog or migration notes. Beginning with `1.0`, documented runtime and type exports,
+configuration, CLI behavior, and supported Node.js/PostgreSQL ranges follow Semantic Versioning.
+Breaking changes require a major release, deprecated APIs are removed only in a later major, and
+dropping a supported Node.js or PostgreSQL major is breaking. Released migration files remain
+immutable; schema evolution uses forward additive migrations with release-specific code/schema
+compatibility guidance. None of these promises changes Durlo's current alpha or at-least-once
+status.
 
 ## Documentation
 

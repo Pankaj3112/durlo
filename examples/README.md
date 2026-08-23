@@ -28,3 +28,7 @@ checkpoint reuse, cancels a sleeping workflow, and removes its data afterward. N
 The examples deliberately include business-owned idempotency and durable application tables.
 Durlo's run idempotency prevents duplicate run rows while history is retained; it cannot make an
 HTTP call, publication, payment, or other external effect exactly once.
+
+Together they exercise typed result waiting, directed `RetryError` scheduling, permanent
+`PermanentError` outcomes, transaction-bound creation, ordinary retry, crash recovery,
+checkpoints, cancellation, and inspection through supported package entry points.
