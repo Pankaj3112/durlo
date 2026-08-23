@@ -94,6 +94,11 @@ Standard Schema may transform creation input before it is stored; an incompatibl
 persisted output requires a new resource version. Durlo does not rewrite old inputs or checkpoints
 during deployment, and workers trust persisted input rather than revalidating it.
 
+Persisted codec generations are separate internal routing compatibility. Existing PostgreSQL rows
+keep their legacy codec and resource version; new rows use a reserved storage token that maps back
+to the same public resource version. New workers claim both generations, while older workers cannot
+claim rows written with a codec they do not understand.
+
 ## Cancellation and timeout are cooperative
 
 Node.js cannot safely terminate arbitrary in-process JavaScript. Cancellation and timeout abort a

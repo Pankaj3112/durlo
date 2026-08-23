@@ -42,7 +42,8 @@ does not implement another execution state machine.
 
 The schema in `packages/postgres/src/migrations.ts` contains:
 
-- `durlo_runs`: scheduling state, current status, input/output/error, lease, and retained summary
+- `durlo_runs`: scheduling state, current status, input/output/error, lease, retained summary, and
+  internal serialization-generation routing
 - `durlo_steps`: workflow checkpoint state and result
 - `durlo_timers`: durable sleep state
 - `durlo_attempts`: run and step execution evidence

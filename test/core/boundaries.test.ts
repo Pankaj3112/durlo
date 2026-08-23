@@ -17,6 +17,7 @@ import {
 import type {
   CreateRunInput,
   DurloAdapter,
+  JsonValue,
   RunRecord,
   StepStatus,
   TransactionalDurloAdapter
@@ -256,16 +257,20 @@ describe("serialization boundaries", () => {
 
   it("supports repeated references, null prototypes, nested dates, and serialized Errors", () => {
     const shared = { value: 1 };
-    expect(serialize({ first: shared, second: shared })).toEqual({
+    expect(deserialize(serialize({ first: shared, second: shared }))).toEqual({
       first: { value: 1 },
       second: { value: 1 }
     });
     const nullPrototype = Object.assign(Object.create(null) as Record<string, unknown>, {
       value: true
     });
-    expect(serialize(nullPrototype)).toEqual({ value: true });
+    expect(deserialize(serialize(nullPrototype))).toEqual({ value: true });
     const error = new Error("boom", { cause: { code: 42 } });
-    expect(serialize(error)).toMatchObject({ name: "Error", message: "boom", cause: { code: 42 } });
+    expect(deserialize(serialize(error))).toMatchObject({
+      name: "Error",
+      message: "boom",
+      cause: { code: 42 }
+    });
     expect(deserialize(serialize({ when: new Date("2026-01-02T03:04:05.000Z") }))).toEqual({
       when: new Date("2026-01-02T03:04:05.000Z")
     });
@@ -273,6 +278,117 @@ describe("serialization boundaries", () => {
       "$durlo.date": "2026-01-02T03:04:05.000Z",
       extra: 1
     });
+  });
+
+  it("round-trips metadata-looking objects, reserved keys, and dates through JSON normalization", () => {
+    const literal = JSON.parse(
+      '{"$durlo.date":"2026-01-02T03:04:05.000Z","$durlo":["date","literal"],"__proto__":{"polluted":true},"constructor":"constructor","prototype":"prototype","":"empty","a.b":"dotted","💾":"unicode"}'
+    ) as Record<string, unknown>;
+    const value = {
+      literal,
+      nested: [literal, { value: new Date("2026-01-02T03:04:05.000Z") }]
+    };
+
+    const normalized = JSON.parse(JSON.stringify(serialize(value)));
+    const decoded = deserialize(normalized) as typeof value;
+
+    expect(decoded).toEqual({
+      literal,
+      nested: [literal, { value: new Date("2026-01-02T03:04:05.000Z") }]
+    });
+    expect(Object.prototype.hasOwnProperty.call(decoded.literal, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(decoded.literal)).toBe(Object.prototype);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(deserialize({ "$durlo.date": "2026-01-02T03:04:05.000Z" })).toEqual(
+      new Date("2026-01-02T03:04:05.000Z")
+    );
+  });
+
+  it("uses versioned date and object envelopes and rejects malformed envelopes as literals", () => {
+    const date = new Date("2026-01-02T03:04:05.000Z");
+    expect(serialize(date)).toEqual({ $durlo: [2, "date", date.toISOString()] });
+    expect(serialize({ value: 1 })).toEqual({
+      $durlo: [2, "object", [["value", 1]]]
+    });
+
+    const malformed = [
+      { $durlo: [2, "date"] },
+      { $durlo: [1, "date", date.toISOString()] },
+      { $durlo: [2, "date", 42] },
+      { $durlo: [2, "unknown", "value"] },
+      { $durlo: [2, "object", "value"] },
+      { $durlo: [2, "object", [["missing-value"]]] },
+      { $durlo: [2, "object", [[42, "value"]]] },
+      { $durlo: [2, "date", date.toISOString()], extra: true }
+    ] as JsonValue[];
+    for (const value of malformed) expect(deserialize(value)).toEqual(value);
+
+    const decoded = deserialize({
+      $durlo: [
+        2,
+        "object",
+        [
+          ["__proto__", { polluted: true }],
+          ["constructor", "constructor"]
+        ]
+      ]
+    } as JsonValue) as Record<string, unknown>;
+    expect(Object.keys(decoded)).toEqual(["__proto__", "constructor"]);
+    expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(decoded, "__proto__")).toBe(true);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(deserialize(date as unknown as JsonValue)).toBe(date);
+  });
+
+  it("uses the persisted codec version to distinguish legacy data from v2 envelopes", () => {
+    const date = new Date("2026-01-02T03:04:05.000Z");
+    const envelopeLookalike = { $durlo: [2, "date", date.toISOString()] } as JsonValue;
+    const legacyValue = { envelopeLookalike, date };
+
+    expect(deserialize(envelopeLookalike, 1)).toEqual(envelopeLookalike);
+    expect(deserialize({ "$durlo.date": date.toISOString() }, 2)).toEqual({
+      "$durlo.date": date.toISOString()
+    });
+    expect(deserialize(serialize(legacyValue, 1), 1)).toEqual(legacyValue);
+  });
+
+  it("keeps array paths and conditional Error fields precise", () => {
+    expect(() => serialize([{ nested: Number.NaN }])).toThrow(
+      "value[0].nested contains a non-finite"
+    );
+    const withStack = new Error("with stack");
+    expect(serializeError(withStack)).toMatchObject({
+      name: "Error",
+      message: "with stack",
+      stack: withStack.stack
+    });
+    expect(serializeError(withStack)).not.toHaveProperty("cause");
+  });
+
+  it.each([
+    ["null", null],
+    ["string", "text"],
+    ["number", 42.5],
+    ["boolean", true],
+    ["empty array", []],
+    ["nested array", [1, { value: "two" }, [false]]],
+    ["empty object", {}]
+  ])("round-trips each JSON shape: %s", (_name, value) => {
+    expect(deserialize(JSON.parse(JSON.stringify(serialize(value))))).toEqual(value);
+  });
+
+  it("measures limits against the collision-safe encoded representation", async () => {
+    const adapter = validationAdapter();
+    const durlo = new Durlo({ id: "encoded-limit", adapter, limits: { maxInputBytes: 3 } });
+    const task = durlo.task({ id: "encoded-limit-task", run: async () => undefined });
+
+    expect(JSON.stringify({})).toHaveLength(2);
+    expect(jsonByteSize(serialize({}))).toBeGreaterThan(3);
+    await expect(task.enqueue({})).rejects.toMatchObject({
+      name: "StorageLimitError",
+      limitName: "maxInputBytes"
+    });
+    expect(adapter.created).toHaveLength(0);
   });
 
   it("preserves Error details and safely falls back for unsupported causes", () => {

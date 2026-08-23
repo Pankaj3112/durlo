@@ -1,5 +1,5 @@
 import { LostLeaseError, ValidationError, WorkflowSleepError } from "./errors.js";
-import { deserialize, serialize } from "./serialization.js";
+import { CURRENT_SERIALIZATION_VERSION, deserialize, serialize } from "./serialization.js";
 import { assertByteLimit, serializeErrorWithinLimit } from "./limits.js";
 import type { ClaimedRun, DurloAdapter, PersistedRunLimits, StepTools } from "./types.js";
 import { parseDuration, validateId } from "./validation.js";
@@ -34,6 +34,7 @@ export function createStepTools(
   };
 
   const ownership = { runId: run.id, workerId: run.lockedBy, leaseToken: run.leaseToken };
+  const serializationVersion = run.serializationVersion ?? CURRENT_SERIALIZATION_VERSION;
 
   return {
     async run<T>(stepId: string, fn: () => Promise<T> | T): Promise<T> {
@@ -42,21 +43,43 @@ export function createStepTools(
         if (await adapter.getTimer(run.id, stepId)) {
           throw new ValidationError(`step '${stepId}' is already used by a sleep`);
         }
-        const existing = await adapter.getStep(run.id, stepId);
-        if (existing?.status === "completed") return deserialize(existing.result!) as T;
-        const step = await adapter.startStep({
-          ...ownership,
-          stepId,
-          maxAttempts: run.maxAttempts,
-          maxSteps: limits.maxWorkflowSteps
-        });
-        if (step.status === "completed") return deserialize(step.result!) as T;
+        const rawExisting = adapter.getStepRaw
+          ? await adapter.getStepRaw(run.id, stepId)
+          : undefined;
+        const existing = rawExisting ?? (await adapter.getStep(run.id, stepId));
+        if (existing?.status === "completed") {
+          return (
+            rawExisting ? deserialize(rawExisting.result!, serializationVersion) : existing.result
+          ) as T;
+        }
+        const rawStep = adapter.startStepRaw
+          ? await adapter.startStepRaw({
+              ...ownership,
+              stepId,
+              maxAttempts: run.maxAttempts,
+              maxSteps: limits.maxWorkflowSteps
+            })
+          : undefined;
+        const step =
+          rawStep ??
+          (await adapter.startStep({
+            ...ownership,
+            stepId,
+            maxAttempts: run.maxAttempts,
+            maxSteps: limits.maxWorkflowSteps
+          }));
+        if (step.status === "completed") {
+          return (rawStep ? deserialize(rawStep.result!, serializationVersion) : step.result) as T;
+        }
 
         insideStepCallback = true;
         try {
           const result = await fn();
           insideStepCallback = false;
-          const serializedResult = serialize(result === undefined ? null : result);
+          const serializedResult = serialize(
+            result === undefined ? null : result,
+            serializationVersion
+          );
           assertByteLimit(
             serializedResult,
             "maxStepResultBytes",
@@ -75,7 +98,7 @@ export function createStepTools(
             await adapter.failStep({
               ...ownership,
               stepId,
-              error: serializeErrorWithinLimit(error, limits.maxErrorBytes)
+              error: serializeErrorWithinLimit(error, limits.maxErrorBytes, serializationVersion)
             });
           } catch (writeError) {
             if (writeError instanceof LostLeaseError) throw writeError;

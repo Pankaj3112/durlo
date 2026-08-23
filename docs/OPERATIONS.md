@@ -50,6 +50,11 @@ attributable stale step history from the matching run attempt and lease. It pres
 active step owned by the parent run's lease and any later completed checkpoint. The constraint
 change and backfill take ordinary table locks, so assess the affected table sizes before rollout.
 
+Migration `0006_serialization_versions` permits the reserved PostgreSQL resource-version token used
+to route codec-v2 runs. It does not rewrite existing rows. Apply it first, then deploy new workers,
+then switch producers to the new package. New workers continue to claim legacy rows; old workers
+continue legacy work but cannot claim newly written codec-v2 rows.
+
 The runtime role requires normal read/write access to Durlo tables and sequences but should not own
 the schema.
 
@@ -110,6 +115,10 @@ through the outstanding `worker.start()` promise. Allow enough process terminati
 longest cooperative handler.
 
 ## Deployment compatibility
+
+For a Durlo package rollout that introduces a new persisted codec, apply its migration and deploy
+new workers before new producers. Codec routing prevents old workers from claiming rows they cannot
+decode while allowing new workers to finish legacy work.
 
 Definition versions are exact compatibility tokens. For a breaking change from version `1` to `2`:
 

@@ -198,5 +198,28 @@ export const migrations: readonly Migration[] = [
             and active_attempt.status = 'running'
         );
     `
+  },
+  {
+    version: "0006_serialization_versions",
+    sql: `
+      alter table durlo_runs
+        drop constraint durlo_runs_resource_version_check;
+      alter table durlo_runs
+        add constraint durlo_runs_resource_version_check
+        check (
+          (
+            char_length(resource_version) >= 1
+            and char_length(resource_version) <= 128
+            and resource_version = btrim(resource_version)
+          )
+          or
+          (
+            left(resource_version, 24) = ' @durlo/serialization/2:'
+            and char_length(resource_version) >= 25
+            and char_length(resource_version) <= 152
+            and substring(resource_version from 25) = btrim(substring(resource_version from 25))
+          )
+        );
+    `
   }
 ];
