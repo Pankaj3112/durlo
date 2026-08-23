@@ -1,0 +1,101 @@
+name: Release alpha
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact vX.Y.Z-alpha.N version to audit without publishing
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Audit and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: durlo
+          POSTGRES_PASSWORD: durlo
+          POSTGRES_DB: durlo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U durlo -d durlo_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      DURLO_TEST_DATABASE_URL: postgres://durlo:durlo@127.0.0.1:5432/durlo_test
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+    steps:
+      - name: Checkout the complete tag history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.19.0
+
+      - name: Frozen dependency install
+        run: pnpm install --frozen-lockfile
+
+      - name: Complete release audit
+        run: pnpm test:audit
+
+      - name: Build package and registry plan
+        run: node scripts/release.mjs audit --tag "${RELEASE_TAG}"
+
+      - name: Publish missing matching artifacts in dependency order
+        if: github.event_name == 'push'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: node scripts/release.mjs publish --tag "${RELEASE_TAG}"
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: release-evidence
+          retention-days: 90
+
+      - name: Create or refresh GitHub prerelease
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
+            gh release upload "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json --clobber
+          else
+            gh release create "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json --verify-tag --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
+          fi

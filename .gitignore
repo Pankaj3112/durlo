@@ -7,3 +7,4 @@ packages/postgres/src/*.mutation.ts
 .stryker-tmp
 .DS_Store
 .env
+release-evidence

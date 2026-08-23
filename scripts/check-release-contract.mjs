@@ -130,6 +130,41 @@ assert(
   "nightly must run the deployable reference applications"
 );
 
+const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+assert(ci.includes("pnpm test:audit"), "pull-request CI must run the complete release audit");
+
+const releaseWorkflow = await readFile(
+  new URL("../.github/workflows/release.yml", import.meta.url),
+  "utf8"
+);
+for (const requirement of [
+  'tags: ["v*"]',
+  "workflow_dispatch:",
+  "id-token: write",
+  "package-manager-cache: false",
+  "pnpm install --frozen-lockfile",
+  "pnpm test:audit",
+  "node scripts/release.mjs audit",
+  "node scripts/release.mjs publish",
+  "NPM_BOOTSTRAP_TOKEN",
+  "--verify-tag",
+  "--prerelease"
+]) {
+  assert(releaseWorkflow.includes(requirement), `release workflow must include '${requirement}'`);
+}
+assert(!/secrets\.NPM_TOKEN\b/.test(releaseWorkflow), "normal releases must not use an npm token");
+
+const operations = await readFile(new URL("../docs/OPERATIONS.md", import.meta.url), "utf8");
+for (const requirement of [
+  "First-release bootstrap",
+  "Trusted publisher transition",
+  "Partial-publication recovery",
+  "Next version",
+  "private vulnerability reporting"
+]) {
+  assert(operations.includes(requirement), `operations guide must include '${requirement}'`);
+}
+
 const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 assert(readme.includes("Node.js 22 through 26"), "README must declare Node boundaries");
 assert(readme.includes("PostgreSQL 14 through 18"), "README must declare PostgreSQL boundaries");

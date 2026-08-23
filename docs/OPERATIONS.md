@@ -17,6 +17,102 @@ CI runs Node 22 with PostgreSQL 17. Nightly tests the boundary cells Node 22, 24
 PostgreSQL 14 and 18. These are the published alpha's installation/runtime boundaries, not a
 production support commitment.
 
+## Release operations
+
+Releases are one-version, tag-driven publications of `@durlo/core`, `@durlo/postgres`, and
+`@durlo/cli` in that dependency order. `.github/workflows/release.yml` is the only supported
+publisher. It uses a GitHub-hosted runner, npm trusted publishing/OIDC, and npm provenance; local
+checkouts never publish.
+
+Publication, tag creation, npm or GitHub trust/secret changes, GitHub release creation, and enabling
+private vulnerability reporting are maintainer-authorized external actions. Preparing or merging a
+release-readiness pull request does not authorize any of them.
+
+### Maintainer setup and dry run
+
+The public repository must retain its history and MIT license. Enable GitHub private vulnerability
+reporting in the repository Security settings and confirm that the private report form named in
+`SECURITY.md` is visible. Do not add a public security email or inferred personal contact.
+
+Before a tag exists, run the release workflow with `workflow_dispatch` and an exact
+`vX.Y.Z-alpha.N` input. A dispatch runs a frozen install, `pnpm test:audit`, package inventories,
+tarball construction, and the registry compatibility plan. Dispatches cannot execute the publish
+or GitHub-release steps. Download and inspect the retained `release-*` evidence artifact; every
+package inventory must contain only its README, MIT license, declarations, runtime files, package
+manifest, and the CLI binary/chunk where applicable.
+
+The version must agree across the root, all public package manifests, exact internal dependency
+pins, lockfile, changelog, and tag. The publishing tag must be annotated and identify the reviewed
+merge commit. Creating and pushing that tag requires explicit maintainer authorization:
+
+```bash
+git tag -a v0.1.0-alpha.0 <reviewed-commit> -m "Durlo 0.1.0-alpha.0"
+git push origin v0.1.0-alpha.0
+```
+
+Do not move, replace, or force-push a release tag.
+
+### First-release bootstrap
+
+The three package records do not exist before the first release, so trusted publishers cannot yet
+be attached to them. Immediately before an explicitly authorized first tag, a maintainer may create
+one short-lived, least-privilege npm granular access token limited to the `durlo` organization and
+package creation/publish. Store it only as the GitHub Actions secret `NPM_BOOTSTRAP_TOKEN`; never put
+it in a local environment file, command argument, repository file, workflow log, or artifact.
+
+The ordinary tag workflow still performs the complete audit, produces provenance, compares local
+tarball integrity with any existing registry artifact, and publishes core, Postgres, then CLI. npm
+versions are immutable, so a matching published prefix is skipped on rerun and a mismatched version
+is a hard failure. Do not manually publish around a failed workflow.
+
+### Trusted publisher transition
+
+Immediately after all three first-release artifacts exist:
+
+1. Configure a GitHub Actions trusted publisher on each npm package with organization/user
+   `Pankaj3112`, repository `durlo`, workflow filename `release.yml`, and `npm publish` permission.
+2. Revoke the bootstrap granular token.
+3. Delete the `NPM_BOOTSTRAP_TOKEN` Actions secret.
+4. Confirm all three package settings show the same trusted publisher and no bootstrap credential
+   remains.
+
+Record proof of the three trust settings, token revocation, and secret removal outside public logs
+that could expose credential material. npm requires the package to exist before this trust can be
+configured. The workflow filename and repository values are case-sensitive.
+
+### Normal OIDC release
+
+Every later release uses the same annotated-tag workflow with no npm token. GitHub grants
+`id-token: write`; npm 11.19.0 exchanges the GitHub OIDC identity for short-lived publish authority
+and automatically emits provenance for this public repository and its public packages. The
+workflow retains `--provenance` and `--access public` as explicit release invariants.
+
+After publication, the workflow installs exact registry versions into clean ESM, CommonJS, and
+strict TypeScript consumers, exercises the CLI and migration inventory, runs the published-package
+quickstart, and creates or refreshes the matching GitHub prerelease. Verify the npm provenance UI,
+package metadata and dependency links, workflow run, annotated tag, prerelease, and retained
+evidence before closing the release issue.
+
+### Partial-publication recovery
+
+If publication stops after core or Postgres, preserve the tag and rerun the failed Actions run. The
+release plan fetches each exact registry version, compares its immutable SHA-512 integrity and
+internal dependencies, skips a matching dependency-ordered prefix, and continues with the first
+missing package. It fails with actionable output when an artifact differs or when a later package
+exists without an earlier dependency. Never unpublish, overwrite, retag, or bypass the plan.
+
+If registry propagation delays verification, wait and rerun the same workflow. If an artifact is
+mismatched or publication order is incompatible, stop: resolution requires a new version and a
+documented compatibility decision.
+
+### Next version
+
+For the next alpha, update the root and all three public manifests together, update every internal
+`workspace:<exact-version>` dependency, regenerate the lockfile, add a changelog entry, and update
+owned documentation. Run `pnpm test:audit` and the workflow dispatch dry run from the reviewed
+commit. After merge and fresh authorization, create one new annotated matching tag; never reuse an
+npm name/version or old Git tag.
+
 ## Process layout
 
 Use separate application, migration, and worker processes:
