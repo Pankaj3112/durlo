@@ -500,6 +500,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     );
     expect(equivalentRetry).toMatchObject({ run: { id: equivalent.run.id }, created: false });
 
+    const nullInput = await task.enqueue(null, { idempotencyKey: "canonical-null-input" });
+    const nullInputRetry = await task.enqueue(null, { idempotencyKey: "canonical-null-input" });
+    expect(nullInputRetry).toMatchObject({ run: { id: nullInput.run.id }, created: false });
+
     await expectConflict("input-mismatch", { a: 9 }, {}, ["input"]);
     await expectConflict("options-mismatch", { a: 1, b: 2 }, { priority: 2 }, [
       "execution_options"
@@ -509,7 +513,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres integration", (
     const legacy = await task.enqueue({ a: 1, b: 2 }, { idempotencyKey: "legacy-key" });
     await adapter.pool.query(
       `update durlo_runs
-       set idempotency_resource_version = null,
+       set idempotency_metadata_version = null,
+           idempotency_resource_version = null,
            idempotency_input_json = null,
            idempotency_execution_options_json = null,
            idempotency_schedule_json = null

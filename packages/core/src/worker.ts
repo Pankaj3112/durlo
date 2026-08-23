@@ -132,8 +132,6 @@ export class Worker {
     this.started = true;
     this.claimFailures = 0;
     this.timerFailures = 0;
-    this.persistenceFailures = 0;
-    this.lastError = null;
     const stopController = new AbortController();
     this.stopController = stopController;
     this.log("info", "worker.started", { concurrency: this.concurrency });

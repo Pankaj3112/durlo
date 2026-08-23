@@ -116,6 +116,7 @@ type RunRow = QueryResultRow & {
   completed_at: Date | null;
   cancelled_at: Date | null;
   created?: boolean;
+  idempotency_metadata_version?: number | null;
   idempotency_resource_version?: string | null;
   idempotency_input_json?: JsonValue | null;
   idempotency_execution_options_json?: JsonValue | null;
@@ -387,7 +388,7 @@ const ATTEMPT_COLUMNS = `
   started_at, completed_at
 `;
 const IDEMPOTENCY_RUN_COLUMNS = `
-  ${RUN_COLUMNS}, idempotency_resource_version, idempotency_input_json,
+  ${RUN_COLUMNS}, idempotency_metadata_version, idempotency_resource_version, idempotency_input_json,
   idempotency_execution_options_json, idempotency_schedule_json
 `;
 
@@ -422,13 +423,7 @@ function canonicalJson(value: unknown): string {
 }
 
 function idempotencyMismatches(input: CreateRunInput, row: RunRow): IdempotencyMismatch[] {
-  if (
-    row.idempotency_resource_version === null ||
-    row.idempotency_resource_version === undefined ||
-    row.idempotency_input_json == null ||
-    row.idempotency_execution_options_json == null ||
-    row.idempotency_schedule_json == null
-  ) {
+  if (row.idempotency_metadata_version !== 1) {
     return ["legacy_unverifiable"];
   }
   const mismatches: IdempotencyMismatch[] = [];
@@ -1564,11 +1559,11 @@ export class PostgresAdapter implements DurloAdapter {
         insert into durlo_runs (
           id, app_id, kind, resource_id, resource_version, status, input_json, options_json,
           idempotency_key, priority, scheduled_at, max_attempts,
-          idempotency_resource_version, idempotency_input_json,
+          idempotency_metadata_version, idempotency_resource_version, idempotency_input_json,
           idempotency_execution_options_json, idempotency_schedule_json
         ) values (
           $1, $2, $3, $4, $5, 'pending', $6::jsonb, $7::jsonb, $8, $9, $10, $11,
-          $12, $13::jsonb, $14::jsonb, $15::jsonb
+          $12, $13, $14::jsonb, $15::jsonb, $16::jsonb
         )
         on conflict (app_id, kind, resource_id, idempotency_key)
           where idempotency_key is not null
@@ -1587,6 +1582,7 @@ export class PostgresAdapter implements DurloAdapter {
         input.priority,
         input.scheduledAt,
         input.maxAttempts,
+        1,
         metadata.resourceVersion,
         JSON.stringify(metadata.input),
         JSON.stringify(metadata.executionOptions),

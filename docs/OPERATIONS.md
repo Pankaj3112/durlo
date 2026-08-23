@@ -60,6 +60,9 @@ schedule-intent, and resource-version fields used to verify compatible idempoten
 rows without those fields are intentionally not guessed to be compatible; reuse reports
 `legacy_unverifiable` and makes no mutation.
 
+Migration `0008_idempotency_metadata_presence` distinguishes complete comparison metadata from SQL
+`NULL` and JSONB `null`, so a new run whose durable input is `null` remains idempotently reusable.
+
 The runtime role requires normal read/write access to Durlo tables and sequences but should not own
 the schema.
 

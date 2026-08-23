@@ -513,6 +513,42 @@ describe("worker lifecycle", () => {
     });
   });
 
+  it("preserves unresolved persistence health across worker restart", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "restart-persistence-task", run: async () => "done" });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+    adapter.completeRun = vi.fn(async () => {
+      throw new Error("completion write failed");
+    });
+    adapter.failRun = vi.fn(async () => {
+      throw new Error("failure write failed");
+    });
+
+    const worker = durlo.worker({ tasks: [task], workerId: "persistence-worker" });
+    await expect(worker.runOnce()).rejects.toThrow("failure write failed");
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: false,
+        persistenceFailures: expect.any(Number),
+        lastError: { message: "failure write failed" }
+      }
+    });
+
+    adapter.claimRuns = vi.fn(async () => {
+      worker.stop();
+      return [];
+    });
+    await expect(worker.start()).resolves.toBeUndefined();
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: false,
+        persistenceFailures: expect.any(Number),
+        lastError: { message: "failure write failed" }
+      }
+    });
+  });
+
   it("clears persistence failures after a confirmed release", async () => {
     const adapter = createWorkerAdapter();
     const durlo = new Durlo({ id: "worker-tests", adapter });

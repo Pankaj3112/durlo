@@ -271,7 +271,8 @@ function exportAssertions(format) {
       "0004_observability_reads",
       "0005_truthful_step_interruptions",
       "0006_serialization_versions",
-      "0007_idempotency_comparison_metadata"
+      "0007_idempotency_comparison_metadata",
+      "0008_idempotency_metadata_presence"
     ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
     if (cli.cliPackageName !== "@durlo/cli") throw new Error("missing ${format} CLI marker");
   `;

@@ -61,7 +61,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0004_observability_reads", count: "1" },
         { version: "0005_truthful_step_interruptions", count: "1" },
         { version: "0006_serialization_versions", count: "1" },
-        { version: "0007_idempotency_comparison_metadata", count: "1" }
+        { version: "0007_idempotency_comparison_metadata", count: "1" },
+        { version: "0008_idempotency_metadata_presence", count: "1" }
       ]);
 
       const tables = await admin.pool.query<{ count: string }>(
@@ -111,7 +112,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0004_observability_reads" },
         { version: "0005_truthful_step_interruptions" },
         { version: "0006_serialization_versions" },
-        { version: "0007_idempotency_comparison_metadata" }
+        { version: "0007_idempotency_comparison_metadata" },
+        { version: "0008_idempotency_metadata_presence" }
       ]);
     } finally {
       await adapter.close();
@@ -151,7 +153,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0004_observability_reads" },
         { version: "0005_truthful_step_interruptions" },
         { version: "0006_serialization_versions" },
-        { version: "0007_idempotency_comparison_metadata" }
+        { version: "0007_idempotency_comparison_metadata" },
+        { version: "0008_idempotency_metadata_presence" }
       ]);
     } finally {
       await adapter.close();
@@ -204,7 +207,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       const versions = await adapter.pool.query<{ version: string }>(
         "select version from durlo_schema_migrations order by version"
       );
-      expect(versions.rows.at(-1)).toEqual({ version: "0007_idempotency_comparison_metadata" });
+      expect(versions.rows.at(-1)).toEqual({ version: "0008_idempotency_metadata_presence" });
     } finally {
       await adapter.close();
     }
@@ -436,7 +439,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("7");
+      expect(applied.rows[0]?.count).toBe("8");
     } finally {
       await adapter.close();
     }

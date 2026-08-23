@@ -181,10 +181,11 @@ budget. Consequently `context.attempt.number` can exceed `context.attempt.maxAtt
 is a claim count and the latter a failure budget.
 
 All timer-backed durations are finite and bounded by `2_147_483_647` milliseconds, the safe
-Node.js timer range. Poll and lease intervals and retry backoff must be greater than zero; schedule
-`delay: 0` remains valid and means immediate execution. Exponential retry calculation saturates at
-the timer bound without overflowing. Durations larger than the valid JavaScript date range and
-invalid `runAt` values are rejected before persistence.
+Node.js timer range. Poll and lease intervals and retry backoff must be greater than zero; other
+positive timer durations must be at least 1 millisecond. Schedule `delay: 0` remains valid and
+means immediate execution. Exponential retry calculation saturates at the timer bound without
+overflowing. Durations larger than the valid JavaScript date range and invalid `runAt` values are
+rejected before persistence.
 
 ## Timeouts, cancellation, and user code
 

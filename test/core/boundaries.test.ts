@@ -141,6 +141,8 @@ describe("duration and id boundaries", () => {
     expect(() => parseDuration(MAX_DATE_MS + 1)).toThrow("valid JavaScript date");
     expect(() => parseDuration("100000000000d")).toThrow("valid JavaScript date");
     expect(() => parseTimerDuration(MAX_TIMER_DELAY_MS + 1)).toThrow("Node.js timer");
+    expect(() => parseTimerDuration(0.5)).toThrow("zero or at least 1 millisecond");
+    expect(() => parseTimerDuration("0.5ms")).toThrow("zero or at least 1 millisecond");
     expect(() => parseTimerDuration(0, "poll interval", { allowZero: false })).toThrow(
       "greater than zero"
     );

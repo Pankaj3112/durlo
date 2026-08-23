@@ -231,5 +231,12 @@ export const migrations: readonly Migration[] = [
         add column idempotency_execution_options_json jsonb,
         add column idempotency_schedule_json jsonb;
     `
+  },
+  {
+    version: "0008_idempotency_metadata_presence",
+    sql: `
+      alter table durlo_runs
+        add column idempotency_metadata_version integer;
+    `
   }
 ];

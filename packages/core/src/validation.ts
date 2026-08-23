@@ -41,6 +41,9 @@ export function parseTimerDuration(
       `${label} must be at most ${MAX_TIMER_DELAY_MS} milliseconds for a Node.js timer`
     );
   }
+  if (milliseconds > 0 && milliseconds < 1) {
+    throw new ValidationError(`${label} must be zero or at least 1 millisecond`);
+  }
   if (options.allowZero === false && milliseconds === 0) {
     throw new ValidationError(`${label} must be greater than zero`);
   }
