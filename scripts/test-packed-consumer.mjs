@@ -77,6 +77,21 @@ try {
 
       const cjs = createRequire(import.meta.url)("@durlo/core");
       const now = new Date("2026-08-23T00:00:00.000Z");
+      if (esm.Durlo !== cjs.Durlo || esm.PermanentError !== cjs.PermanentError) {
+        throw new Error("ESM and CommonJS did not load the canonical core implementation");
+      }
+      if (globalThis[Symbol.for("@durlo/core/private-registry/v1")] !== undefined) {
+        throw new Error("core exposed its private provenance registry globally");
+      }
+
+      const forgedTask = { id: "forged", version: "1", kind: "task", options: {} };
+      let rejectedForgery = false;
+      try {
+        new esm.Worker("mixed-formats", {}, { tasks: [forgedTask] });
+      } catch {
+        rejectedForgery = true;
+      }
+      if (!rejectedForgery) throw new Error("worker accepted a forged task definition");
 
       async function runCrossFormatOutcome(id, createError) {
         let failure;

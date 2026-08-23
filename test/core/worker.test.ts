@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   AttemptTimeoutError,
@@ -809,6 +810,10 @@ describe("explicit handler outcomes", () => {
       for (const at of [null, true, false, [], {}]) {
         expect(() => new RetryError({ at } as never)).toThrow(ValidationError);
       }
+      const crossRealmDate = runInNewContext('new Date("2026-08-24T00:00:00.000Z")') as Date;
+      expect(new RetryError({ at: crossRealmDate }).retryAt).toEqual(
+        new Date("2026-08-24T00:00:00.000Z")
+      );
       expect(() => new RetryError({ after: -1 })).toThrow(ValidationError);
     } finally {
       vi.useRealTimers();

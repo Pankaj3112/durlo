@@ -1,7 +1,17 @@
 import { DurloError, ValidationError } from "./errors.js";
-import { privateRegistry } from "./private-registry.js";
 import type { DurationInput } from "./types.js";
 import { parseDuration } from "./validation.js";
+
+const permanentErrors = new WeakSet<object>();
+const retryErrors = new WeakSet<object>();
+
+function dateTimestamp(value: unknown): number | null {
+  try {
+    return Date.prototype.getTime.call(value) as number;
+  } catch {
+    return null;
+  }
+}
 
 export class PermanentError extends DurloError {
   override readonly name = "PermanentError";
@@ -11,7 +21,7 @@ export class PermanentError extends DurloError {
     const hasCause = Object.prototype.hasOwnProperty.call(options, "cause");
     super(message, hasCause ? { cause: options.cause } : undefined);
     if (hasCause) this.cause = options.cause;
-    privateRegistry.permanentErrors.set(this, PermanentError);
+    permanentErrors.add(this);
   }
 }
 
@@ -46,35 +56,34 @@ export class RetryError extends DurloError {
     super(options.message ?? "", hasCause ? { cause: options.cause } : undefined);
     if (hasCause) this.cause = options.cause;
     const at = (options as RetryAtOptions).at;
-    if (hasAt && !(at instanceof Date) && typeof at !== "string" && typeof at !== "number") {
+    const atTimestamp = hasAt ? dateTimestamp(at) : null;
+    if (hasAt && atTimestamp === null && typeof at !== "string" && typeof at !== "number") {
       throw new ValidationError("retry time must be a Date, string, or number");
     }
     const retryAt = hasAfter
       ? new Date(Date.now() + parseDuration((options as RetryAfterOptions).after, "retry delay"))
-      : new Date(at);
+      : new Date(atTimestamp ?? (at as string | number));
     if (!Number.isFinite(retryAt.getTime())) {
       throw new ValidationError("retry time must be a valid date");
     }
     this.retryAt = retryAt;
-    privateRegistry.retryErrors.set(this, RetryError);
+    retryErrors.add(this);
   }
 }
 
 export function isPermanentError(error: unknown): error is PermanentError {
-  if (!error || typeof error !== "object") return false;
-  const constructor = privateRegistry.permanentErrors.get(error);
-  return constructor !== undefined && Object.getPrototypeOf(error) === constructor.prototype;
+  return (
+    error instanceof PermanentError &&
+    Object.getPrototypeOf(error) === PermanentError.prototype &&
+    permanentErrors.has(error)
+  );
 }
 
 export function isRetryError(error: unknown): error is RetryError {
-  if (!error || typeof error !== "object") return false;
-  const constructor = privateRegistry.retryErrors.get(error);
   return (
-    constructor !== undefined &&
-    Object.getPrototypeOf(error) === constructor.prototype &&
-    error instanceof Error &&
-    "retryAt" in error &&
-    error.retryAt instanceof Date &&
+    error instanceof RetryError &&
+    Object.getPrototypeOf(error) === RetryError.prototype &&
+    retryErrors.has(error) &&
     Number.isFinite(error.retryAt.getTime())
   );
 }
