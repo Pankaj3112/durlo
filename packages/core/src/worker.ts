@@ -101,13 +101,13 @@ export class Worker {
 
   constructor(
     appId: string,
-    adapter: DurloAdapter,
+    adapter: object,
     options: WorkerOptions,
     logger?: Logger,
     limits: DurloLimits = DEFAULT_DURLO_LIMITS
   ) {
     this.appId = appId;
-    this.adapter = adapter;
+    this.adapter = adapter as DurloAdapter;
     this.logger = logger;
     this.defaultLimits = normalizeDurloLimits(limits);
     this.id = options.workerId ?? randomUUID();

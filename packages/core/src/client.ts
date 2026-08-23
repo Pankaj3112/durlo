@@ -135,7 +135,7 @@ type InternalTransactionProvider = {
 
 export class Durlo {
   readonly id: string;
-  readonly adapter: DurloAdapter;
+  readonly adapter: object;
   readonly runs: {
     get: (handleOrId: RunHandle | string) => Promise<RunRecord | null>;
     wait: <TOutput>(
@@ -150,6 +150,7 @@ export class Durlo {
     cleanup: (options: RetentionCleanupOptions) => Promise<RetentionCleanupResult>;
   };
   private readonly defaultRetry: NormalizedRetryPolicy;
+  private readonly storage: DurloAdapter;
   private readonly defaultTimeout?: number;
   private readonly logger: Logger | undefined;
   private readonly limits: DurloLimits;
@@ -157,9 +158,12 @@ export class Durlo {
 
   constructor(options: DurloOptions) {
     validateId(options.id, "app id");
-    if (!options.adapter) throw new TypeError("adapter is required");
+    if (!options.adapter || typeof options.adapter !== "object") {
+      throw new TypeError("adapter must be an official Durlo storage adapter");
+    }
     this.id = options.id;
     this.adapter = options.adapter;
+    this.storage = options.adapter as DurloAdapter;
     this.logger = options.logger === false ? undefined : options.logger;
     this.limits = normalizeDurloLimits(options.limits);
     this.defaultRetry = normalizeRetryPolicy(options.defaultRetry);
@@ -168,16 +172,16 @@ export class Durlo {
     const getId = (value: RunHandle | string): string =>
       typeof value === "string" ? value : value.id;
     this.runs = {
-      get: (value) => this.adapter.getRun({ appId: this.id, runId: getId(value) }),
+      get: (value) => this.storage.getRun({ appId: this.id, runId: getId(value) }),
       wait: (handle, waitOptions) => this.waitForRun(handle, waitOptions),
       getDetails: async (value) => {
-        const records = await this.adapter.getRunDetails({ appId: this.id, runId: getId(value) });
+        const records = await this.storage.getRunDetails({ appId: this.id, runId: getId(value) });
         return records ? buildRunDetails(records) : null;
       },
       list: (listOptions) => this.listRuns(listOptions),
-      getBacklogHealth: () => this.adapter.getBacklogHealth({ appId: this.id }),
-      cancel: (value) => this.adapter.cancelRun({ appId: this.id, runId: getId(value) }),
-      retry: (value) => this.adapter.retryRun({ appId: this.id, runId: getId(value) }),
+      getBacklogHealth: () => this.storage.getBacklogHealth({ appId: this.id }),
+      cancel: (value) => this.storage.cancelRun({ appId: this.id, runId: getId(value) }),
+      retry: (value) => this.storage.retryRun({ appId: this.id, runId: getId(value) }),
       cleanup: (cleanupOptions) => this.cleanupRuns(cleanupOptions)
     };
   }
@@ -223,7 +227,7 @@ export class Durlo {
       ...(definitionOptions.name === undefined ? {} : { name: definitionOptions.name }),
       kind: "task",
       options: definitionOptions,
-      enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
+      enqueue: (input, runOptions) => create(this.storage, input, runOptions),
       batchEnqueue: async (items) => {
         this.assertBatchCount(items.length);
         const prepared = await Promise.all(
@@ -246,7 +250,7 @@ export class Durlo {
           .filter((key): key is string => key !== null);
         if (new Set(keys).size !== keys.length)
           throw new Error("duplicate idempotency keys in one batch are not allowed");
-        return (await this.adapter.createRuns(prepared)).map(toCreation<TOutput>);
+        return (await this.storage.createRuns(prepared)).map(toCreation<TOutput>);
       }
     };
     registerTaskDefinition(definition, {
@@ -286,7 +290,7 @@ export class Durlo {
       options: definitionOptions,
       start: (input, runOptions) =>
         this.createRun(
-          this.adapter,
+          this.storage,
           "workflow",
           definitionOptions.id,
           version,
@@ -307,7 +311,7 @@ export class Durlo {
   transaction<TResult>(
     callback: (transaction: DurloTransaction) => TResult | Promise<TResult>
   ): Promise<TResult> {
-    const provider = (this.adapter as unknown as InternalTransactionProvider)[TRANSACTION_PROVIDER];
+    const provider = (this.storage as unknown as InternalTransactionProvider)[TRANSACTION_PROVIDER];
     if (typeof provider !== "function") {
       throw new TypeError("adapter does not support raw pg transactions");
     }
@@ -387,7 +391,7 @@ export class Durlo {
   }
 
   worker(options: WorkerOptions): Worker {
-    return new Worker(this.id, this.adapter, options, this.logger, this.limits);
+    return new Worker(this.id, this.storage, options, this.logger, this.limits);
   }
 
   private waitForRun<TOutput>(
@@ -468,10 +472,10 @@ export class Durlo {
   }
 
   private async readWaitSnapshot(runId: string): Promise<WaitRunSnapshot | null> {
-    if (this.adapter.getRunForWait) {
-      return this.adapter.getRunForWait({ appId: this.id, runId });
+    if (this.storage.getRunForWait) {
+      return this.storage.getRunForWait({ appId: this.id, runId });
     }
-    const run = await this.adapter.getRun({ appId: this.id, runId });
+    const run = await this.storage.getRun({ appId: this.id, runId });
     return run
       ? {
           run,
@@ -511,7 +515,7 @@ export class Durlo {
     if (statuses.some((status) => !allowed.has(status))) {
       throw new ValidationError("retention cleanup accepts only terminal run statuses");
     }
-    return this.adapter.cleanupRuns({ appId: this.id, olderThan, limit, statuses });
+    return this.storage.cleanupRuns({ appId: this.id, olderThan, limit, statuses });
   }
 
   private async listRuns(options: RunListOptions = {}): Promise<RunListPage> {
@@ -541,7 +545,7 @@ export class Durlo {
       throw new ValidationError("createdAfter must be earlier than createdBefore");
     }
 
-    const fetched = await this.adapter.listRuns({
+    const fetched = await this.storage.listRuns({
       appId: this.id,
       limit: limit + 1,
       cursor: decodeRunCursor(options.cursor),

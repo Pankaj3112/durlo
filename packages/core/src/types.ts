@@ -638,7 +638,8 @@ export type Logger = {
 
 export type DurloOptions = {
   id: string;
-  adapter: DurloAdapter;
+  /** An official Durlo storage adapter, such as `PostgresAdapter`. */
+  adapter: object;
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;

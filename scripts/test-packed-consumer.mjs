@@ -438,6 +438,17 @@ function inspectDeclarationExports(consumerDirectory) {
       throw new Error(`${name} declaration exports changed: ${actual.join(", ")}`);
     }
   }
+
+  const coreDeclaration = program.getSourceFile(files.core)?.text ?? "";
+  if (/interface DurloAdapter\b/.test(coreDeclaration)) {
+    throw new Error("core declarations expose the internal generic adapter contract");
+  }
+  if (!/readonly adapter: object;/.test(coreDeclaration)) {
+    throw new Error("Durlo.adapter must remain opaque in core declarations");
+  }
+  if (!/constructor\(appId: string, adapter: object,/.test(coreDeclaration)) {
+    throw new Error("Worker's storage adapter must remain opaque in core declarations");
+  }
 }
 
 function exportAssertions(format) {
