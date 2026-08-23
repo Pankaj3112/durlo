@@ -1,7 +1,24 @@
 {
   "name": "@durlo/postgres",
-  "version": "0.0.0",
-  "description": "Durlo Postgres adapter package.",
+  "version": "0.1.0-alpha.0",
+  "description": "PostgreSQL persistence and migrations for Durlo.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pankaj3112/durlo.git",
+    "directory": "packages/postgres"
+  },
+  "homepage": "https://github.com/Pankaj3112/durlo#readme",
+  "bugs": {
+    "url": "https://github.com/Pankaj3112/durlo/issues"
+  },
+  "keywords": [
+    "durable-tasks",
+    "workflows",
+    "postgresql",
+    "typescript",
+    "background-jobs"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -14,8 +31,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=22 <27"
@@ -33,7 +56,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "@durlo/core": "workspace:*",
+    "@durlo/core": "workspace:0.1.0-alpha.0",
     "@types/pg": "^8.20.0",
     "pg": "^8.22.0"
   }

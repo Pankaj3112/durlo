@@ -150,7 +150,7 @@ importers:
   packages/cli:
     dependencies:
       '@durlo/core':
-        specifier: workspace:*
+        specifier: workspace:0.1.0-alpha.0
         version: link:../core
       tsx:
         specifier: ^4.23.0
@@ -187,7 +187,7 @@ importers:
   packages/postgres:
     dependencies:
       '@durlo/core':
-        specifier: workspace:*
+        specifier: workspace:0.1.0-alpha.0
         version: link:../core
       '@types/pg':
         specifier: ^8.20.0
@@ -1548,6 +1548,7 @@ packages:
   eslint@9.39.4:
     resolution: {integrity: sha512-XoMjdBOwe/esVgEvLmNsD3IRHkm7fbKIUGvrleloJXUZgDHig2IPWNniv+GwjyJXzuNqVjlr5+4yVUZjycJwfQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'

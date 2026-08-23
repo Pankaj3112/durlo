@@ -1,10 +1,11 @@
 # Durlo Operations
 
-Status: Current pre-release guidance
+Status: Current `0.1.0-alpha.0` guidance
 Updated: 2026-08-23
 
 Durlo has no supported production release yet. This document records the operating behavior that
-exists and the boundaries exercised by the repository.
+exists and the boundaries exercised by the repository. Its installation/runtime matrix is not a
+production-support promise, SLA, or measured operating envelope.
 
 ## Tested environment
 
@@ -13,8 +14,8 @@ exists and the boundaries exercised by the repository.
 - ESM, CommonJS, and strict TypeScript package consumers
 
 CI runs Node 22 with PostgreSQL 17. Nightly tests the boundary cells Node 22, 24, and 26 against
-PostgreSQL 14 and 18. These are tested repository boundaries, not a support commitment for a
-published package.
+PostgreSQL 14 and 18. These are the published alpha's installation/runtime boundaries, not a
+production support commitment.
 
 ## Process layout
 

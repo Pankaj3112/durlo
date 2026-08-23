@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -361,6 +361,7 @@ try {
   );
 
   run(npm, ["install", ...packed], consumer, "installing packed artifacts");
+  await inspectInstalledPackageManifests(consumer);
   inspectDeclarationExports(consumer);
   run(node, ["esm.mjs"], consumer, "loading packed ESM artifacts");
   run(node, ["cjs.cjs"], consumer, "loading packed CJS artifacts");
@@ -400,15 +401,64 @@ function inspectPackage(packageDir, inventory) {
   if (!inventory || typeof inventory !== "object" || !Array.isArray(inventory.files)) {
     throw new Error(`${packageDir} returned an invalid pack inventory`);
   }
-  const paths = inventory.files.map(({ path }) => path);
+  const paths = inventory.files.map(({ path }) => path).toSorted();
   for (const required of ["package.json", "dist/index.js", "dist/index.cjs", "dist/index.d.ts"]) {
     if (!paths.includes(required)) throw new Error(`${packageDir} tarball is missing ${required}`);
   }
-  if (paths.some((path) => path !== "package.json" && !path.startsWith("dist/"))) {
-    throw new Error(`${packageDir} tarball contains files outside dist: ${paths.join(", ")}`);
+  for (const required of ["README.md", "LICENSE"]) {
+    if (!paths.includes(required)) throw new Error(`${packageDir} tarball is missing ${required}`);
   }
+  const common = [
+    "LICENSE",
+    "README.md",
+    "dist/index.cjs",
+    "dist/index.d.cts",
+    "dist/index.d.ts",
+    "dist/index.js",
+    "package.json"
+  ];
   if (packageDir === "packages/cli" && !paths.includes("dist/bin.js")) {
     throw new Error("@durlo/cli tarball is missing dist/bin.js");
+  }
+  const expected =
+    packageDir === "packages/cli"
+      ? [
+          ...common,
+          "dist/bin.cjs",
+          "dist/bin.d.cts",
+          "dist/bin.d.ts",
+          "dist/bin.js",
+          ...paths.filter((path) => /^dist\/chunk-[A-Z0-9]+\.js$/.test(path))
+        ].toSorted()
+      : common.toSorted();
+  if (JSON.stringify(paths) !== JSON.stringify(expected)) {
+    throw new Error(`${packageDir} tarball inventory changed: ${paths.join(", ")}`);
+  }
+  if (packageDir === "packages/cli" && paths.filter((path) => path.startsWith("dist/chunk-")).length !== 1) {
+    throw new Error("@durlo/cli tarball must contain exactly one generated runtime chunk");
+  }
+}
+
+async function inspectInstalledPackageManifests(consumerDirectory) {
+  const version = "0.1.0-alpha.0";
+  for (const packageName of ["core", "postgres", "cli"]) {
+    const manifest = JSON.parse(
+      await readFile(
+        join(consumerDirectory, "node_modules", "@durlo", packageName, "package.json"),
+        "utf8"
+      )
+    );
+    if (manifest.version !== version) {
+      throw new Error(`packed @durlo/${packageName} version is ${manifest.version}, expected ${version}`);
+    }
+    for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
+      if (dependency.startsWith("@durlo/") && range !== version) {
+        throw new Error(`packed @durlo/${packageName} dependency ${dependency} is not pinned exactly`);
+      }
+      if (typeof range === "string" && range.startsWith("workspace:")) {
+        throw new Error(`packed @durlo/${packageName} contains workspace-only dependency ${dependency}`);
+      }
+    }
   }
 }
 

@@ -123,6 +123,11 @@ runtime or database major is breaking. Released migrations are immutable and lat
 move forward with explicit code/schema rollout requirements. These promises do not convert
 at-least-once execution into exactly once or imply production support.
 
+The first package release is `0.1.0-alpha.0` under a one-version policy for `@durlo/core`,
+`@durlo/postgres`, and `@durlo/cli`. Its Node.js 22-through-26 and PostgreSQL 14-through-18 matrix
+describes installation/runtime compatibility only; it is not a production-support promise or
+measured operating envelope.
+
 ## Cancellation and timeout are cooperative
 
 Node.js cannot safely terminate arbitrary in-process JavaScript. Cancellation and timeout abort a

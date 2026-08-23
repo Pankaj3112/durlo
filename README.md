@@ -7,10 +7,11 @@ separate queue service.
 
 ## Project status
 
-Durlo is pre-release. The execution foundation and alpha public contract are implemented, but
-package metadata, publication, and the production operating surface still have release-blocking
-work tracked in the [roadmap](docs/ROADMAP.md). The packages remain at
-`0.0.0`; do not treat the current repository as a supported production release.
+Durlo `0.1.0-alpha.0` is the first pre-release. It is suitable for evaluating the public contract
+and failure model, not for making production-readiness or support assumptions. The compatibility
+matrix below is an installation/runtime statement, not a production-support promise, SLA, or
+measured operating envelope. See the [roadmap](docs/ROADMAP.md) for the work still required before
+beta and `1.0`.
 
 The intended v1 scope is deliberately narrow:
 
@@ -24,6 +25,32 @@ The intended v1 scope is deliberately narrow:
 
 V1 does not include events, cron, hosted orchestration, other languages, framework adapters, or
 distributed concurrency and rate limiting.
+
+## Installation
+
+Install the exact alpha versions together:
+
+```bash
+npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 \
+  @durlo/cli@0.1.0-alpha.0 pg
+```
+
+| Package           | Role                                                                     |
+| ----------------- | ------------------------------------------------------------------------ |
+| `@durlo/core`     | Definitions, creation, workers, workflow tools, reads, controls, types   |
+| `@durlo/postgres` | PostgreSQL persistence, transactions, and ordered schema migrations      |
+| `@durlo/cli`      | Config scaffolding, migrations, workers, and loopback-only local dashboard |
+
+| Consumer/runtime | Alpha compatibility                    |
+| ---------------- | -------------------------------------- |
+| Node.js          | 22 through 26                          |
+| PostgreSQL       | 14 through 18                          |
+| Modules/types    | ESM, CommonJS, and strict TypeScript   |
+
+All three packages use one version and are released together. Package-specific installation,
+minimal usage, requirements, and exports are documented in
+[`@durlo/core`](packages/core/README.md), [`@durlo/postgres`](packages/postgres/README.md), and
+[`@durlo/cli`](packages/cli/README.md).
 
 ## Run the repository locally
 
@@ -179,6 +206,9 @@ status.
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md) — user-visible release and compatibility changes
+- [Security policy](SECURITY.md) — supported alpha and confidential reporting boundary
+- [Contributing](CONTRIBUTING.md) — setup, repository constraints, and verification
 - [Roadmap](docs/ROADMAP.md) — what to build, in order
 - [Architecture](docs/ARCHITECTURE.md) — how the repository works today
 - [Execution semantics](docs/EXECUTION_SEMANTICS.md) — public behavior and known limitations
@@ -186,6 +216,8 @@ status.
 - [Decisions and edge cases](docs/DECISIONS_AND_EDGE_CASES.md) — durable product decisions
 
 Package and source types remain the final authority when documentation and code disagree.
+
+Durlo is available under the [MIT License](LICENSE).
 
 ## Contributor verification
 
