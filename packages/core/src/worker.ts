@@ -265,6 +265,8 @@ export class Worker {
             this.log("error", "worker.release_failed", {
               error: errorMessage(result.reason)
             });
+          } else if (result.value) {
+            this.notePersistenceSuccess();
           }
         }
         return;
@@ -355,6 +357,7 @@ export class Worker {
         this.notePersistenceFailure(error, "release");
         throw error;
       }
+      if (released) this.notePersistenceSuccess();
       this.log("error", "run.incompatible_claim", {
         runId: run.id,
         kind: run.kind,
@@ -445,6 +448,7 @@ export class Worker {
     } catch (error) {
       await stopHeartbeat();
       if (isWorkflowSleepSignal(error)) {
+        this.notePersistenceSuccess();
         this.log("debug", "run.sleeping", { runId: run.id, resourceId: run.resourceId });
         return;
       }
