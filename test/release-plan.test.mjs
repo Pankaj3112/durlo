@@ -120,6 +120,16 @@ test("rejects mismatched or dependency-inverted registry state", () => {
   assert.throws(
     () =>
       planRegistryPublication(packages, {
+        "@durlo/core": {
+          ...registryPackage(packages[0]),
+          dist: { integrity: packages[0].integrity }
+        }
+      }),
+    /provenance/
+  );
+  assert.throws(
+    () =>
+      planRegistryPublication(packages, {
         "@durlo/postgres": registryPackage(packages[1])
       }),
     /incompatible partial publication/
@@ -135,6 +145,12 @@ function registryPackage(local) {
     name: local.name,
     version: local.version,
     dependencies: local.dependencies,
-    dist: { integrity: local.integrity }
+    dist: {
+      integrity: local.integrity,
+      attestations: {
+        url: `https://registry.npmjs.org/-/npm/v1/attestations/${local.name}@${local.version}`,
+        provenance: { predicateType: "https://slsa.dev/provenance/v1" }
+      }
+    }
   };
 }

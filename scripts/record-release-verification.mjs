@@ -17,6 +17,18 @@ const repository = process.env.GITHUB_REPOSITORY;
 const runId = process.env.GITHUB_RUN_ID;
 const runUrl =
   repository && runId ? `https://github.com/${repository}/actions/runs/${runId}` : null;
+const provenance = JSON.parse(
+  await readFile(join(workspaceRoot, "release-evidence", "provenance.json"), "utf8")
+);
+if (
+  provenance.tag !== tag ||
+  provenance.commit !== process.env.GITHUB_SHA ||
+  !Array.isArray(provenance.packages) ||
+  provenance.packages.map(({ name }) => name).join(",") !==
+    "@durlo/core,@durlo/postgres,@durlo/cli"
+) {
+  throw new Error("registry provenance evidence does not match this release");
+}
 const evidence = {
   tag,
   version: manifest.version,
@@ -29,7 +41,10 @@ const evidence = {
     registryCommonJs: "passed",
     registryStrictTypeScript: "passed",
     registryCliAndMigrations: "passed",
-    registrySignaturesAndProvenance: "passed",
+    registrySignaturesAndProvenance: {
+      status: "passed",
+      packages: provenance.packages
+    },
     registryQuickstart: "passed"
   }
 };

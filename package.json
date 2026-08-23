@@ -34,7 +34,7 @@
     "test:registry-quickstart": "node scripts/test-phase4-quickstart.mjs --registry",
     "test:reference-apps": "node scripts/test-reference-apps.mjs",
     "test:release-contract": "node scripts/check-release-contract.mjs",
-    "test:release": "node --test test/release-plan.test.mjs",
+    "test:release": "node --test test/release-plan.test.mjs test/provenance.test.mjs test/release-registry.test.mjs",
     "release:audit": "node scripts/release.mjs audit",
     "test:privileged": "vitest run --config vitest.privileged.config.ts",
     "test:stress": "vitest run --config vitest.stress.config.ts",

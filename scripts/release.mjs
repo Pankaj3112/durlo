@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyDurloProvenance } from "./provenance.mjs";
+import { readRegistryPackage } from "./release-registry.mjs";
 import {
   assertMatchingRegistryArtifact,
   planRegistryPublication,
@@ -11,7 +14,6 @@ import {
 
 const workspaceRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageDirectories = ["packages/core", "packages/postgres", "packages/cli"];
-const registry = "https://registry.npmjs.org";
 const [command = "audit", ...argumentsList] = process.argv.slice(2);
 const options = parseOptions(argumentsList);
 const rootManifest = await readJson(join(workspaceRoot, "package.json"));
@@ -19,18 +21,20 @@ const tag = options.tag ?? process.env.GITHUB_REF_NAME ?? `v${rootManifest.versi
 const outputDirectory = safeOutputDirectory(options.output ?? "release-evidence");
 
 if (!new Set(["audit", "publish"]).has(command)) {
-  throw new Error("usage: node scripts/release.mjs <audit|publish> [--tag vX.Y.Z-alpha.N] [--output path]");
+  throw new Error("usage: node scripts/release.mjs <audit|publish> [--prepared] [--tag vX.Y.Z-alpha.N] [--output path]");
 }
 
 if (command === "publish") {
   assertCleanCheckout();
   assertPublishEnvironment(tag);
 }
-await rm(outputDirectory, { recursive: true, force: true });
-await mkdir(join(outputDirectory, "tarballs"), { recursive: true });
+if (!options.prepared) {
+  await rm(outputDirectory, { recursive: true, force: true });
+  await mkdir(join(outputDirectory, "tarballs"), { recursive: true });
+}
 
 const changelog = await readFile(join(workspaceRoot, "CHANGELOG.md"), "utf8");
-const artifacts = await createArtifacts();
+const artifacts = options.prepared ? await loadPreparedArtifacts() : await createArtifacts();
 const version = validateReleaseMetadata({
   tag,
   rootVersion: rootManifest.version,
@@ -112,7 +116,57 @@ async function createArtifacts() {
   return artifacts;
 }
 
+async function loadPreparedArtifacts() {
+  if (command !== "publish") throw new Error("--prepared is valid only for publication");
+  const evidence = await readJson(join(outputDirectory, "package-inventory.json"));
+  if (evidence.tag !== tag || !Array.isArray(evidence.packages)) {
+    throw new Error(`prepared package inventory does not match ${tag}`);
+  }
+
+  return Promise.all(
+    evidence.packages.map(async (item) => {
+      const artifactPath = resolve(outputDirectory, item.artifact);
+      if (!artifactPath.startsWith(`${outputDirectory}${sep}`)) {
+        throw new Error(`${item.name} prepared artifact escapes the evidence directory`);
+      }
+      const bytes = await readFile(artifactPath);
+      const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+      const shasum = createHash("sha1").update(bytes).digest("hex");
+      const manifest = JSON.parse(
+        run("tar", ["-xOf", artifactPath, "package/package.json"], workspaceRoot, `reading ${item.name} manifest`)
+          .stdout
+      );
+      const files = run("tar", ["-tf", artifactPath], workspaceRoot, `reading ${item.name} inventory`)
+        .stdout.split("\n")
+        .filter((path) => path.startsWith("package/") && !path.endsWith("/"))
+        .map((path) => path.slice("package/".length))
+        .toSorted();
+      const executable =
+        manifest.name !== "@durlo/cli" ||
+        /^-rwx/.test(
+          run("tar", ["-tvf", artifactPath, "package/dist/bin.js"], workspaceRoot, "checking CLI mode")
+            .stdout
+        );
+      const prepared = {
+        name: manifest.name,
+        version: manifest.version,
+        dependencies: manifest.dependencies ?? {},
+        integrity,
+        shasum,
+        artifact: item.artifact,
+        files,
+        cliBinaryExecutable: manifest.name === "@durlo/cli" ? executable : undefined
+      };
+      if (JSON.stringify(prepared) !== JSON.stringify(item)) {
+        throw new Error(`${item.name} prepared artifact does not match its audited inventory`);
+      }
+      return { ...prepared, artifactPath };
+    })
+  );
+}
+
 async function publish(plan, releaseTag, version) {
+  const commit = run("git", ["rev-parse", "HEAD"], workspaceRoot, "resolving release commit").stdout.trim();
   const publication = {
     tag: releaseTag,
     version,
@@ -140,12 +194,14 @@ async function publish(plan, releaseTag, version) {
       );
       await waitForMatchingRegistryArtifact(item);
     }
+    const provenance = await waitForRegistryPackageProvenance(item, releaseTag, commit);
     publication.packages.push({
       name: item.name,
       version: item.version,
       action: item.action,
       integrity: item.integrity,
-      url: `https://www.npmjs.com/package/${item.name}/v/${item.version}`
+      url: `https://www.npmjs.com/package/${item.name}/v/${item.version}`,
+      provenance
     });
     await writeEvidence("publication.json", publication);
   }
@@ -183,15 +239,52 @@ async function readRegistryPackages(localPackages) {
   return Object.fromEntries(entries.filter(([, value]) => value));
 }
 
-async function readRegistryPackage(name, version) {
-  const response = await fetch(`${registry}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {
-    headers: { Accept: "application/vnd.npm.install-v1+json" }
-  });
-  if (response.status === 404) return undefined;
-  if (!response.ok) {
-    throw new Error(`npm registry returned ${response.status} for ${name}@${version}`);
+async function verifyRegistryPackageProvenance(item, releaseTag, commit) {
+  const consumer = await mkdtemp(join(tmpdir(), "durlo-release-provenance-"));
+  try {
+    await writeFile(
+      join(consumer, "package.json"),
+      `${JSON.stringify({ name: "durlo-release-provenance", private: true })}\n`
+    );
+    run(
+      "npm",
+      ["install", "--ignore-scripts", "--no-audit", "--no-save", `${item.name}@${item.version}`],
+      consumer,
+      `installing ${item.name}@${item.version} for provenance verification`
+    );
+    const audit = runJson(
+      "npm",
+      ["audit", "signatures", "--include-attestations", "--json"],
+      consumer,
+      `verifying ${item.name}@${item.version} provenance`
+    );
+    return verifyDurloProvenance({
+      audit,
+      expectedPackages: [item],
+      repository: "https://github.com/Pankaj3112/durlo",
+      workflowPath: "/.github/workflows/release.yml",
+      tag: releaseTag,
+      commit
+    })[0];
+  } finally {
+    await rm(consumer, { recursive: true, force: true });
   }
-  return response.json();
+}
+
+async function waitForRegistryPackageProvenance(item, releaseTag, commit) {
+  const deadline = Date.now() + 120_000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await verifyRegistryPackageProvenance(item, releaseTag, commit);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 2_000));
+    }
+  }
+  throw new Error(
+    `${item.name}@${item.version} did not expose matching verified provenance within 120 seconds: ${lastError?.message ?? "unknown error"}`
+  );
 }
 
 function assertPublishEnvironment(releaseTag) {
@@ -218,6 +311,12 @@ function assertPublishEnvironment(releaseTag) {
   ).stdout.trim();
   const head = run("git", ["rev-parse", "HEAD"], workspaceRoot, "resolving release head").stdout.trim();
   if (taggedCommit !== head) throw new Error(`${releaseTag} does not identify the checked-out commit`);
+  run(
+    "git",
+    ["merge-base", "--is-ancestor", head, "refs/remotes/origin/main"],
+    workspaceRoot,
+    "checking that the release commit is on origin/main"
+  );
 }
 
 function assertCleanCheckout() {
@@ -271,6 +370,10 @@ function parseOptions(args) {
   const parsed = {};
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
+    if (option === "--prepared") {
+      parsed.prepared = true;
+      continue;
+    }
     if (option !== "--tag" && option !== "--output") throw new Error(`unknown release option '${option}'`);
     const value = args[index + 1];
     if (!value || value.startsWith("--")) throw new Error(`${option} requires a value`);

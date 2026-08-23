@@ -34,6 +34,15 @@ The public repository must retain its history and MIT license. Enable GitHub pri
 reporting in the repository Security settings and confirm that the private report form named in
 `SECURITY.md` is visible. Do not add a public security email or inferred personal contact.
 
+Before any release tag is pushed, create the protected GitHub environment `npm-release`, require a
+maintainer reviewer, prevent self-review, and restrict it to release tags. Protect `main` from
+unreviewed direct changes and add a tag ruleset that prevents release-tag updates or deletion. The
+publish job pauses at this environment; its checkout has no persisted Git credential, is required
+to be an ancestor of `origin/main`, and is the only job granted `id-token: write`. The audit and
+registry-verification jobs are read-only, while the separate final job alone receives
+`contents: write` to create the GitHub prerelease. These repository settings are external actions
+and require fresh maintainer authorization.
+
 Before a tag exists, run the release workflow with `workflow_dispatch` and an exact
 `vX.Y.Z-alpha.N` input. A dispatch runs a frozen install, `pnpm test:audit`, package inventories,
 tarball construction, and the registry compatibility plan. Dispatches cannot execute the publish
@@ -57,13 +66,16 @@ Do not move, replace, or force-push a release tag.
 The three package records do not exist before the first release, so trusted publishers cannot yet
 be attached to them. Immediately before an explicitly authorized first tag, a maintainer may create
 one short-lived, least-privilege npm granular access token limited to the `durlo` organization and
-package creation/publish. Store it only as the GitHub Actions secret `NPM_BOOTSTRAP_TOKEN`; never put
-it in a local environment file, command argument, repository file, workflow log, or artifact.
+package creation/publish. Store it only as the `npm-release` environment secret
+`NPM_BOOTSTRAP_TOKEN`; never put it in a local environment file, command argument, repository file,
+workflow log, or artifact.
 
 The ordinary tag workflow still performs the complete audit, produces provenance, compares local
-tarball integrity with any existing registry artifact, and publishes core, Postgres, then CLI. npm
-versions are immutable, so a matching published prefix is skipped on rerun and a mismatched version
-is a hard failure. Do not manually publish around a failed workflow.
+tarball integrity with any existing registry artifact, cryptographically verifies each exact SLSA
+provenance payload against this repository, workflow, tag, and commit, and publishes core,
+Postgres, then CLI. npm versions are immutable, so a matching published prefix is skipped on rerun
+and a mismatched or unattested version is a hard failure. Do not manually publish around a failed
+workflow.
 
 ### Trusted publisher transition
 
@@ -83,7 +95,8 @@ configured. The workflow filename and repository values are case-sensitive.
 ### Normal OIDC release
 
 Every later release uses the same annotated-tag workflow with no npm token. GitHub grants
-`id-token: write`; npm 11.19.0 exchanges the GitHub OIDC identity for short-lived publish authority
+`id-token: write`; the pinned Node.js 24.19.0 runner's npm 11.17.0 exchanges the GitHub OIDC
+identity for short-lived publish authority
 and automatically emits provenance for this public repository and its public packages. The
 workflow retains `--provenance` and `--access public` as explicit release invariants.
 
@@ -97,9 +110,11 @@ evidence before closing the release issue.
 
 If publication stops after core or Postgres, preserve the tag and rerun the failed Actions run. The
 release plan fetches each exact registry version, compares its immutable SHA-512 integrity and
-internal dependencies, skips a matching dependency-ordered prefix, and continues with the first
-missing package. It fails with actionable output when an artifact differs or when a later package
-exists without an earlier dependency. Never unpublish, overwrite, retag, or bypass the plan.
+internal dependencies, requires registry provenance metadata, and cryptographically verifies the
+signed source identity before it skips a matching dependency-ordered prefix and continues with the
+first missing package. It fails with actionable output when an artifact differs, provenance is
+missing or identifies another source, or a later package exists without an earlier dependency.
+Never unpublish, overwrite, retag, or bypass the plan.
 
 If registry propagation delays verification, wait and rerun the same workflow. If an artifact is
 mismatched or publication order is incompatible, stop: resolution requires a new version and a

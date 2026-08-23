@@ -76,6 +76,11 @@ for (const manifest of manifests) {
 }
 const cli = manifests.find(({ name }) => name === "@durlo/cli");
 assert(cli?.bin?.durlo === "./dist/bin.js", "@durlo/cli must publish the durlo binary");
+const cliSource = await readFile(new URL("../packages/cli/src/cli.ts", import.meta.url), "utf8");
+assert(
+  cliSource.includes(`export const cliVersion = "${releaseVersion}"`),
+  "the CLI runtime version must match the public package version"
+);
 
 const license = await readFile(new URL("../LICENSE", import.meta.url), "utf8");
 assert(license.includes("MIT License"), "root LICENSE must contain the MIT license");
@@ -154,7 +159,9 @@ const releaseWorkflow = await readFile(
 for (const requirement of [
   'tags: ["v*"]',
   "workflow_dispatch:",
+  "environment: npm-release",
   "id-token: write",
+  "persist-credentials: false",
   "package-manager-cache: false",
   "pnpm install --frozen-lockfile",
   "pnpm test:audit",
@@ -167,6 +174,28 @@ for (const requirement of [
   "--prerelease"
 ]) {
   assert(releaseWorkflow.includes(requirement), `release workflow must include '${requirement}'`);
+}
+assert(
+  /publish:[\s\S]*permissions:[\s\S]*contents: read[\s\S]*id-token: write/.test(releaseWorkflow),
+  "only the publish job may request npm OIDC"
+);
+assert(
+  /github-release:[\s\S]*permissions:[\s\S]*contents: write/.test(releaseWorkflow),
+  "GitHub release writes must be isolated from npm publication"
+);
+assert(
+  releaseWorkflow.match(/id-token: write/g)?.length === 1,
+  "only one release job may request an OIDC token"
+);
+assert(
+  releaseWorkflow.match(/contents: write/g)?.length === 1,
+  "only one release job may write repository contents"
+);
+for (const action of releaseWorkflow.matchAll(/^\s*uses:\s+([^\s#]+)/gm)) {
+  assert(
+    /@[0-9a-f]{40}$/.test(action[1]),
+    `release action '${action[1]}' must be pinned to a full commit SHA`
+  );
 }
 assert(!/secrets\.NPM_TOKEN\b/.test(releaseWorkflow), "normal releases must not use an npm token");
 

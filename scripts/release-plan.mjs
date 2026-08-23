@@ -54,6 +54,12 @@ export function assertMatchingRegistryArtifact(local, remote) {
   if (remote.name !== local.name) reasons.push("name");
   if (remote.version !== local.version) reasons.push("version");
   if (remote.dist?.integrity !== local.integrity) reasons.push("integrity");
+  if (
+    typeof remote.dist?.attestations?.url !== "string" ||
+    remote.dist?.attestations?.provenance?.predicateType !== "https://slsa.dev/provenance/v1"
+  ) {
+    reasons.push("provenance");
+  }
   const localInternal = internalDependencies(local.dependencies);
   const remoteInternal = internalDependencies(remote.dependencies);
   if (JSON.stringify(localInternal) !== JSON.stringify(remoteInternal)) reasons.push("dependencies");

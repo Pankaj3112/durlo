@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { verifyDurloProvenance } from "./provenance.mjs";
 
 const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
@@ -388,6 +389,15 @@ try {
     consumer,
     `running the ${source} CLI binary`
   );
+  const installedCliVersion = run(
+    join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
+    ["--version"],
+    consumer,
+    `reading the ${source} CLI version`
+  ).stdout.trim();
+  if (installedCliVersion !== version) {
+    throw new Error(`${source} CLI version is ${installedCliVersion}, expected ${version}`);
+  }
   run(
     join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
     ["init"],
@@ -401,7 +411,34 @@ try {
     `typechecking ${source} artifacts`
   );
   if (source === "registry") {
-    run(npm, ["audit", "signatures"], consumer, "verifying registry signatures and provenance");
+    const audit = runJson(
+      npm,
+      ["audit", "signatures", "--include-attestations", "--json"],
+      consumer,
+      "verifying registry signatures and provenance"
+    );
+    const lockfile = JSON.parse(await readFile(join(consumer, "package-lock.json"), "utf8"));
+    const expectedPackages = ["core", "postgres", "cli"].map((packageName) => {
+      const entry = lockfile.packages?.[`node_modules/@durlo/${packageName}`];
+      if (!entry?.integrity) throw new Error(`registry lockfile has no integrity for @durlo/${packageName}`);
+      return { name: `@durlo/${packageName}`, version, integrity: entry.integrity };
+    });
+    const commit =
+      process.env.GITHUB_SHA ??
+      run("git", ["rev-parse", "HEAD"], workspaceRoot, "resolving verification commit").stdout.trim();
+    const packages = verifyDurloProvenance({
+      audit,
+      expectedPackages,
+      repository: "https://github.com/Pankaj3112/durlo",
+      workflowPath: "/.github/workflows/release.yml",
+      tag: `v${version}`,
+      commit
+    });
+    await mkdir(join(workspaceRoot, "release-evidence"), { recursive: true });
+    await writeFile(
+      join(workspaceRoot, "release-evidence", "provenance.json"),
+      `${JSON.stringify({ tag: `v${version}`, commit, packages }, null, 2)}\n`
+    );
   }
   process.stdout.write(`${source} ESM, CJS, TypeScript, CLI, and migration checks passed\n`);
 } finally {
@@ -414,6 +451,15 @@ function run(executable, args, cwd, description) {
   throw new Error(
     `${description} failed (${result.status}):\n${result.stdout ?? ""}\n${result.stderr ?? ""}`
   );
+}
+
+function runJson(executable, args, cwd, description) {
+  const result = run(executable, args, cwd, description);
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`${description} returned invalid JSON: ${result.stdout}`);
+  }
 }
 
 function inspectPackage(packageDir, inventory) {
