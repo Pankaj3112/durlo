@@ -53,7 +53,9 @@ Issue #9 closed the known input, idempotency, timing, control-signal, and worker
 defects. Issue #10 stabilized package entry points, typed result waiting, explicit handler outcomes,
 and the compatibility policy.
 
-The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported production library.
+The package and governance contract is prepared at `0.1.0-alpha.0`. Publication and immutable
+registry verification remain part of the active alpha stage. Durlo is not yet a beta release or a
+supported production library.
 
 ## Now — Publish a trustworthy alpha
 

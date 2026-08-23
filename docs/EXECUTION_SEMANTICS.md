@@ -1,6 +1,6 @@
 # Durlo Execution Semantics
 
-Status: Current pre-release behavior
+Status: Current `0.1.0-alpha.0` behavior
 Updated: 2026-08-23
 
 This document describes the current public API and its deliberate pre-release boundaries.
@@ -18,6 +18,10 @@ This document describes the current public API and its deliberate pre-release bo
   control plane.
 
 ## Supported package contract
+
+The alpha installation/runtime matrix is Node.js 22 through 26 and PostgreSQL 14 through 18, with
+ESM, CommonJS, and strict TypeScript consumers. This is not a production-support promise, SLA, or
+measured production envelope.
 
 The package root entry points are allowlists. Anything not named here is internal and may move
 without notice.

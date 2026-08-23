@@ -1,0 +1,260 @@
+name: Release alpha
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact vX.Y.Z-alpha.N version to audit without publishing
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+jobs:
+  audit:
+    name: Complete release audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      prepared_artifact: ${{ steps.prepared_artifact.outputs.name }}
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: durlo
+          POSTGRES_PASSWORD: durlo
+          POSTGRES_DB: durlo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U durlo -d durlo_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      DURLO_TEST_DATABASE_URL: postgres://durlo:durlo@127.0.0.1:5432/durlo_test
+
+    steps:
+      - name: Checkout the complete tag history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install provenance-capable npm
+        run: npm install --global --ignore-scripts npm@11.19.0
+
+      - name: Frozen dependency install
+        run: pnpm install --frozen-lockfile
+
+      - name: Complete release audit
+        run: pnpm test:audit
+
+      - name: Build audited package and registry plan
+        run: node scripts/release.mjs audit --tag "${RELEASE_TAG}"
+
+      - name: Name prepared release evidence
+        id: prepared_artifact
+        if: always()
+        run: echo "name=release-prepared-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload prepared release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.prepared_artifact.outputs.name }}
+          if-no-files-found: warn
+          path: release-evidence
+          retention-days: 90
+
+  publish:
+    name: Publish audited artifacts
+    if: github.event_name == 'push'
+    needs: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-release
+    outputs:
+      published_artifact: ${{ steps.published_artifact.outputs.name }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the protected main branch
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.19.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Require the pinned OIDC-capable npm
+        run: test "$(npm --version)" = "11.17.0"
+
+      - name: Download audited artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ${{ needs.audit.outputs.prepared_artifact }}
+          path: release-evidence
+
+      - name: Publish missing matching artifacts in dependency order
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: node scripts/release.mjs publish --prepared --tag "${RELEASE_TAG}"
+
+      - name: Name publication evidence
+        id: published_artifact
+        if: always()
+        run: echo "name=release-published-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.published_artifact.outputs.name }}
+          if-no-files-found: warn
+          path: release-evidence
+          retention-days: 90
+
+  verification:
+    name: Verify public registry consumers
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      verified_artifact: ${{ steps.verified_artifact.outputs.name }}
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: durlo
+          POSTGRES_PASSWORD: durlo
+          POSTGRES_DB: durlo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U durlo -d durlo_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      DURLO_TEST_DATABASE_URL: postgres://durlo:durlo@127.0.0.1:5432/durlo_test
+
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install provenance-capable npm
+        run: npm install --global --ignore-scripts npm@11.19.0
+
+      - name: Frozen dependency install
+        run: pnpm install --frozen-lockfile
+
+      - name: Download publication evidence
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ${{ needs.publish.outputs.published_artifact }}
+          path: release-evidence
+
+      - name: Verify exact public-registry consumers
+        run: pnpm test:registry
+
+      - name: Verify exact public-registry quickstart
+        run: pnpm test:registry-quickstart
+
+      - name: Record immutable registry verification
+        run: node scripts/record-release-verification.mjs
+
+      - name: Name verified release evidence
+        id: verified_artifact
+        if: always()
+        run: echo "name=release-verified-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload verified release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.verified_artifact.outputs.name }}
+          if-no-files-found: warn
+          path: release-evidence
+          retention-days: 90
+
+  github-release:
+    name: Create GitHub prerelease
+    if: github.event_name == 'push'
+    needs: verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified release evidence
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ${{ needs.verification.outputs.verified_artifact }}
+          path: release-evidence
+
+      - name: Create or refresh GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
+            gh release upload "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json release-evidence/provenance.json release-evidence/verification.json --clobber
+          else
+            gh release create "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json release-evidence/provenance.json release-evidence/verification.json --verify-tag --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
+          fi

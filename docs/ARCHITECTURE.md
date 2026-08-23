@@ -28,6 +28,9 @@ compatibility version before it can claim that run.
 
 ## Packages
 
+The root workspace and all three public packages use the one-version release policy. The first
+alpha version is `0.1.0-alpha.0`; resource definition versions remain independent routing tokens.
+
 ```txt
 @durlo/core       definitions, validation, retries, workflow tools, worker, read API
 @durlo/postgres   schema migrations and PostgreSQL state transitions

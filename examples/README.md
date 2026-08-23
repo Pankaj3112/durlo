@@ -3,10 +3,10 @@
 These applications exercise the public API through real process and PostgreSQL boundaries. They are
 regression fixtures and learning material, not evidence of customer adoption or production scale.
 
-| Application | Purpose |
-| --- | --- |
-| [`quickstart`](quickstart/README.md) | Small packed-package crash, checkpoint, sleep, retry, and resume path |
-| [`webhook-relay`](webhook-relay/README.md) | Direct task with transactional creation, HTTP retry, provider idempotency, cancellation, and manual retry |
+| Application                                  | Purpose                                                                                                   |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [`quickstart`](quickstart/README.md)         | Clean published/packed package task, workflow, crash, retry, and inspection path                          |
+| [`webhook-relay`](webhook-relay/README.md)   | Direct task with transactional creation, HTTP retry, provider idempotency, cancellation, and manual retry |
 | [`catalog-import`](catalog-import/README.md) | Direct workflow with business staging, checkpoints, durable sleep, cancellation, versioning, and recovery |
 
 Run both reference applications against an existing disposable database:

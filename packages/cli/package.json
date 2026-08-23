@@ -1,7 +1,24 @@
 {
   "name": "@durlo/cli",
-  "version": "0.0.0",
-  "description": "Durlo CLI package.",
+  "version": "0.1.0-alpha.0",
+  "description": "Local worker, migration, and inspection CLI for Durlo.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pankaj3112/durlo.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Pankaj3112/durlo#readme",
+  "bugs": {
+    "url": "https://github.com/Pankaj3112/durlo/issues"
+  },
+  "keywords": [
+    "durable-tasks",
+    "workflows",
+    "postgresql",
+    "typescript",
+    "cli"
+  ],
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -17,8 +34,14 @@
     "durlo": "./dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=22 <27"
@@ -30,7 +53,7 @@
     "test": "vitest run --config ../../vitest.config.ts test/cli/index.test.ts"
   },
   "dependencies": {
-    "@durlo/core": "workspace:*",
+    "@durlo/core": "workspace:0.1.0-alpha.0",
     "tsx": "^4.23.0"
   },
   "devDependencies": {
