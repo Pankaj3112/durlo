@@ -1,7 +1,7 @@
 # Durlo Operations
 
-Status: Current `0.1.0-alpha.0` guidance
-Updated: 2026-08-23
+Status: Current `0.1.0-alpha.1` guidance
+Updated: 2026-08-24
 
 Durlo has no supported production release yet. This document records the operating behavior that
 exists and the boundaries exercised by the repository. Its installation/runtime matrix is not a
@@ -55,8 +55,8 @@ pins, lockfile, changelog, and tag. The publishing tag must be annotated and ide
 merge commit. Creating and pushing that tag requires explicit maintainer authorization:
 
 ```bash
-git tag -a v0.1.0-alpha.0 <reviewed-commit> -m "Durlo 0.1.0-alpha.0"
-git push origin v0.1.0-alpha.0
+git tag -a v0.1.0-alpha.1 <reviewed-commit> -m "Durlo 0.1.0-alpha.1"
+git push origin v0.1.0-alpha.1
 ```
 
 Do not move, replace, or force-push a release tag.
@@ -123,6 +123,10 @@ the run-attempt number. Do not download and substitute artifacts from another wo
 If registry propagation delays verification, wait and rerun the same workflow. If an artifact is
 mismatched or publication order is incompatible, stop: resolution requires a new version and a
 documented compatibility decision.
+
+The `0.1.0-alpha.0` attempt demonstrated that the package installed for `npm audit signatures`
+must be saved in its temporary consumer manifest. `0.1.0-alpha.1` fixes that verifier and is the
+coherent recovery release; the core-only `alpha.0` artifact remains immutable and superseded.
 
 ### Next version
 

@@ -5,7 +5,7 @@ import {
   validateReleaseMetadata
 } from "../scripts/release-plan.mjs";
 
-const version = "0.1.0-alpha.0";
+const version = "0.1.0-alpha.1";
 const packages = [
   localPackage("@durlo/core", "sha512-core"),
   localPackage("@durlo/postgres", "sha512-postgres", { "@durlo/core": version }),
@@ -22,12 +22,12 @@ test("validates the exact annotated-tag version contract", () => {
         version: packageVersion,
         dependencies
       })),
-      changelog: `# Changelog\n\n## [${version}] - 2026-08-23\n`
+      changelog: `# Changelog\n\n## [${version}] - 2026-08-24\n`
     }),
     version
   );
 
-  for (const invalidTag of [version, "v0.1.0", "v0.1.0-alpha.1", "release-v0.1.0-alpha.0"]) {
+  for (const invalidTag of [version, "v0.1.0", "v0.1.0-alpha.0", "release-v0.1.0-alpha.1"]) {
     assert.throws(
       () =>
         validateReleaseMetadata({
@@ -47,7 +47,7 @@ test("rejects package version, dependency, and changelog drift", () => {
       validateReleaseMetadata({
         tag: `v${version}`,
         rootVersion: version,
-        packages: [packages[0], { ...packages[1], version: "0.1.0-alpha.1" }, packages[2]],
+        packages: [packages[0], { ...packages[1], version: "0.1.0-alpha.2" }, packages[2]],
         changelog: `## [${version}]`
       }),
     /version/
@@ -59,7 +59,7 @@ test("rejects package version, dependency, and changelog drift", () => {
         rootVersion: version,
         packages: [
           packages[0],
-          { ...packages[1], dependencies: { "@durlo/core": "^0.1.0-alpha.0" } },
+          { ...packages[1], dependencies: { "@durlo/core": "^0.1.0-alpha.1" } },
           packages[2]
         ],
         changelog: `## [${version}]`

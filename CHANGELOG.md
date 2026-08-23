@@ -9,7 +9,7 @@ Compatibility as applicable. Released migration files are immutable. Schema chan
 forward migration plus the safe schema/code rollout order. Operational changes must call out new
 failure modes, recovery steps, or configuration requirements.
 
-## [0.1.0-alpha.0] - 2026-08-23
+## [0.1.0-alpha.1] - 2026-08-24
 
 ### Added
 
@@ -20,6 +20,11 @@ failure modes, recovery steps, or configuration requirements.
   durable delays and sleeps, cancellation, manual retry, retention cleanup, and typed result waits.
 - Local migration, worker, development, and inspection commands through `@durlo/cli`.
 - ESM, CommonJS, and strict TypeScript package entry points for Node.js 22 through 26.
+
+### Fixed
+
+- Save the exact registry package in the temporary provenance consumer before running
+  `npm audit signatures`, allowing dependency-ordered recovery after a registry propagation delay.
 
 ### Compatibility
 
@@ -43,4 +48,13 @@ failure modes, recovery steps, or configuration requirements.
 - There is no production-support commitment, response-time SLA, events, cron, distributed
   concurrency, framework adapter, hosted service, or production throughput claim.
 
-[0.1.0-alpha.0]: https://github.com/Pankaj3112/durlo/releases/tag/v0.1.0-alpha.0
+## [0.1.0-alpha.0] - 2026-08-23
+
+### Known issues
+
+- This was an incomplete core-only publication. Registry propagation exceeded the release
+  workflow's first verification window, and a provenance-consumer bug prevented the safe rerun
+  from continuing with `@durlo/postgres` and `@durlo/cli`. Use `0.1.0-alpha.1` instead.
+
+[0.1.0-alpha.1]: https://github.com/Pankaj3112/durlo/releases/tag/v0.1.0-alpha.1
+[0.1.0-alpha.0]: https://www.npmjs.com/package/@durlo/core/v/0.1.0-alpha.0

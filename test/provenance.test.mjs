@@ -1,15 +1,31 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import test from "node:test";
-import { verifyDurloProvenance } from "../scripts/provenance.mjs";
+import {
+  provenanceInstallArguments,
+  verifyDurloProvenance
+} from "../scripts/provenance.mjs";
 
 const repository = "https://github.com/Pankaj3112/durlo";
 const workflowPath = ".github/workflows/release.yml";
-const tag = "v0.1.0-alpha.0";
+const tag = "v0.1.0-alpha.1";
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const version = tag.slice(1);
 const integrity = `sha512-${Buffer.from("ab".repeat(64), "hex").toString("base64")}`;
 const expected = [{ name: "@durlo/core", version, integrity }];
+
+test("saves the package under verification so npm audit signatures can inspect it", () => {
+  const argumentsList = provenanceInstallArguments(expected[0]);
+
+  assert.deepEqual(argumentsList, [
+    "install",
+    "--ignore-scripts",
+    "--no-audit",
+    "--save-exact",
+    "@durlo/core@0.1.0-alpha.1"
+  ]);
+  assert(!argumentsList.includes("--no-save"));
+});
 
 test("requires a cryptographically verified Durlo SLSA provenance payload", () => {
   const proof = verifyDurloProvenance({
@@ -27,7 +43,7 @@ test("requires a cryptographically verified Durlo SLSA provenance payload", () =
       version,
       integrity,
       attestationUrl:
-        "https://registry.npmjs.org/-/npm/v1/attestations/%40durlo%2fcore@0.1.0-alpha.0",
+        "https://registry.npmjs.org/-/npm/v1/attestations/%40durlo%2fcore@0.1.0-alpha.1",
       predicateType: "https://slsa.dev/provenance/v1",
       repository,
       workflowPath,
@@ -82,7 +98,7 @@ function auditResult(payload) {
         name: "@durlo/core",
         version,
         attestations: {
-          url: "https://registry.npmjs.org/-/npm/v1/attestations/%40durlo%2fcore@0.1.0-alpha.0",
+          url: "https://registry.npmjs.org/-/npm/v1/attestations/%40durlo%2fcore@0.1.0-alpha.1",
           provenance: { predicateType: "https://slsa.dev/provenance/v1" }
         },
         attestationBundles: [

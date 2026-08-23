@@ -1,7 +1,7 @@
 # Durlo Architecture
 
 Status: Current
-Updated: 2026-08-23
+Updated: 2026-08-24
 
 This document describes the implementation that exists today. Public behavior belongs in
 [Execution Semantics](EXECUTION_SEMANTICS.md), deployment guidance in
@@ -29,7 +29,8 @@ compatibility version before it can claim that run.
 ## Packages
 
 The root workspace and all three public packages use the one-version release policy. The first
-alpha version is `0.1.0-alpha.0`; resource definition versions remain independent routing tokens.
+complete alpha version is `0.1.0-alpha.1`; the incomplete core-only `alpha.0` is superseded.
+Resource definition versions remain independent routing tokens.
 
 ```txt
 @durlo/core       definitions, validation, retries, workflow tools, worker, read API

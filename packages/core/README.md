@@ -6,7 +6,7 @@ API, and public types.
 ## Installation
 
 ```bash
-npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 pg
+npm install @durlo/core@0.1.0-alpha.1 @durlo/postgres@0.1.0-alpha.1 pg
 ```
 
 ## Requirements
@@ -49,7 +49,7 @@ allowlist and behavior.
 
 ## Alpha status
 
-Version `0.1.0-alpha.0` is pre-release and not a production-support commitment. Worker execution is
+Version `0.1.0-alpha.1` is pre-release and not a production-support commitment. Worker execution is
 at-least-once; application and provider side effects need their own idempotency. Alpha APIs may
 break only with changelog or migration-note disclosure.
 

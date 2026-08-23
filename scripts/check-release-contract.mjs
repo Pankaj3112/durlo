@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 const nodeRange = ">=22 <27";
-const releaseVersion = "0.1.0-alpha.0";
+const releaseVersion = "0.1.0-alpha.1";
 const repositoryUrl = "https://github.com/Pankaj3112/durlo.git";
 const homepageUrl = "https://github.com/Pankaj3112/durlo#readme";
 const bugsUrl = "https://github.com/Pankaj3112/durlo/issues";
@@ -217,7 +217,7 @@ for (const requirement of [
 const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 assert(readme.includes("Node.js 22 through 26"), "README must declare Node boundaries");
 assert(readme.includes("PostgreSQL 14 through 18"), "README must declare PostgreSQL boundaries");
-assert(readme.includes("0.1.0-alpha.0"), "README must identify the alpha version");
+assert(readme.includes("0.1.0-alpha.1"), "README must identify the alpha version");
 assert(
   readme.includes("not a production-support promise"),
   "README must state the support boundary"

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyDurloProvenance } from "./provenance.mjs";
+import { provenanceInstallArguments, verifyDurloProvenance } from "./provenance.mjs";
 import { readRegistryPackage } from "./release-registry.mjs";
 import {
   assertMatchingRegistryArtifact,
@@ -248,7 +248,7 @@ async function verifyRegistryPackageProvenance(item, releaseTag, commit) {
     );
     run(
       "npm",
-      ["install", "--ignore-scripts", "--no-audit", "--no-save", `${item.name}@${item.version}`],
+      provenanceInstallArguments(item),
       consumer,
       `installing ${item.name}@${item.version} for provenance verification`
     );

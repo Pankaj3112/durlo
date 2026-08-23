@@ -1,6 +1,6 @@
 {
   "name": "@durlo/cli",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Local worker, migration, and inspection CLI for Durlo.",
   "license": "MIT",
   "repository": {
@@ -53,7 +53,7 @@
     "test": "vitest run --config ../../vitest.config.ts test/cli/index.test.ts"
   },
   "dependencies": {
-    "@durlo/core": "workspace:0.1.0-alpha.0",
+    "@durlo/core": "workspace:0.1.0-alpha.1",
     "tsx": "^4.23.0"
   },
   "devDependencies": {
