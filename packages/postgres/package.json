@@ -1,6 +1,6 @@
 {
   "name": "@durlo/postgres",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "PostgreSQL persistence and migrations for Durlo.",
   "license": "MIT",
   "repository": {
@@ -56,7 +56,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "@durlo/core": "workspace:0.1.0-alpha.0",
+    "@durlo/core": "workspace:0.1.0-alpha.1",
     "@types/pg": "^8.20.0",
     "pg": "^8.22.0"
   }

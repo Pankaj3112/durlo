@@ -150,7 +150,7 @@ importers:
   packages/cli:
     dependencies:
       '@durlo/core':
-        specifier: workspace:0.1.0-alpha.0
+        specifier: workspace:0.1.0-alpha.1
         version: link:../core
       tsx:
         specifier: ^4.23.0
@@ -187,7 +187,7 @@ importers:
   packages/postgres:
     dependencies:
       '@durlo/core':
-        specifier: workspace:0.1.0-alpha.0
+        specifier: workspace:0.1.0-alpha.1
         version: link:../core
       '@types/pg':
         specifier: ^8.20.0

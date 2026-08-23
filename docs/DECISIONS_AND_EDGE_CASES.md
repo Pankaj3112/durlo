@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
 Status: Current
-Updated: 2026-08-23
+Updated: 2026-08-24
 
 This file records decisions that should survive refactors. It explains why Durlo has its current
 boundary; it does not repeat every API rule or track unfinished work.
@@ -123,10 +123,11 @@ runtime or database major is breaking. Released migrations are immutable and lat
 move forward with explicit code/schema rollout requirements. These promises do not convert
 at-least-once execution into exactly once or imply production support.
 
-The first package release is `0.1.0-alpha.0` under a one-version policy for `@durlo/core`,
-`@durlo/postgres`, and `@durlo/cli`. Its Node.js 22-through-26 and PostgreSQL 14-through-18 matrix
-describes installation/runtime compatibility only; it is not a production-support promise or
-measured operating envelope.
+The first attempted package release, `0.1.0-alpha.0`, stopped after publishing only `@durlo/core`.
+The first coherent three-package release is therefore `0.1.0-alpha.1` under a one-version policy
+for `@durlo/core`, `@durlo/postgres`, and `@durlo/cli`. Its Node.js 22-through-26 and PostgreSQL
+14-through-18 matrix describes installation/runtime compatibility only; it is not a
+production-support promise or measured operating envelope.
 
 ## Cancellation and timeout are cooperative
 

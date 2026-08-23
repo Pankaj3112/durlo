@@ -5,8 +5,8 @@ Durlo's executable for configuration scaffolding, migrations, workers, and local
 ## Installation
 
 ```bash
-npm install @durlo/cli@0.1.0-alpha.0 @durlo/core@0.1.0-alpha.0 \
-  @durlo/postgres@0.1.0-alpha.0 pg
+npm install @durlo/cli@0.1.0-alpha.1 @durlo/core@0.1.0-alpha.1 \
+  @durlo/postgres@0.1.0-alpha.1 pg
 npx durlo --help
 ```
 
@@ -39,7 +39,7 @@ helpers are internal.
 
 ## Alpha status
 
-Version `0.1.0-alpha.0` is pre-release and not a production-support commitment. CLI behavior may
+Version `0.1.0-alpha.1` is pre-release and not a production-support commitment. CLI behavior may
 break during alpha only with changelog or migration-note disclosure.
 
 License: MIT. Security reports use the repository's GitHub private vulnerability reporting form

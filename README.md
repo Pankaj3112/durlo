@@ -7,11 +7,12 @@ separate queue service.
 
 ## Project status
 
-Durlo `0.1.0-alpha.0` is the first pre-release. It is suitable for evaluating the public contract
-and failure model, not for making production-readiness or support assumptions. The compatibility
-matrix below is an installation/runtime statement, not a production-support promise, SLA, or
-measured operating envelope. See the [roadmap](docs/ROADMAP.md) for the work still required before
-beta and `1.0`.
+Durlo `0.1.0-alpha.1` is the first complete three-package pre-release. The preceding `alpha.0`
+attempt published only `@durlo/core` and is superseded. This release is suitable for evaluating the
+public contract and failure model, not for making production-readiness or support assumptions. The
+compatibility matrix below is an installation/runtime statement, not a production-support promise,
+SLA, or measured operating envelope. See the [roadmap](docs/ROADMAP.md) for the work still required
+before beta and `1.0`.
 
 The intended v1 scope is deliberately narrow:
 
@@ -31,8 +32,8 @@ distributed concurrency and rate limiting.
 Install the exact alpha versions together:
 
 ```bash
-npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 \
-  @durlo/cli@0.1.0-alpha.0 pg
+npm install @durlo/core@0.1.0-alpha.1 @durlo/postgres@0.1.0-alpha.1 \
+  @durlo/cli@0.1.0-alpha.1 pg
 ```
 
 | Package           | Role                                                                       |
@@ -54,7 +55,7 @@ minimal usage, requirements, and exports are documented in
 
 ## Published-package quickstart
 
-The [clean `0.1.0-alpha.0` quickstart](examples/quickstart/README.md) starts PostgreSQL, installs the
+The [clean `0.1.0-alpha.1` quickstart](examples/quickstart/README.md) starts PostgreSQL, installs the
 three exact versions from the public npm registry, applies migrations, and downloads only the
 example application files from the matching immutable tag. It then proves atomic application/task/
 workflow creation, a separately running worker, forced worker termination and lease recovery,

@@ -1,7 +1,7 @@
 # Durlo Execution Semantics
 
-Status: Current `0.1.0-alpha.0` behavior
-Updated: 2026-08-23
+Status: Current `0.1.0-alpha.1` behavior
+Updated: 2026-08-24
 
 This document describes the current public API and its deliberate pre-release boundaries.
 

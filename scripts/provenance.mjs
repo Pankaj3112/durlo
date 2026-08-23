@@ -1,5 +1,9 @@
 const slsaPredicate = "https://slsa.dev/provenance/v1";
 
+export function provenanceInstallArguments({ name, version }) {
+  return ["install", "--ignore-scripts", "--no-audit", "--save-exact", `${name}@${version}`];
+}
+
 export function verifyDurloProvenance({
   audit,
   expectedPackages,

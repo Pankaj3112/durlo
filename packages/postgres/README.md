@@ -5,7 +5,7 @@ The PostgreSQL persistence adapter and ordered Durlo schema migrations.
 ## Installation
 
 ```bash
-npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 pg
+npm install @durlo/core@0.1.0-alpha.1 @durlo/postgres@0.1.0-alpha.1 pg
 ```
 
 ## Requirements
@@ -39,7 +39,7 @@ storage methods are internal.
 
 ## Alpha status
 
-Version `0.1.0-alpha.0` is pre-release and not a production-support commitment. Apply migrations
+Version `0.1.0-alpha.1` is pre-release and not a production-support commitment. Apply migrations
 before new code, never edit a released migration, and keep old compatible workers until their work
 finishes. Durlo remains at-least-once.
 

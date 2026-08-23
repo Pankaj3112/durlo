@@ -1,7 +1,7 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-08-23
+Updated: 2026-08-24
 
 > **Current focus:** Prepare the installable alpha. Do not start production-proof work yet.
 
@@ -53,9 +53,10 @@ Issue #9 closed the known input, idempotency, timing, control-signal, and worker
 defects. Issue #10 stabilized package entry points, typed result waiting, explicit handler outcomes,
 and the compatibility policy.
 
-The package and governance contract is prepared at `0.1.0-alpha.0`. Publication and immutable
-registry verification remain part of the active alpha stage. Durlo is not yet a beta release or a
-supported production library.
+The package and governance contract is prepared for the coherent `0.1.0-alpha.1` recovery release.
+The preceding `alpha.0` attempt published only `@durlo/core`; publication and immutable registry
+verification for all three matching `alpha.1` packages remain part of the active alpha stage. Durlo
+is not yet a beta release or a supported production library.
 
 ## Now — Publish a trustworthy alpha
 

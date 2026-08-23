@@ -1,4 +1,4 @@
-# Durlo `0.1.0-alpha.0` clean quickstart
+# Durlo `0.1.0-alpha.1` clean quickstart
 
 This quickstart installs only the three exact public npm packages into a new project. It creates an
 application row, a direct task run, and a workflow run in one PostgreSQL transaction; executes them
@@ -25,14 +25,14 @@ mkdir durlo-alpha-quickstart
 cd durlo-alpha-quickstart
 npm init -y
 npm pkg set type=module
-npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 \
-  @durlo/cli@0.1.0-alpha.0 pg@8.22.0 tsx@4.23.0
+npm install @durlo/core@0.1.0-alpha.1 @durlo/postgres@0.1.0-alpha.1 \
+  @durlo/cli@0.1.0-alpha.1 pg@8.22.0 tsx@4.23.0
 mkdir -p src
-curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.0/examples/quickstart/durlo.config.ts \
+curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.1/examples/quickstart/durlo.config.ts \
   -o durlo.config.ts
-curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.0/examples/quickstart/src/durlo.ts \
+curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.1/examples/quickstart/src/durlo.ts \
   -o src/durlo.ts
-curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.0/examples/quickstart/src/start.ts \
+curl -fsSL https://raw.githubusercontent.com/Pankaj3112/durlo/v0.1.0-alpha.1/examples/quickstart/src/start.ts \
   -o src/start.ts
 ```
 
@@ -135,7 +135,7 @@ cd ..
 rm -rf durlo-alpha-quickstart
 ```
 
-The database and clean consumer project are disposable. Durlo `0.1.0-alpha.0` is an alpha with
+The database and clean consumer project are disposable. Durlo `0.1.0-alpha.1` is an alpha with
 best-effort fixes for only the latest alpha, no response-time SLA, and no production-support
 promise. Read the root security policy, changelog, execution semantics, and operations guide before
 evaluating a real integration.
