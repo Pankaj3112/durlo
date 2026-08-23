@@ -4,17 +4,19 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cliVersion,
-  closeConfig,
   cliPackageName,
-  defineConfig,
-  findConfigPath,
-  initProject,
-  loadConfig,
   migrateConfig,
   parseConfigFlag,
   parseDevFlags,
   runCli
-} from "@durlo/cli";
+} from "../../packages/cli/src/cli.js";
+import {
+  closeConfig,
+  defineConfig,
+  findConfigPath,
+  loadConfig
+} from "../../packages/cli/src/config.js";
+import { initProject } from "../../packages/cli/src/init.js";
 import type { DurloConfig } from "@durlo/cli";
 
 const temporaryDirectories: string[] = [];

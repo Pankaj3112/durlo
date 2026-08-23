@@ -83,8 +83,7 @@ function assertResourceList(
       !isRecord(resource) ||
       resource.kind !== expectedKind ||
       typeof resource.id !== "string" ||
-      typeof resource.version !== "string" ||
-      !isRecord(resource._durlo)
+      typeof resource.version !== "string"
     ) {
       throw new Error(`${path} field '${field}' contains an invalid ${expectedKind} definition`);
     }

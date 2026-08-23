@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { deserialize, Durlo, serialize } from "@durlo/core";
+import { Durlo } from "@durlo/core";
+import { deserialize, serialize } from "../../packages/core/src/serialization.js";
 import type { JsonValue } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";

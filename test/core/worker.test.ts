@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { AttemptTimeoutError, Durlo, jsonByteSize } from "@durlo/core";
-import type { ClaimedRun, DurloAdapter, TaskContext, TransactionalDurloAdapter } from "@durlo/core";
+import { AttemptTimeoutError, Durlo } from "@durlo/core";
+import { jsonByteSize } from "../../packages/core/src/limits.js";
+import type {
+  ClaimedRun,
+  DurloAdapter,
+  TaskContext,
+  TransactionalDurloAdapter
+} from "../../packages/core/src/types.js";
 
 function createWorkerAdapter(): DurloAdapter {
   const unsupported = async (): Promise<never> => {

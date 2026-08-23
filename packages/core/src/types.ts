@@ -581,13 +581,10 @@ export type WorkflowDefinitionOptions<TInput, TOutput, THandlerInput = TInput> =
 
 export type BatchItem<TInput> = { input: TInput; options?: RunOptions };
 
-export interface RegisteredTaskDefinition {
+interface RegisteredTaskDefinition {
   readonly id: string;
   readonly version: string;
   readonly kind: "task";
-  readonly _durlo: {
-    run(input: unknown, context: TaskContext): Promise<unknown>;
-  };
 }
 
 export interface TaskDefinition<
@@ -604,13 +601,10 @@ export interface TaskDefinition<
   batchEnqueue(items: ReadonlyArray<BatchItem<TInput>>): Promise<Array<RunCreation<TOutput>>>;
 }
 
-export interface RegisteredWorkflowDefinition {
+interface RegisteredWorkflowDefinition {
   readonly id: string;
   readonly version: string;
   readonly kind: "workflow";
-  readonly _durlo: {
-    run(context: WorkflowContext<unknown>): Promise<unknown>;
-  };
 }
 
 export interface WorkflowDefinition<

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { deserialize, Durlo, IdempotencyConflictError } from "@durlo/core";
-import type { CreateRunInput, TransactionalDurloAdapter } from "@durlo/core";
+import { Durlo, IdempotencyConflictError } from "@durlo/core";
+import { deserialize } from "../../packages/core/src/serialization.js";
+import type { CreateRunInput, TransactionalDurloAdapter } from "../../packages/core/src/types.js";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
 

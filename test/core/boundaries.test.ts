@@ -2,21 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DURLO_LIMITS,
   Durlo,
-  MAX_DATE_MS,
-  MAX_TIMER_DELAY_MS,
   SerializationError,
   StorageLimitError,
-  ValidationError,
-  calculateRetryDelay,
-  deserialize,
-  jsonByteSize,
-  normalizeBackoff,
-  normalizeRetryPolicy,
-  parseDuration,
-  parseTimerDuration,
-  serialize,
-  serializeError
+  ValidationError
 } from "@durlo/core";
+import {
+  calculateRetryDelay,
+  normalizeBackoff,
+  normalizeRetryPolicy
+} from "../../packages/core/src/retry.js";
+import { deserialize, serialize, serializeError } from "../../packages/core/src/serialization.js";
+import { jsonByteSize } from "../../packages/core/src/limits.js";
+import {
+  MAX_DATE_MS,
+  MAX_TIMER_DELAY_MS,
+  parseDuration,
+  parseTimerDuration
+} from "../../packages/core/src/validation.js";
 import type {
   CreateRunInput,
   DurloAdapter,
@@ -24,7 +26,7 @@ import type {
   RunRecord,
   StepStatus,
   TransactionalDurloAdapter
-} from "@durlo/core";
+} from "../../packages/core/src/types.js";
 
 function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
   const created: CreateRunInput[] = [];

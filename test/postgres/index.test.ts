@@ -1,11 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  AttemptTimeoutError,
-  Durlo,
-  IdempotencyConflictError,
-  RunStateError,
-  jsonByteSize
-} from "@durlo/core";
+import { AttemptTimeoutError, Durlo, IdempotencyConflictError, RunStateError } from "@durlo/core";
+import { jsonByteSize } from "../../packages/core/src/limits.js";
 import type { StepTools } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";

@@ -51,6 +51,7 @@ import {
 } from "./validation.js";
 import { Worker } from "./worker.js";
 import type { WorkerOptions } from "./types.js";
+import { registerTaskDefinition, registerWorkflowDefinition } from "./definitions.js";
 
 function toHandle<TOutput>(record: RunRecord): RunHandle<TOutput> {
   return {
@@ -202,15 +203,12 @@ export class Durlo {
         definitionRetry,
         definitionTimeout
       );
-    return {
+    const definition: TaskDefinition<TInput, TOutput, THandlerInput> = {
       id: definitionOptions.id,
       version,
       ...(definitionOptions.name === undefined ? {} : { name: definitionOptions.name }),
       kind: "task",
       options: definitionOptions,
-      _durlo: {
-        run: async (input, context) => definitionOptions.run(input as THandlerInput, context)
-      },
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
         this.assertBatchCount(items.length);
@@ -237,6 +235,10 @@ export class Durlo {
         return (await this.adapter.createRuns(prepared)).map(toCreation<TOutput>);
       }
     };
+    registerTaskDefinition(definition, {
+      run: async (input, context) => definitionOptions.run(input as THandlerInput, context)
+    });
+    return definition;
   }
 
   workflow<TInput, TOutput = void, THandlerInput = TInput>(
@@ -262,16 +264,12 @@ export class Durlo {
       definitionOptions.timeout === undefined
         ? this.defaultTimeout
         : parseTimerDuration(definitionOptions.timeout, "workflow timeout");
-    return {
+    const definition: WorkflowDefinition<TInput, TOutput, THandlerInput> = {
       id: definitionOptions.id,
       version,
       ...(definitionOptions.name === undefined ? {} : { name: definitionOptions.name }),
       kind: "workflow",
       options: definitionOptions,
-      _durlo: {
-        run: async (context) =>
-          definitionOptions.run(context as Parameters<typeof definitionOptions.run>[0])
-      },
       start: (input, runOptions) =>
         this.createRun(
           this.adapter,
@@ -285,6 +283,11 @@ export class Durlo {
           definitionTimeout
         )
     };
+    registerWorkflowDefinition(definition, {
+      run: async (context) =>
+        definitionOptions.run(context as Parameters<typeof definitionOptions.run>[0])
+    });
+    return definition;
   }
 
   transaction<TResult>(
