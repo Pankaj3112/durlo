@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { AttemptTimeoutError, Durlo } from "@durlo/core";
+import {
+  AttemptTimeoutError,
+  Durlo,
+  PermanentError,
+  RetryError,
+  ValidationError
+} from "@durlo/core";
 import { jsonByteSize } from "../../packages/core/src/limits.js";
 import type {
   ClaimedRun,
@@ -780,6 +786,155 @@ describe("worker logging", () => {
     expect(adapter.failRun).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: { status: "dead_letter" } })
     );
+  });
+});
+
+describe("explicit handler outcomes", () => {
+  it("constructs permanent and directed retry errors with normalized readonly state", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-23T10:00:00.000Z"));
+      const cause = new Error("root cause");
+      const permanent = new PermanentError("stop", { cause });
+      const retryAt = new Date("2026-08-23T12:00:00.000Z");
+      const directed = new RetryError({ at: retryAt, message: "later", cause });
+      const after = new RetryError({ after: "30s" });
+
+      expect(permanent).toMatchObject({ name: "PermanentError", message: "stop", cause });
+      expect(directed).toMatchObject({ name: "RetryError", message: "later", retryAt, cause });
+      expect(after.retryAt).toEqual(new Date("2026-08-23T10:00:30.000Z"));
+      expect(() => new RetryError({} as never)).toThrow(ValidationError);
+      expect(() => new RetryError({ after: "1s", at: retryAt } as never)).toThrow(ValidationError);
+      expect(() => new RetryError({ at: "not-a-date" })).toThrow(ValidationError);
+      expect(() => new RetryError({ after: -1 })).toThrow(ValidationError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends a task PermanentError directly to dead letter with its serialized cause", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "permanent-task",
+      retry: { attempts: 3 },
+      run: async () => {
+        throw new PermanentError("do not retry", { cause: "permanent cause" });
+      }
+    });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+
+    await durlo.worker({ tasks: [task] }).runOnce();
+
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "PermanentError",
+          message: "do not retry",
+          cause: "permanent cause"
+        }),
+        outcome: { status: "dead_letter" }
+      })
+    );
+  });
+
+  it("sends a workflow PermanentError directly to failed", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const workflow = durlo.workflow({
+      id: "permanent-workflow",
+      retry: { attempts: 3 },
+      run: async () => {
+        throw new PermanentError("workflow cannot continue");
+      }
+    });
+    const claim = claimedTask(workflow.id);
+    claim.kind = "workflow";
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await durlo.worker({ workflows: [workflow] }).runOnce();
+
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: { status: "failed" } })
+    );
+  });
+
+  it("uses an exact directed retry time and still exhausts the failure budget", async () => {
+    const adapter = createWorkerAdapter();
+    const retryAt = new Date("2030-01-02T03:04:05.000Z");
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "directed-retry-task",
+      retry: { attempts: 3 },
+      run: async () => {
+        throw new RetryError({ at: retryAt, message: "provider asked us to wait", cause: "429" });
+      }
+    });
+    const claim = claimedTask(task.id);
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await durlo.worker({ tasks: [task] }).runOnce();
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ name: "RetryError", cause: "429" }),
+        outcome: { status: "pending", scheduledAt: retryAt }
+      })
+    );
+
+    vi.mocked(adapter.failRun).mockClear();
+    claim.failureCount = 2;
+    await durlo.worker({ tasks: [task] }).runOnce();
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: { status: "dead_letter" } })
+    );
+  });
+
+  it("keeps past directed times immediately eligible", async () => {
+    const adapter = createWorkerAdapter();
+    const retryAt = new Date("2020-01-02T03:04:05.000Z");
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "past-directed-retry",
+      run: async () => {
+        throw new RetryError({ at: retryAt });
+      }
+    });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+
+    await durlo.worker({ tasks: [task] }).runOnce();
+
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: { status: "pending", scheduledAt: retryAt } })
+    );
+  });
+
+  it("treats lookalikes and subclasses as ordinary failures", async () => {
+    class DerivedRetryError extends RetryError {}
+    const requested = new Date("2030-01-02T03:04:05.000Z");
+    for (const [id, createError] of [
+      [
+        "retry-lookalike",
+        () => Object.assign(new Error("lookalike"), { name: "RetryError", retryAt: requested })
+      ],
+      ["retry-subclass", () => new DerivedRetryError({ at: requested })]
+    ] as const) {
+      const adapter = createWorkerAdapter();
+      const durlo = new Durlo({ id: `worker-tests-${id}`, adapter });
+      const task = durlo.task({
+        id,
+        retry: { attempts: 3, backoff: { type: "fixed", delay: 1 } },
+        run: async () => {
+          throw createError();
+        }
+      });
+      adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+
+      await durlo.worker({ tasks: [task] }).runOnce();
+
+      const outcome = vi.mocked(adapter.failRun).mock.calls[0]![0].outcome;
+      expect(outcome.status).toBe("pending");
+      if (outcome.status === "pending") expect(outcome.scheduledAt).not.toEqual(requested);
+    }
   });
 });
 

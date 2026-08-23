@@ -215,6 +215,16 @@ try {
       durlo.runs.wait("run-id", { timeout: 1_000 });
       const config: DurloConfig = defineConfig({ durlo, tasks: [task], workflows: [workflow] });
       const dashboard: DashboardOptions = { host: "127.0.0.1", port: 3210 };
+      const permanent = new PermanentError("stop", { cause: new Error("cause") });
+      const retryAfter = new RetryError({ after: "30s", message: "retry later" });
+      const retryAt = new RetryError({ at: new Date(), cause: { status: 429 } });
+      const normalizedRetryAt: Date = retryAfter.retryAt;
+      // @ts-expect-error RetryError takes one schedule object, not positional arguments.
+      new RetryError("1s");
+      // @ts-expect-error Directed retry schedules are mutually exclusive.
+      new RetryError({ after: "1s", at: new Date() });
+      // @ts-expect-error Public outcome state is readonly.
+      retryAt.retryAt = new Date();
       if (false) {
         void durlo.transaction(async ({ client }) => client.query("select 1"));
         void durlo.transaction(async (transaction) => {
@@ -233,6 +243,8 @@ try {
       void config;
       void dashboard;
       void adapterFromConstructor;
+      void permanent;
+      void normalizedRetryAt;
       void durlo;
     `
   );

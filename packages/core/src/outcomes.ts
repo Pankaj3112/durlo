@@ -17,8 +17,18 @@ export class PermanentError extends DurloError {
   }
 }
 
-type RetryAfterOptions = { after: DurationInput; message?: string; cause?: unknown };
-type RetryAtOptions = { at: Date | string | number; message?: string; cause?: unknown };
+type RetryAfterOptions = {
+  after: DurationInput;
+  at?: never;
+  message?: string;
+  cause?: unknown;
+};
+type RetryAtOptions = {
+  at: Date | string | number;
+  after?: never;
+  message?: string;
+  cause?: unknown;
+};
 
 export class RetryError extends DurloError {
   override readonly name = "RetryError";
@@ -60,6 +70,7 @@ export function isRetryError(error: unknown): error is RetryError {
   return (
     error instanceof RetryError &&
     Object.getPrototypeOf(error) === RetryError.prototype &&
-    retryErrors.has(error)
+    retryErrors.has(error) &&
+    Number.isFinite(error.retryAt.getTime())
   );
 }

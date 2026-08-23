@@ -25,6 +25,7 @@ import type {
 } from "./types.js";
 import { parseTimerDuration } from "./validation.js";
 import { getTaskRegistration, getWorkflowRegistration } from "./definitions.js";
+import { isPermanentError, isRetryError } from "./outcomes.js";
 
 type RegisteredTask = {
   id: string;
@@ -484,12 +485,17 @@ export class Worker {
       const retry = this.retryFor(run);
       const failureNumber = run.failureCount + 1;
       const exhausted = failureNumber >= run.maxAttempts;
-      const outcome = exhausted
-        ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
-        : ({
-            status: "pending",
-            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber))
-          } as const);
+      const permanent = isPermanentError(error);
+      const directedRetry = isRetryError(error) ? error : null;
+      const outcome =
+        permanent || exhausted
+          ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
+          : ({
+              status: "pending",
+              scheduledAt:
+                directedRetry?.retryAt ??
+                new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber))
+            } as const);
       try {
         await this.adapter.failRun({
           runId: run.id,
