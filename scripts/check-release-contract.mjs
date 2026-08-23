@@ -160,6 +160,9 @@ for (const requirement of [
   'tags: ["v*"]',
   "workflow_dispatch:",
   "environment: npm-release",
+  "needs.audit.outputs.prepared_artifact",
+  "needs.publish.outputs.published_artifact",
+  "needs.verification.outputs.verified_artifact",
   "id-token: write",
   "persist-credentials: false",
   "package-manager-cache: false",
@@ -170,6 +173,7 @@ for (const requirement of [
   "pnpm test:registry",
   "pnpm test:registry-quickstart",
   "NPM_BOOTSTRAP_TOKEN",
+  "GH_REPO:",
   "--verify-tag",
   "--prerelease"
 ]) {

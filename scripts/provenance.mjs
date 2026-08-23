@@ -53,7 +53,7 @@ export function verifyDurloProvenance({
       statement.predicateType !== slsaPredicate ||
       !subject ||
       workflow?.repository?.replace(/\.git$/, "") !== repositoryWithoutGit ||
-      workflow?.path !== workflowPath ||
+      normalizeWorkflowPath(workflow?.path) !== normalizeWorkflowPath(workflowPath) ||
       workflow?.ref !== expectedRef ||
       sourceUri !== expectedSourceUri
     ) {
@@ -67,11 +67,15 @@ export function verifyDurloProvenance({
       attestationUrl: verified.attestations?.url ?? null,
       predicateType: slsaPredicate,
       repository: repositoryWithoutGit,
-      workflowPath,
+      workflowPath: normalizeWorkflowPath(workflowPath),
       ref: expectedRef,
       commit
     };
   });
+}
+
+function normalizeWorkflowPath(path) {
+  return typeof path === "string" ? path.replace(/^\/+/, "") : path;
 }
 
 function integrityHex(integrity) {

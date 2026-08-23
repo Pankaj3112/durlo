@@ -116,6 +116,10 @@ first missing package. It fails with actionable output when an artifact differs,
 missing or identifies another source, or a later package exists without an earlier dependency.
 Never unpublish, overwrite, retag, or bypass the plan.
 
+The workflow passes each evidence artifact's exact producer name to the next job, so **Re-run
+failed jobs** safely reuses a successful upstream audit or publication even though GitHub advances
+the run-attempt number. Do not download and substitute artifacts from another workflow run.
+
 If registry propagation delays verification, wait and rerun the same workflow. If an artifact is
 mismatched or publication order is incompatible, stop: resolution requires a new version and a
 documented compatibility decision.

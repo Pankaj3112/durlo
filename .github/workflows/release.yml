@@ -25,6 +25,8 @@ jobs:
     name: Complete release audit
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      prepared_artifact: ${{ steps.prepared_artifact.outputs.name }}
 
     services:
       postgres:
@@ -75,11 +77,16 @@ jobs:
       - name: Build audited package and registry plan
         run: node scripts/release.mjs audit --tag "${RELEASE_TAG}"
 
+      - name: Name prepared release evidence
+        id: prepared_artifact
+        if: always()
+        run: echo "name=release-prepared-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload prepared release evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-prepared-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ steps.prepared_artifact.outputs.name }}
           if-no-files-found: warn
           path: release-evidence
           retention-days: 90
@@ -91,6 +98,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: npm-release
+    outputs:
+      published_artifact: ${{ steps.published_artifact.outputs.name }}
     permissions:
       contents: read
       id-token: write
@@ -118,7 +127,7 @@ jobs:
       - name: Download audited artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: release-prepared-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ needs.audit.outputs.prepared_artifact }}
           path: release-evidence
 
       - name: Publish missing matching artifacts in dependency order
@@ -126,11 +135,16 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: node scripts/release.mjs publish --prepared --tag "${RELEASE_TAG}"
 
+      - name: Name publication evidence
+        id: published_artifact
+        if: always()
+        run: echo "name=release-published-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload publication evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-published-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ steps.published_artifact.outputs.name }}
           if-no-files-found: warn
           path: release-evidence
           retention-days: 90
@@ -141,6 +155,8 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      verified_artifact: ${{ steps.verified_artifact.outputs.name }}
     permissions:
       contents: read
 
@@ -189,7 +205,7 @@ jobs:
       - name: Download publication evidence
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: release-published-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ needs.publish.outputs.published_artifact }}
           path: release-evidence
 
       - name: Verify exact public-registry consumers
@@ -201,11 +217,16 @@ jobs:
       - name: Record immutable registry verification
         run: node scripts/record-release-verification.mjs
 
+      - name: Name verified release evidence
+        id: verified_artifact
+        if: always()
+        run: echo "name=release-verified-${RELEASE_TAG}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload verified release evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-verified-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ steps.verified_artifact.outputs.name }}
           if-no-files-found: warn
           path: release-evidence
           retention-days: 90
@@ -223,12 +244,13 @@ jobs:
       - name: Download verified release evidence
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: release-verified-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          name: ${{ needs.verification.outputs.verified_artifact }}
           path: release-evidence
 
       - name: Create or refresh GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md

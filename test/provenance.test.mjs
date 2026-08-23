@@ -4,7 +4,7 @@ import test from "node:test";
 import { verifyDurloProvenance } from "../scripts/provenance.mjs";
 
 const repository = "https://github.com/Pankaj3112/durlo";
-const workflowPath = "/.github/workflows/release.yml";
+const workflowPath = ".github/workflows/release.yml";
 const tag = "v0.1.0-alpha.0";
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const version = tag.slice(1);
@@ -111,7 +111,7 @@ function provenancePayload(overrides = {}) {
         externalParameters: {
           workflow: {
             repository: overrides.repository ?? repository,
-            path: overrides.path ?? workflowPath,
+            path: overrides.path ?? `/${workflowPath}`,
             ref: overrides.ref ?? `refs/tags/${tag}`
           }
         },

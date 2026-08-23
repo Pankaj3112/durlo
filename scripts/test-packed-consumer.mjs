@@ -430,7 +430,7 @@ try {
       audit,
       expectedPackages,
       repository: "https://github.com/Pankaj3112/durlo",
-      workflowPath: "/.github/workflows/release.yml",
+      workflowPath: ".github/workflows/release.yml",
       tag: `v${version}`,
       commit
     });

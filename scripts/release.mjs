@@ -262,7 +262,7 @@ async function verifyRegistryPackageProvenance(item, releaseTag, commit) {
       audit,
       expectedPackages: [item],
       repository: "https://github.com/Pankaj3112/durlo",
-      workflowPath: "/.github/workflows/release.yml",
+      workflowPath: ".github/workflows/release.yml",
       tag: releaseTag,
       commit
     })[0];
