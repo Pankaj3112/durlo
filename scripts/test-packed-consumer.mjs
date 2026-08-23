@@ -76,6 +76,7 @@ try {
         type BatchItem,
         type DurableValue,
         type DurloAdapter,
+        type RunCreation,
         type RunHandle,
         type StandardSchema
       } from "@durlo/core";
@@ -111,18 +112,18 @@ try {
         run: async ({ input }) => input.normalized.length
       });
       const input: ExternalInput = { raw: " value " };
-      const taskHandle: Promise<RunHandle<string>> = task.enqueue(input);
-      const batchHandles: Promise<Array<RunHandle<string>>> = task.batchEnqueue([
-        input,
+      const taskHandle: Promise<RunCreation<string>> = task.enqueue(input);
+      const batchHandles: Promise<Array<RunCreation<string>>> = task.batchEnqueue([
+        { input },
         { input } satisfies BatchItem<ExternalInput>
       ]);
-      const workflowHandle: Promise<RunHandle<number>> = workflow.start(input);
+      const workflowHandle: Promise<RunCreation<number>> = workflow.start(input);
       if (false) {
         void durlo.transaction(async ({ client }) => client.query("select 1"));
         void durlo.transaction(async (transaction) => {
           await transaction.enqueue(task, input);
           await transaction.start(workflow, input);
-          await transaction.batchEnqueue(task, [input]);
+          await transaction.batchEnqueue(task, [{ input }]);
         });
         // @ts-expect-error The unsafe caller-supplied transaction API must stay unavailable.
         durlo.tx(adapter.pool);
@@ -213,13 +214,14 @@ function exportAssertions(format) {
       "DEFAULT_RETRY_POLICY",
       "Durlo",
       "DurloError",
-      "LostLeaseError",
+      "IdempotencyConflictError",
+      "MAX_DATE_MS",
+      "MAX_TIMER_DELAY_MS",
       "RunStateError",
       "SerializationError",
       "StorageLimitError",
       "ValidationError",
       "Worker",
-      "WorkflowSleepError",
       "assertByteLimit",
       "assertCountLimit",
       "calculateRetryDelay",
@@ -229,6 +231,7 @@ function exportAssertions(format) {
       "normalizeDurloLimits",
       "normalizeRetryPolicy",
       "parseDuration",
+      "parseTimerDuration",
       "serialize",
       "serializeError",
       "serializeErrorWithinLimit"
@@ -267,7 +270,8 @@ function exportAssertions(format) {
       "0003_retention_cleanup",
       "0004_observability_reads",
       "0005_truthful_step_interruptions",
-      "0006_serialization_versions"
+      "0006_serialization_versions",
+      "0007_idempotency_comparison_metadata"
     ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
     if (cli.cliPackageName !== "@durlo/cli") throw new Error("missing ${format} CLI marker");
   `;

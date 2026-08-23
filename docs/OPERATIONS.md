@@ -1,7 +1,7 @@
 # Durlo Operations
 
 Status: Current pre-release guidance
-Updated: 2026-07-26
+Updated: 2026-08-23
 
 Durlo has no supported production release yet. This document records the operating behavior that
 exists and the boundaries exercised by the repository.
@@ -55,6 +55,11 @@ to route codec-v2 runs. It does not rewrite existing rows. Apply it first, then 
 then switch producers to the new package. New workers continue to claim legacy rows; old workers
 continue legacy work but cannot claim newly written codec-v2 rows.
 
+Migration `0007_idempotency_comparison_metadata` adds the transformed-input, normalized-execution,
+schedule-intent, and resource-version fields used to verify compatible idempotency reuse. Existing
+rows without those fields are intentionally not guessed to be compatible; reuse reports
+`legacy_unverifiable` and makes no mutation.
+
 The runtime role requires normal read/write access to Durlo tables and sequences but should not own
 the schema.
 
@@ -94,7 +99,10 @@ The default `pollInterval` is one second. Each worker polls both runs and timers
 traffic grows linearly with worker replicas. Pickup and timer latency include the polling interval,
 pool wait, query time, and available execution capacity.
 
-Zero is currently accepted and creates a tight database loop; never configure `pollInterval: 0`.
+`pollInterval` and `leaseDuration` must be greater than zero. All timer-backed durations are finite
+and at most `2_147_483_647` milliseconds, the safe Node.js timer range. Retry backoff delay and
+maximum delay follow the same bound and must be positive. A run schedule may use `delay: 0`, which
+is the valid immediate schedule; invalid dates and oversized delays are rejected before insertion.
 Durlo provides no pickup-latency or timer-lag SLA.
 
 Polling failures use bounded exponential backoff with jitter. Heartbeat query errors are treated as
@@ -143,9 +151,12 @@ At minimum collect:
 - PostgreSQL query latency, CPU, I/O, active connections, lock waits, dead tuples, and WAL volume;
 - terminal-history growth and cleanup duration.
 
-`worker.getHealth().database.healthy` currently reflects only consecutive claim and timer failures.
-An execution/completion persistence error is stored as `lastError` but does not make that boolean
-false. Alert on the error stream and stale success timestamps rather than the boolean alone.
+`worker.getHealth().database.healthy` is true only when consecutive claim, timer, and execution
+persistence failures are all zero. Inspect `persistenceFailures` and
+`lastSuccessfulPersistenceAt` alongside the polling timestamps. A confirmed durable terminal run
+outcome resets persistence failures; claim/timer polls, lease loss, stale-write suppression, and
+handler-only failures do not. The CLI and local dashboard serialize these fields in their health
+JSON.
 
 Run detail and timelines are diagnostic snapshots, not a complete event log. A displayed `running`
 step attempt should have a currently running parent run with the same lease; interruption close
@@ -201,7 +212,7 @@ the intended infrastructure.
 
 After a worker or database interruption:
 
-1. confirm claim and timer success timestamps advance again;
+1. confirm claim, timer, and persistence success timestamps advance again;
 2. inspect ready lag, expired leases, and due timer lag;
 3. check compatibility across the full worker fleet;
 4. inspect stalled attempts and business idempotency records for possible duplicate effects;

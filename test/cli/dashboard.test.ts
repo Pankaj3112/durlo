@@ -9,7 +9,21 @@ describe("local dashboard", () => {
     const calls: Array<{ operation: string; value?: unknown }> = [];
     const config = fakeConfig(calls);
     const worker = {
-      getHealth: () => ({ status: "running", activeRuns: 1, concurrency: 3 }),
+      getHealth: () => ({
+        status: "running",
+        activeRuns: 1,
+        concurrency: 3,
+        database: {
+          healthy: false,
+          claimFailures: 0,
+          timerFailures: 0,
+          persistenceFailures: 2,
+          lastSuccessfulClaimAt: null,
+          lastSuccessfulTimerPromotionAt: null,
+          lastSuccessfulPersistenceAt: null,
+          lastError: null
+        }
+      }),
       getCompatibilityReport: async () => ({ unavailableRuns: [], truncated: false })
     } as unknown as Worker;
     const server = await startDashboard(config, worker, { port: 0 });
@@ -44,6 +58,11 @@ describe("local dashboard", () => {
       const health = await json(`${server.url}/api/health`);
       expect(health.body.appId).toBe("app<unsafe>");
       expect(health.body.worker?.status).toBe("running");
+      expect(health.body.worker?.database).toMatchObject({
+        healthy: false,
+        persistenceFailures: 2,
+        lastSuccessfulPersistenceAt: null
+      });
       expect(health.body.compatibility?.unavailableRuns).toEqual([]);
     } finally {
       await server.close();
@@ -249,7 +268,14 @@ type ApiBody = {
   runs: unknown[];
   run: { id: string };
   appId: string;
-  worker: { status: string } | null;
+  worker: {
+    status: string;
+    database?: {
+      healthy: boolean;
+      persistenceFailures: number;
+      lastSuccessfulPersistenceAt: string | null;
+    };
+  } | null;
   compatibility: { unavailableRuns: unknown[] } | null;
   error: string;
 };

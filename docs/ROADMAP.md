@@ -1,17 +1,17 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-07-26
+Updated: 2026-08-23
 
 > **Current focus:** Close the remaining integrity defects. Do not start future roadmap work yet.
 
 ## At a glance
 
-| Horizon | Outcome | Stages |
-| --- | --- | --- |
-| **Now** | Publish a trustworthy alpha | Safe transactions → integrity → public API → alpha |
-| **Next** | Produce credible operational proof | Production-proof laboratory → supported production envelope |
-| **Later** | Earn enough outside trust for v1 | Public beta → independent usage → `1.0` |
+| Horizon   | Outcome                            | Stages                                                      |
+| --------- | ---------------------------------- | ----------------------------------------------------------- |
+| **Now**   | Publish a trustworthy alpha        | Safe transactions → integrity → public API → alpha          |
+| **Next**  | Produce credible operational proof | Production-proof laboratory → supported production envelope |
+| **Later** | Earn enough outside trust for v1   | Public beta → independent usage → `1.0`                     |
 
 Only one GitHub issue should be active at a time. The roadmap shows direction; each issue holds the
 implementation detail.
@@ -48,8 +48,9 @@ observability reads, a CLI, a local dashboard, and production-shaped reference a
 
 Workflow interruption history remains truthful across lease stalls, cancellation, and attempt
 timeout. Transaction-bound creation now owns the raw-`pg` lifecycle and pool ownership is explicit.
-The remaining blockers are concentrated around input and serialization integrity, public API
-clarity, packaging, and operational proof.
+The remaining blockers are concentrated around the broader public contract, packaging, and
+operational proof. Issue #9 closes the known input, idempotency, timing, control-signal, and worker
+health integrity defects.
 
 The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported production library.
 
@@ -90,7 +91,8 @@ Workflow interruption history is already repaired and must remain covered by reg
 #### Done when
 
 No known path can silently corrupt input, ownership, retry behavior, or durable history, and the
-complete release audit passes.
+complete release audit passes. Issue #9 provides the implementation and regression coverage for
+this gate.
 
 ### 3. Stabilize the public contract
 
