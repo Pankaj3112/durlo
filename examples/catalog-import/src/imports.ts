@@ -52,11 +52,11 @@ export async function enqueueImport(request: CatalogImportRequest, contentHash: 
       `update catalog_imports
        set run_id = coalesce(run_id, $2), updated_at = now()
        where id = $1 and (run_id is null or run_id = $2)`,
-      [request.importId, handle.id]
+      [request.importId, handle.run.id]
     );
     if (linked.rowCount !== 1) {
       throw new Error(
-        `catalog import '${request.importId}' could not be linked to run '${handle.id}'`
+        `catalog import '${request.importId}' could not be linked to run '${handle.run.id}'`
       );
     }
     return handle;

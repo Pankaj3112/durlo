@@ -33,7 +33,11 @@ const server = createServer(async (request, response) => {
       const parsed = parseImportRequest(await readJson(request));
       if ("issues" in parsed) throw new HttpError(400, parsed.issues[0].message);
       const handle = await enqueueImport(parsed.value, parsed.contentHash);
-      sendJson(response, 202, { importId: parsed.value.importId, runId: handle.id });
+      sendJson(response, 202, {
+        importId: parsed.value.importId,
+        runId: handle.run.id,
+        created: handle.created
+      });
       return;
     }
 

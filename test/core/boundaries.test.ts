@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DURLO_LIMITS,
   Durlo,
+  MAX_DATE_MS,
+  MAX_TIMER_DELAY_MS,
   SerializationError,
   StorageLimitError,
   ValidationError,
@@ -11,6 +13,7 @@ import {
   normalizeBackoff,
   normalizeRetryPolicy,
   parseDuration,
+  parseTimerDuration,
   serialize,
   serializeError
 } from "@durlo/core";
@@ -28,11 +31,11 @@ function validationAdapter(): DurloAdapter & { created: CreateRunInput[] } {
   const transactional: TransactionalDurloAdapter = {
     createRun: async (input) => {
       created.push(input);
-      return pendingRecord(input);
+      return { run: pendingRecord(input), created: true };
     },
     createRuns: async (inputs) => {
       created.push(...inputs);
-      return inputs.map(pendingRecord);
+      return inputs.map((input) => ({ run: pendingRecord(input), created: true }));
     }
   };
   const unused = async (): Promise<never> => {
@@ -134,6 +137,13 @@ describe("duration and id boundaries", () => {
     for (const value of ["x1s", "1sx", "1", "-1s", "1w", "1..2s"]) {
       expect(() => parseDuration(value)).toThrow("must use ms, s, m, h, or d");
     }
+    expect(() => parseDuration(MAX_TIMER_DELAY_MS + 1)).not.toThrow();
+    expect(() => parseDuration(MAX_DATE_MS + 1)).toThrow("valid JavaScript date");
+    expect(() => parseDuration("100000000000d")).toThrow("valid JavaScript date");
+    expect(() => parseTimerDuration(MAX_TIMER_DELAY_MS + 1)).toThrow("Node.js timer");
+    expect(() => parseTimerDuration(0, "poll interval", { allowZero: false })).toThrow(
+      "greater than zero"
+    );
   });
 
   it("accepts 255-character ids and rejects empty, non-string, and 256-character ids", () => {
@@ -188,6 +198,16 @@ describe("retry decision boundaries", () => {
     expect(() => normalizeBackoff({ type: "exponential", delay: 1, maxDelay: "invalid" })).toThrow(
       "maximum backoff delay"
     );
+    expect(() => normalizeBackoff({ type: "fixed", delay: 0 })).toThrow("greater than zero");
+    expect(() => normalizeBackoff({ type: "fixed", delay: MAX_TIMER_DELAY_MS + 1 })).toThrow(
+      "Node.js timer"
+    );
+    expect(
+      calculateRetryDelay(
+        { type: "exponential", delay: MAX_TIMER_DELAY_MS, factor: 2, jitter: 0 },
+        100
+      )
+    ).toBe(MAX_TIMER_DELAY_MS);
   });
 
   it("calculates fixed, exponential, capped, and deterministic jitter delays", () => {
@@ -205,6 +225,15 @@ describe("retry decision boundaries", () => {
     expect(calculateRetryDelay(exponential, 1, () => 0.5)).toBe(100);
     expect(calculateRetryDelay(exponential, 2, () => 0.5)).toBe(300);
     expect(calculateRetryDelay(exponential, 3, () => 0.5)).toBe(500);
+    expect(
+      calculateRetryDelay(
+        { type: "exponential", delay: 500, factor: 2, maxDelay: 500, jitter: 0 },
+        2
+      )
+    ).toBe(500);
+    expect(
+      calculateRetryDelay({ type: "exponential", delay: 100, factor: 3, jitter: 0 }, 0, () => 0.5)
+    ).toBe(100);
 
     const jittered = { type: "fixed" as const, delay: 100, jitter: 0.2 };
     expect(calculateRetryDelay(jittered, 1, () => 0)).toBe(80);
@@ -231,10 +260,12 @@ describe("run option boundaries", () => {
       { priority: 1.5 },
       { idempotencyKey: "x".repeat(2_049) },
       { delay: -1 },
+      { delay: MAX_TIMER_DELAY_MS + 1 },
       { timeout: Number.POSITIVE_INFINITY },
       { runAt: "not-a-date" },
       { attempts: 1.5 },
       { backoff: { type: "fixed" as const, delay: "invalid" } },
+      { backoff: { type: "fixed" as const, delay: 0 } },
       { backoff: { type: "fixed" as const, delay: 1, jitter: -1 } },
       { backoff: { type: "exponential" as const, delay: 1, factor: 0 } }
     ];
@@ -471,9 +502,11 @@ describe("storage limit boundaries", () => {
       limits: { maxBatchItems: 2, maxBatchBytes: jsonByteSize([1, 2]) }
     }).task({ id: "batch", run: async (input: number) => input });
 
-    await expect(task.batchEnqueue([1, 2])).resolves.toHaveLength(2);
-    await expect(task.batchEnqueue([1, 2, 3])).rejects.toBeInstanceOf(StorageLimitError);
-    await expect(task.batchEnqueue([1, 20])).rejects.toMatchObject({
+    await expect(task.batchEnqueue([{ input: 1 }, { input: 2 }])).resolves.toHaveLength(2);
+    await expect(
+      task.batchEnqueue([{ input: 1 }, { input: 2 }, { input: 3 }])
+    ).rejects.toBeInstanceOf(StorageLimitError);
+    await expect(task.batchEnqueue([{ input: 1 }, { input: 20 }])).rejects.toMatchObject({
       limitName: "maxBatchBytes"
     });
     expect(adapter.created).toHaveLength(2);

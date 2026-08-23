@@ -46,11 +46,11 @@ function createAdapter(): DurloAdapter & {
   const transactional: TransactionalDurloAdapter = {
     createRun: async (input) => {
       created.push(input);
-      return recordFromInput(input);
+      return { run: recordFromInput(input), created: true };
     },
     createRuns: async (inputs) => {
       created.push(...inputs);
-      return inputs.map(recordFromInput);
+      return inputs.map((input) => ({ run: recordFromInput(input), created: true }));
     }
   };
   const adapter: DurloAdapter & {
@@ -120,6 +120,35 @@ function createAdapter(): DurloAdapter & {
 }
 
 describe("Durlo core API", () => {
+  it("returns creation metadata and preserves explicitly wrapped ambiguous payloads", async () => {
+    const adapter = createAdapter();
+    const task = new Durlo({ id: "test-app", adapter }).task<
+      { input: string; options: { business: boolean } },
+      string
+    >({
+      id: "ambiguous-batch-task",
+      run: async (input) => input.input
+    });
+
+    const single = await task.enqueue({ input: "single", options: { business: true } });
+    const batch = await task.batchEnqueue([
+      { input: { input: "nested", options: { business: true } } }
+    ]);
+
+    expect(single).toMatchObject({ created: true, run: { kind: "task" } });
+    expect(batch[0]).toMatchObject({ created: true, run: { kind: "task" } });
+    expect(deserialize(adapter.created[1]!.input)).toEqual({
+      input: "nested",
+      options: { business: true }
+    });
+  });
+
+  it("does not publish internal control-signal constructors", async () => {
+    const runtime = await import("@durlo/core");
+    expect("WorkflowSleepError" in runtime).toBe(false);
+    expect("LostLeaseError" in runtime).toBe(false);
+  });
+
   it("defines and enqueues tasks with normalized durable options", async () => {
     const adapter = createAdapter();
     const durlo = new Durlo({ id: "test-app", adapter, defaultRetry: { attempts: 4 } });
@@ -136,10 +165,13 @@ describe("Durlo core API", () => {
     );
 
     expect(handle).toMatchObject({
-      kind: "task",
-      resourceId: "send-email",
-      resourceVersion: "2026-07",
-      status: "pending"
+      created: true,
+      run: {
+        kind: "task",
+        resourceId: "send-email",
+        resourceVersion: "2026-07",
+        status: "pending"
+      }
     });
     expect(adapter.created[0]).toMatchObject({
       appId: "test-app",
@@ -177,7 +209,10 @@ describe("Durlo core API", () => {
       run: async () => undefined
     });
 
-    await expect(workflow.start({ userId: "user_1" })).resolves.toMatchObject({ kind: "workflow" });
+    await expect(workflow.start({ userId: "user_1" })).resolves.toMatchObject({
+      created: true,
+      run: { kind: "workflow" }
+    });
     await expect(workflow.start({} as { userId: string })).rejects.toThrow("userId is required");
     expect(validate).toHaveBeenCalledTimes(2);
     expect(workflow.version).toBe("1");
@@ -222,7 +257,7 @@ describe("Durlo core API", () => {
       run: async (input: HandlerInput) => input.value
     });
 
-    await task.batchEnqueue([{ value: 1 }, { value: 2 }]);
+    await task.batchEnqueue([{ input: { value: 1 } }, { input: { value: 2 } }]);
 
     expect(validate).toHaveBeenCalledTimes(2);
     expect(adapter.created.map(({ input }) => deserialize(input))).toEqual([
@@ -270,7 +305,10 @@ describe("Durlo core API", () => {
       run: async (input: number) => input
     });
 
-    const handles = await task.batchEnqueue([1, { input: 2, options: { idempotencyKey: "two" } }]);
+    const handles = await task.batchEnqueue([
+      { input: 1 },
+      { input: 2, options: { idempotencyKey: "two" } }
+    ]);
     expect(handles).toHaveLength(2);
     await expect(
       task.batchEnqueue([
@@ -290,7 +328,7 @@ describe("Durlo core API", () => {
       expect(transaction.client).toBe(adapter.transactionClient);
       await transaction.enqueue(task, "input");
       await transaction.start(workflow, { value: true });
-      await transaction.batchEnqueue(task, ["one", "two"]);
+      await transaction.batchEnqueue(task, [{ input: "one" }, { input: "two" }]);
       return { committed: true };
     });
 

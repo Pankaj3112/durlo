@@ -3,11 +3,16 @@ import type { BackoffPolicy, DurationInput, RunOptions, StandardSchema } from ".
 
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/;
 const DURATION_FACTORS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+export const MAX_DATE_MS = 8_640_000_000_000_000;
 
 export function parseDuration(value: DurationInput, label = "duration"): number {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || value < 0) {
       throw new ValidationError(`${label} must be a finite, non-negative number`);
+    }
+    if (value > MAX_DATE_MS) {
+      throw new ValidationError(`${label} is too large for a valid JavaScript date`);
     }
     return value;
   }
@@ -18,7 +23,28 @@ export function parseDuration(value: DurationInput, label = "duration"): number 
   }
   const amount = Number(match[1]);
   const unit = match[2] as keyof typeof DURATION_FACTORS;
-  return amount * DURATION_FACTORS[unit];
+  const milliseconds = amount * DURATION_FACTORS[unit];
+  if (!Number.isFinite(milliseconds) || milliseconds > MAX_DATE_MS) {
+    throw new ValidationError(`${label} is too large for a valid JavaScript date`);
+  }
+  return milliseconds;
+}
+
+export function parseTimerDuration(
+  value: DurationInput,
+  label = "duration",
+  options: { allowZero?: boolean } = {}
+): number {
+  const milliseconds = parseDuration(value, label);
+  if (milliseconds > MAX_TIMER_DELAY_MS) {
+    throw new ValidationError(
+      `${label} must be at most ${MAX_TIMER_DELAY_MS} milliseconds for a Node.js timer`
+    );
+  }
+  if (options.allowZero === false && milliseconds === 0) {
+    throw new ValidationError(`${label} must be greater than zero`);
+  }
+  return milliseconds;
 }
 
 export function validateId(value: string, label: string): void {
@@ -48,7 +74,7 @@ function validateAttempts(attempts: number): void {
 }
 
 export function validateBackoff(backoff: BackoffPolicy): void {
-  parseDuration(backoff.delay, "backoff delay");
+  parseTimerDuration(backoff.delay, "backoff delay", { allowZero: false });
   const jitter = backoff.jitter ?? 0;
   if (!Number.isFinite(jitter) || jitter < 0 || jitter > 1) {
     throw new ValidationError("jitter must be between 0 and 1");
@@ -59,7 +85,7 @@ export function validateBackoff(backoff: BackoffPolicy): void {
       throw new ValidationError("exponential backoff factor must be at least 1");
     }
     if (backoff.maxDelay !== undefined) {
-      parseDuration(backoff.maxDelay, "maximum backoff delay");
+      parseTimerDuration(backoff.maxDelay, "maximum backoff delay", { allowZero: false });
     }
   }
 }
@@ -68,8 +94,8 @@ export function validateRunOptions(options: RunOptions): void {
   if (options.delay !== undefined && options.runAt !== undefined) {
     throw new ValidationError("delay and runAt are mutually exclusive");
   }
-  if (options.delay !== undefined) parseDuration(options.delay, "delay");
-  if (options.timeout !== undefined) parseDuration(options.timeout, "timeout");
+  if (options.delay !== undefined) parseTimerDuration(options.delay, "delay");
+  if (options.timeout !== undefined) parseTimerDuration(options.timeout, "timeout");
   if (options.runAt !== undefined && !Number.isFinite(new Date(options.runAt).getTime())) {
     throw new ValidationError("runAt must be a valid date");
   }

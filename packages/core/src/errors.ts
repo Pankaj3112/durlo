@@ -1,3 +1,5 @@
+import type { IdempotencyMismatch } from "./types.js";
+
 export class DurloError extends Error {
   override readonly name: string = "DurloError";
 }
@@ -23,10 +25,6 @@ export class StorageLimitError extends DurloError {
   }
 }
 
-export class LostLeaseError extends DurloError {
-  override readonly name = "LostLeaseError";
-}
-
 export class AttemptTimeoutError extends DurloError {
   override readonly name = "AttemptTimeoutError";
 }
@@ -35,6 +33,23 @@ export class RunStateError extends DurloError {
   override readonly name = "RunStateError";
 }
 
-export class WorkflowSleepError extends DurloError {
-  override readonly name = "WorkflowSleepError";
+export class IdempotencyConflictError extends DurloError {
+  override readonly name = "IdempotencyConflictError";
+  readonly idempotencyKey: string;
+  readonly existingRunId: string;
+  readonly mismatches: readonly IdempotencyMismatch[];
+
+  constructor(
+    idempotencyKey: string,
+    existingRunId: string,
+    mismatches: readonly IdempotencyMismatch[]
+  ) {
+    const sorted = [...new Set(mismatches)].sort();
+    super(
+      `idempotency key '${idempotencyKey}' already belongs to run '${existingRunId}' with mismatches: ${sorted.join(", ")}`
+    );
+    this.idempotencyKey = idempotencyKey;
+    this.existingRunId = existingRunId;
+    this.mismatches = sorted;
+  }
 }

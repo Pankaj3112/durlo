@@ -19,8 +19,10 @@ import type {
   DurloTransaction,
   Logger,
   NormalizedRetryPolicy,
+  PersistedRunCreation,
   RetentionCleanupOptions,
   RetentionCleanupResult,
+  RunCreation,
   RunDetails,
   RunHandle,
   RunKind,
@@ -29,6 +31,7 @@ import type {
   RunListPage,
   RunOptions,
   RunRecord,
+  ScheduleIntent,
   RunStatus,
   RawPgTransactionClient,
   StandardSchema,
@@ -41,6 +44,7 @@ import type {
 import {
   normalizeResourceVersion,
   parseDuration,
+  parseTimerDuration,
   validateId,
   validateRunOptions,
   validateSchema
@@ -59,9 +63,9 @@ function toHandle<TOutput>(record: RunRecord): RunHandle<TOutput> {
   };
 }
 
-function isBatchItem<T>(item: T | BatchItem<T>): item is BatchItem<T> {
-  if (!item || typeof item !== "object" || !("input" in item)) return false;
-  return Object.keys(item).every((key) => key === "input" || key === "options");
+function toCreation<TOutput>(result: PersistedRunCreation): RunCreation<TOutput> {
+  const run = toHandle<TOutput>(result.run);
+  return { run, created: result.created };
 }
 
 const RUN_STATUSES = new Set<RunStatus>([
@@ -146,7 +150,7 @@ export class Durlo {
     this.limits = normalizeDurloLimits(options.limits);
     this.defaultRetry = normalizeRetryPolicy(options.defaultRetry);
     if (options.defaultTimeout !== undefined)
-      this.defaultTimeout = parseDuration(options.defaultTimeout, "default timeout");
+      this.defaultTimeout = parseTimerDuration(options.defaultTimeout, "default timeout");
     const getId = (value: RunHandle | string): string =>
       typeof value === "string" ? value : value.id;
     this.runs = {
@@ -185,7 +189,7 @@ export class Durlo {
     const definitionTimeout =
       definitionOptions.timeout === undefined
         ? this.defaultTimeout
-        : parseDuration(definitionOptions.timeout, "task timeout");
+        : parseTimerDuration(definitionOptions.timeout, "task timeout");
     const create = (adapter: TransactionalDurloAdapter, input: TInput, runOptions?: RunOptions) =>
       this.createRun<TInput, THandlerInput, TOutput>(
         adapter,
@@ -210,9 +214,8 @@ export class Durlo {
       enqueue: (input, runOptions) => create(this.adapter, input, runOptions),
       batchEnqueue: async (items) => {
         this.assertBatchCount(items.length);
-        const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
         const prepared = await Promise.all(
-          normalized.map(({ input, options: runOptions }) =>
+          items.map(({ input, options: runOptions }) =>
             this.prepareRun(
               "task",
               definitionOptions.id,
@@ -231,7 +234,7 @@ export class Durlo {
           .filter((key): key is string => key !== null);
         if (new Set(keys).size !== keys.length)
           throw new Error("duplicate idempotency keys in one batch are not allowed");
-        return (await this.adapter.createRuns(prepared)).map(toHandle<TOutput>);
+        return (await this.adapter.createRuns(prepared)).map(toCreation<TOutput>);
       }
     };
   }
@@ -258,7 +261,7 @@ export class Durlo {
     const definitionTimeout =
       definitionOptions.timeout === undefined
         ? this.defaultTimeout
-        : parseDuration(definitionOptions.timeout, "workflow timeout");
+        : parseTimerDuration(definitionOptions.timeout, "workflow timeout");
     return {
       id: definitionOptions.id,
       version,
@@ -299,7 +302,7 @@ export class Durlo {
           const timeout =
             task.options.timeout === undefined
               ? this.defaultTimeout
-              : parseDuration(task.options.timeout);
+              : parseTimerDuration(task.options.timeout, "task timeout");
           return this.createRun(
             adapter,
             "task",
@@ -317,7 +320,7 @@ export class Durlo {
           const timeout =
             workflow.options.timeout === undefined
               ? this.defaultTimeout
-              : parseDuration(workflow.options.timeout);
+              : parseTimerDuration(workflow.options.timeout, "workflow timeout");
           return this.createRun(
             adapter,
             "workflow",
@@ -332,17 +335,16 @@ export class Durlo {
         },
         batchEnqueue: async <TInput, TOutput, THandlerInput>(
           task: TaskDefinition<TInput, TOutput, THandlerInput>,
-          items: Array<TInput | BatchItem<TInput>>
+          items: ReadonlyArray<BatchItem<TInput>>
         ) => {
           this.assertBatchCount(items.length);
           const retry = normalizeRetryPolicy(task.options.retry, this.defaultRetry);
           const timeout =
             task.options.timeout === undefined
               ? this.defaultTimeout
-              : parseDuration(task.options.timeout);
-          const normalized = items.map((item) => (isBatchItem(item) ? item : { input: item }));
+              : parseTimerDuration(task.options.timeout, "task timeout");
           const prepared = await Promise.all(
-            normalized.map(({ input, options }) =>
+            items.map(({ input, options }) =>
               this.prepareRun(
                 "task",
                 task.id,
@@ -361,7 +363,7 @@ export class Durlo {
             .filter((key): key is string => key !== null);
           if (new Set(keys).size !== keys.length)
             throw new Error("duplicate idempotency keys in one batch are not allowed");
-          return (await adapter.createRuns(prepared)).map(toHandle<TOutput>);
+          return (await adapter.createRuns(prepared)).map(toCreation<TOutput>);
         }
       })
     );
@@ -457,8 +459,8 @@ export class Durlo {
     options: RunOptions | undefined,
     retry: NormalizedRetryPolicy,
     timeout: number | undefined
-  ): Promise<RunHandle<TOutput>> {
-    return toHandle<TOutput>(
+  ): Promise<RunCreation<TOutput>> {
+    return toCreation<TOutput>(
       await adapter.createRun(
         await this.prepareRun(
           kind,
@@ -497,20 +499,30 @@ export class Durlo {
     const timeout =
       runOptions.timeout === undefined
         ? definitionTimeout
-        : parseDuration(runOptions.timeout, "run timeout");
+        : parseTimerDuration(runOptions.timeout, "run timeout");
     const now = Date.now();
-    const scheduledAt =
-      runOptions.runAt !== undefined
-        ? new Date(runOptions.runAt)
-        : new Date(
-            now + (runOptions.delay === undefined ? 0 : parseDuration(runOptions.delay, "delay"))
-          );
+    const delayMilliseconds =
+      runOptions.delay === undefined ? 0 : parseTimerDuration(runOptions.delay, "delay");
+    const runAt = runOptions.runAt === undefined ? undefined : new Date(runOptions.runAt);
+    const schedule: ScheduleIntent =
+      runAt !== undefined
+        ? { type: "runAt", timestamp: runAt.toISOString() }
+        : delayMilliseconds === 0
+          ? { type: "immediate" }
+          : { type: "delay", milliseconds: delayMilliseconds };
+    const scheduledAt = runAt ?? new Date(now + delayMilliseconds);
     const serializedInput = serialize(validatedInput);
     assertByteLimit(serializedInput, "maxInputBytes", this.limits.maxInputBytes, "run input");
     const storedOptions = serialize({
       retry,
       ...(timeout === undefined ? {} : { timeout }),
       limits: persistedRunLimits(this.limits)
+    });
+    const executionOptions = serialize({
+      retry,
+      ...(timeout === undefined ? {} : { timeout }),
+      limits: persistedRunLimits(this.limits),
+      priority: runOptions.priority ?? 0
     });
     return {
       id: randomUUID(),
@@ -523,7 +535,13 @@ export class Durlo {
       idempotencyKey: runOptions.idempotencyKey ?? null,
       priority: runOptions.priority ?? 0,
       scheduledAt,
-      maxAttempts: retry.attempts
+      maxAttempts: retry.attempts,
+      idempotency: {
+        resourceVersion,
+        input: serializedInput,
+        executionOptions,
+        schedule
+      }
     };
   }
 

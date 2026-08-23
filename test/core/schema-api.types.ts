@@ -2,7 +2,7 @@ import { Durlo } from "@durlo/core";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type {
   BatchItem,
-  RunHandle,
+  RunCreation,
   StandardSchema,
   TaskDefinitionOptions,
   WorkflowDefinitionOptions
@@ -37,12 +37,12 @@ const workflow = durlo.workflow({
 });
 
 const external: ExternalInput = { raw: " value " };
-const taskHandle: Promise<RunHandle<string>> = task.enqueue(external);
-const taskBatch: Promise<Array<RunHandle<string>>> = task.batchEnqueue([
-  external,
+const taskHandle: Promise<RunCreation<string>> = task.enqueue(external);
+const taskBatch: Promise<Array<RunCreation<string>>> = task.batchEnqueue([
+  { input: external },
   { input: external, options: { priority: 1 } } satisfies BatchItem<ExternalInput>
 ]);
-const workflowHandle: Promise<RunHandle<number>> = workflow.start(external);
+const workflowHandle: Promise<RunCreation<number>> = workflow.start(external);
 
 // @ts-expect-error enqueue accepts the external schema input, not the transformed handler input.
 void task.enqueue({ normalized: "wrong boundary" });
@@ -50,10 +50,10 @@ void task.enqueue({ normalized: "wrong boundary" });
 void workflow.start({ normalized: "wrong boundary" });
 
 void durlo.transaction(async (transaction) => {
-  const transactionTask: Promise<RunHandle<string>> = transaction.enqueue(task, external);
-  const transactionWorkflow: Promise<RunHandle<number>> = transaction.start(workflow, external);
-  const transactionBatch: Promise<Array<RunHandle<string>>> = transaction.batchEnqueue(task, [
-    external,
+  const transactionTask: Promise<RunCreation<string>> = transaction.enqueue(task, external);
+  const transactionWorkflow: Promise<RunCreation<number>> = transaction.start(workflow, external);
+  const transactionBatch: Promise<Array<RunCreation<string>>> = transaction.batchEnqueue(task, [
+    { input: external },
     { input: external }
   ]);
   await Promise.all([transactionTask, transactionWorkflow, transactionBatch]);
@@ -63,7 +63,7 @@ const plainTask = durlo.task({
   id: "plain-task",
   run: async (input: { id: string }) => input.id.length
 });
-const plainHandle: Promise<RunHandle<number>> = plainTask.enqueue({ id: "plain" });
+const plainHandle: Promise<RunCreation<number>> = plainTask.enqueue({ id: "plain" });
 
 const typedTaskOptions: TaskDefinitionOptions<{ id: string }, number> = {
   id: "typed-options-task",
@@ -75,8 +75,8 @@ const typedWorkflowOptions: WorkflowDefinitionOptions<{ id: string }, number> = 
 };
 const typedTask = durlo.task(typedTaskOptions);
 const typedWorkflow = durlo.workflow(typedWorkflowOptions);
-const typedTaskHandle: Promise<RunHandle<number>> = typedTask.enqueue({ id: "typed" });
-const typedWorkflowHandle: Promise<RunHandle<number>> = typedWorkflow.start({ id: "typed" });
+const typedTaskHandle: Promise<RunCreation<number>> = typedTask.enqueue({ id: "typed" });
+const typedWorkflowHandle: Promise<RunCreation<number>> = typedWorkflow.start({ id: "typed" });
 
 const inferredSchema = {
   "~standard": {
@@ -101,21 +101,23 @@ const inferredWorkflow = durlo.workflow({
   schema: inferredSchema,
   run: async ({ input }) => input.normalized.length
 });
-const inferredTaskHandle: Promise<RunHandle<string>> = inferredTask.enqueue(external);
-const inferredTaskBatch: Promise<Array<RunHandle<string>>> = inferredTask.batchEnqueue([external]);
-const inferredWorkflowHandle: Promise<RunHandle<number>> = inferredWorkflow.start(external);
+const inferredTaskHandle: Promise<RunCreation<string>> = inferredTask.enqueue(external);
+const inferredTaskBatch: Promise<Array<RunCreation<string>>> = inferredTask.batchEnqueue([
+  { input: external }
+]);
+const inferredWorkflowHandle: Promise<RunCreation<number>> = inferredWorkflow.start(external);
 // @ts-expect-error inferred Standard Schema input remains the external input type.
 void inferredTask.enqueue({ normalized: "wrong boundary" });
 // @ts-expect-error inferred Standard Schema input remains the external input type.
 void inferredWorkflow.start({ normalized: "wrong boundary" });
 void durlo.transaction(async (transaction) => {
-  const inferredTransactionTask: Promise<RunHandle<string>> = transaction.enqueue(
+  const inferredTransactionTask: Promise<RunCreation<string>> = transaction.enqueue(
     inferredTask,
     external
   );
-  const inferredTransactionBatch: Promise<Array<RunHandle<string>>> = transaction.batchEnqueue(
+  const inferredTransactionBatch: Promise<Array<RunCreation<string>>> = transaction.batchEnqueue(
     inferredTask,
-    [external]
+    [{ input: external }]
   );
   await Promise.all([inferredTransactionTask, inferredTransactionBatch]);
 });
@@ -148,8 +150,8 @@ const defaultingWorkflow = durlo.workflow({
     return name.length;
   }
 });
-const defaultingTaskHandle: Promise<RunHandle<string>> = defaultingTask.enqueue({});
-const defaultingWorkflowHandle: Promise<RunHandle<number>> = defaultingWorkflow.start({});
+const defaultingTaskHandle: Promise<RunCreation<string>> = defaultingTask.enqueue({});
+const defaultingWorkflowHandle: Promise<RunCreation<number>> = defaultingWorkflow.start({});
 
 const officialSchema: StandardSchemaV1<ExternalInput, HandlerInput> = {
   "~standard": {
@@ -168,8 +170,8 @@ const officialWorkflow = durlo.workflow({
   schema: officialSchema,
   run: async ({ input }) => input.normalized.length
 });
-const officialTaskHandle: Promise<RunHandle<string>> = officialTask.enqueue(external);
-const officialWorkflowHandle: Promise<RunHandle<number>> = officialWorkflow.start(external);
+const officialTaskHandle: Promise<RunCreation<string>> = officialTask.enqueue(external);
+const officialWorkflowHandle: Promise<RunCreation<number>> = officialWorkflow.start(external);
 
 void taskHandle;
 void taskBatch;

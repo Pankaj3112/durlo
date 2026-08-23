@@ -32,7 +32,7 @@ try {
   });
 
   process.stdout.write(`ORDER_ID=${orderId}\n`);
-  process.stdout.write(`RUN_ID=${handle.id}\n`);
+  process.stdout.write(`RUN_ID=${handle.run.id}\n`);
   process.stdout.write("Business row and workflow run committed in one Postgres transaction.\n");
 } finally {
   await adapter.close();
