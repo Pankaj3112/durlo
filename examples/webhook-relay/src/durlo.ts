@@ -1,4 +1,4 @@
-import { Durlo } from "@durlo/core";
+import { Durlo, PermanentError, RetryError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import { config, assertAllowedDestination } from "./config.js";
 import { webhookDeliverySchema } from "./input.js";
@@ -39,9 +39,18 @@ export const deliverWebhook = durlo.task({
       });
       const responseText = (await response.text()).slice(0, 1_000);
       if (!response.ok) {
-        throw new Error(
-          `destination returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`
-        );
+        const message = `destination returned HTTP ${response.status}${responseText ? `: ${responseText}` : ""}`;
+        const cause = { status: response.status, body: responseText };
+        const retryAt = parseRetryAfter(response.headers.get("retry-after"));
+        if (retryAt) throw new RetryError({ at: retryAt, message, cause });
+        if (
+          response.status >= 400 &&
+          response.status < 500 &&
+          ![408, 429].includes(response.status)
+        ) {
+          throw new PermanentError(message, { cause });
+        }
+        throw new Error(message, { cause });
       }
 
       const deliveredAt = new Date().toISOString();
@@ -65,3 +74,11 @@ export const deliverWebhook = durlo.task({
     }
   }
 });
+
+function parseRetryAfter(value: string | null): Date | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return new Date(Date.now() + seconds * 1_000);
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}

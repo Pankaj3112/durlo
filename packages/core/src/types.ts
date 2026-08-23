@@ -119,6 +119,12 @@ export type RunHandle<TOutput = unknown> = Pick<
   "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
 
+export type WaitRunSnapshot = {
+  run: RunRecord;
+  outputKind: "value" | "undefined" | null;
+  storedError: SerializedError | null;
+};
+
 export type RunCreation<TOutput = unknown> = {
   readonly run: RunHandle<TOutput>;
   readonly created: boolean;
@@ -464,6 +470,7 @@ export type DurloTransaction = {
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
   getRun(input: AppRunInput): Promise<RunRecord | null>;
+  getRunForWait?(input: AppRunInput): Promise<WaitRunSnapshot | null>;
   getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null>;
   getBacklogHealth(input: { appId: string }): Promise<BacklogHealth>;
   listRuns(input: RunListInput): Promise<RunSummary[]>;
@@ -477,7 +484,9 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
     limit: number;
   }): Promise<UnavailableRun[]>;
   extendRunLease(input: OwnedRunInput & { leaseDuration: number }): Promise<boolean>;
-  completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
+  completeRun(
+    input: OwnedRunInput & { output: JsonValue; outputKind: "value" | "undefined" }
+  ): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
   releaseRun(input: OwnedRunInput): Promise<boolean>;
   isLeaseLoss?(error: unknown): boolean;
@@ -581,13 +590,10 @@ export type WorkflowDefinitionOptions<TInput, TOutput, THandlerInput = TInput> =
 
 export type BatchItem<TInput> = { input: TInput; options?: RunOptions };
 
-export interface RegisteredTaskDefinition {
+interface RegisteredTaskDefinition {
   readonly id: string;
   readonly version: string;
   readonly kind: "task";
-  readonly _durlo: {
-    run(input: unknown, context: TaskContext): Promise<unknown>;
-  };
 }
 
 export interface TaskDefinition<
@@ -604,13 +610,10 @@ export interface TaskDefinition<
   batchEnqueue(items: ReadonlyArray<BatchItem<TInput>>): Promise<Array<RunCreation<TOutput>>>;
 }
 
-export interface RegisteredWorkflowDefinition {
+interface RegisteredWorkflowDefinition {
   readonly id: string;
   readonly version: string;
   readonly kind: "workflow";
-  readonly _durlo: {
-    run(context: WorkflowContext<unknown>): Promise<unknown>;
-  };
 }
 
 export interface WorkflowDefinition<
@@ -635,7 +638,8 @@ export type Logger = {
 
 export type DurloOptions = {
   id: string;
-  adapter: DurloAdapter;
+  /** An official Durlo storage adapter, such as `PostgresAdapter`. */
+  adapter: object;
   logger?: Logger | false;
   defaultRetry?: RetryPolicy;
   defaultTimeout?: DurationInput;

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Durlo } from "@durlo/core";
-import { postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter } from "@durlo/postgres";
+import { postgresAdapter } from "../helpers/postgres-internal.js";
+import type { PostgresAdapter } from "../helpers/postgres-internal.js";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 const seedCount = Number.parseInt(process.env.DURLO_STRESS_SEEDS ?? "10", 10);
@@ -65,7 +65,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
             runId: claim.id,
             workerId: claim.lockedBy,
             leaseToken: claim.leaseToken,
-            output: { seed }
+            output: { seed },
+            outputKind: "value"
           });
         if (random() < 0.5) {
           await completion();

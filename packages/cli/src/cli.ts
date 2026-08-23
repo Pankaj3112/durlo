@@ -22,6 +22,9 @@ Options:
   -c, --config <path>  Use a specific configuration file
   -h, --help           Show this help
   -v, --version        Show the installed version
+
+Package API:
+  defineConfig         The only supported programmatic @durlo/cli export
 `;
 
 export const cliPackageName = "@durlo/cli";

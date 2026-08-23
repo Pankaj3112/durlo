@@ -17,13 +17,27 @@ import type {
   Logger,
   NormalizedRetryPolicy,
   RegisteredResource,
-  RegisteredTaskDefinition,
-  RegisteredWorkflowDefinition,
+  TaskContext,
   WorkerCompatibilityReport,
   WorkerHealth,
-  WorkerOptions
+  WorkerOptions,
+  WorkflowContext
 } from "./types.js";
 import { parseTimerDuration } from "./validation.js";
+import { getTaskRegistration, getWorkflowRegistration } from "./definitions.js";
+import { isPermanentError, isRetryError } from "./outcomes.js";
+
+type RegisteredTask = {
+  id: string;
+  version: string;
+  run(input: unknown, context: TaskContext): Promise<unknown>;
+};
+
+type RegisteredWorkflow = {
+  id: string;
+  version: string;
+  run(context: WorkflowContext<unknown>): Promise<unknown>;
+};
 
 const OPERATIONAL_BACKOFF_INITIAL = 100;
 const OPERATIONAL_BACKOFF_MAX = 30_000;
@@ -67,8 +81,8 @@ export class Worker {
   readonly id: string;
   private readonly appId: string;
   private readonly adapter: DurloAdapter;
-  private readonly tasks = new Map<string, RegisteredTaskDefinition>();
-  private readonly workflows = new Map<string, RegisteredWorkflowDefinition>();
+  private readonly tasks = new Map<string, RegisteredTask>();
+  private readonly workflows = new Map<string, RegisteredWorkflow>();
   private readonly concurrency: number;
   private readonly pollInterval: number;
   private readonly leaseDuration: number;
@@ -87,13 +101,13 @@ export class Worker {
 
   constructor(
     appId: string,
-    adapter: DurloAdapter,
+    adapter: object,
     options: WorkerOptions,
     logger?: Logger,
     limits: DurloLimits = DEFAULT_DURLO_LIMITS
   ) {
     this.appId = appId;
-    this.adapter = adapter;
+    this.adapter = adapter as DurloAdapter;
     this.logger = logger;
     this.defaultLimits = normalizeDurloLimits(limits);
     this.id = options.workerId ?? randomUUID();
@@ -114,7 +128,13 @@ export class Worker {
           `task '${task.id}' version '${task.version}' is registered more than once`
         );
       }
-      this.tasks.set(key, task);
+      const registration = getTaskRegistration(task);
+      if (!registration) {
+        throw new ValidationError(
+          `task '${task.id}' version '${task.version}' is not a Durlo task definition`
+        );
+      }
+      this.tasks.set(key, { id: task.id, version: task.version, run: registration.run });
     }
     for (const workflow of options.workflows ?? []) {
       const key = resourceKey(workflow.id, workflow.version);
@@ -123,7 +143,17 @@ export class Worker {
           `workflow '${workflow.id}' version '${workflow.version}' is registered more than once`
         );
       }
-      this.workflows.set(key, workflow);
+      const registration = getWorkflowRegistration(workflow);
+      if (!registration) {
+        throw new ValidationError(
+          `workflow '${workflow.id}' version '${workflow.version}' is not a Durlo workflow definition`
+        );
+      }
+      this.workflows.set(key, {
+        id: workflow.id,
+        version: workflow.version,
+        run: registration.run
+      });
     }
   }
 
@@ -405,8 +435,8 @@ export class Worker {
         signal: abortController.signal
       };
       const execution = task
-        ? task._durlo.run(input, context)
-        : workflow!._durlo.run({
+        ? task.run(input, context)
+        : workflow!.run({
             input,
             step: createStepTools(this.adapter, run, limits, (error) =>
               this.notePersistenceFailure(error)
@@ -430,7 +460,8 @@ export class Worker {
           runId: run.id,
           workerId: this.id,
           leaseToken: run.leaseToken,
-          output: serializedOutput
+          output: serializedOutput,
+          outputKind: output === undefined ? "undefined" : "value"
         });
       } catch (error) {
         this.notePersistenceFailure(error);
@@ -454,12 +485,17 @@ export class Worker {
       const retry = this.retryFor(run);
       const failureNumber = run.failureCount + 1;
       const exhausted = failureNumber >= run.maxAttempts;
-      const outcome = exhausted
-        ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
-        : ({
-            status: "pending",
-            scheduledAt: new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber))
-          } as const);
+      const permanent = isPermanentError(error);
+      const directedRetry = isRetryError(error) ? error : null;
+      const outcome =
+        permanent || exhausted
+          ? ({ status: run.kind === "task" ? "dead_letter" : "failed" } as const)
+          : ({
+              status: "pending",
+              scheduledAt:
+                directedRetry?.retryAt ??
+                new Date(Date.now() + calculateRetryDelay(retry.backoff, failureNumber))
+            } as const);
       try {
         await this.adapter.failRun({
           runId: run.id,

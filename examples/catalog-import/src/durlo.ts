@@ -1,4 +1,4 @@
-import { Durlo } from "@durlo/core";
+import { Durlo, PermanentError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import { config } from "./config.js";
 import { catalogWorkflowSchema } from "./input.js";
@@ -25,7 +25,9 @@ export const catalogImportWorkflow = durlo.workflow({
         [input.importId]
       );
       const rowCount = result.rows[0]?.row_count;
-      if (!rowCount) throw new Error(`catalog import '${input.importId}' has no source rows`);
+      if (!rowCount) {
+        throw new PermanentError(`catalog import '${input.importId}' has no source rows`);
+      }
       return { rowCount };
     });
 
@@ -36,8 +38,9 @@ export const catalogImportWorkflow = durlo.workflow({
          where id = $1`,
         [input.importId, validated.rowCount]
       );
-      if (updated.rowCount !== 1)
-        throw new Error(`catalog import '${input.importId}' was not found`);
+      if (updated.rowCount !== 1) {
+        throw new PermanentError(`catalog import '${input.importId}' was not found`);
+      }
       return { productCount: validated.rowCount };
     });
 

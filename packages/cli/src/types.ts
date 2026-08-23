@@ -1,9 +1,15 @@
-import type {
-  Durlo,
-  RegisteredTaskDefinition,
-  RegisteredWorkflowDefinition,
-  WorkerOptions
-} from "@durlo/core";
+import type { Durlo, WorkerOptions } from "@durlo/core";
+
+type TaskDefinitionReference = {
+  readonly id: string;
+  readonly version: string;
+  readonly kind: "task";
+};
+type WorkflowDefinitionReference = {
+  readonly id: string;
+  readonly version: string;
+  readonly kind: "workflow";
+};
 
 export type DashboardOptions = {
   host?: string;
@@ -12,8 +18,8 @@ export type DashboardOptions = {
 
 export type DurloConfig = {
   durlo: Durlo;
-  tasks?: readonly RegisteredTaskDefinition[];
-  workflows?: readonly RegisteredWorkflowDefinition[];
+  tasks?: readonly TaskDefinitionReference[];
+  workflows?: readonly WorkflowDefinitionReference[];
   worker?: Omit<WorkerOptions, "tasks" | "workflows">;
   dashboard?: DashboardOptions;
 };

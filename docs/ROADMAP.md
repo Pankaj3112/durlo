@@ -3,7 +3,7 @@
 Status: Active
 Updated: 2026-08-23
 
-> **Current focus:** Close the remaining integrity defects. Do not start future roadmap work yet.
+> **Current focus:** Prepare the installable alpha. Do not start production-proof work yet.
 
 ## At a glance
 
@@ -48,9 +48,10 @@ observability reads, a CLI, a local dashboard, and production-shaped reference a
 
 Workflow interruption history remains truthful across lease stalls, cancellation, and attempt
 timeout. Transaction-bound creation now owns the raw-`pg` lifecycle and pool ownership is explicit.
-The remaining blockers are concentrated around the broader public contract, packaging, and
-operational proof. Issue #9 closes the known input, idempotency, timing, control-signal, and worker
-health integrity defects.
+The remaining blockers are concentrated around packaging, publication, and operational proof.
+Issue #9 closed the known input, idempotency, timing, control-signal, and worker-health integrity
+defects. Issue #10 stabilized package entry points, typed result waiting, explicit handler outcomes,
+and the compatibility policy.
 
 The packages remain at `0.0.0`. Durlo is not yet a beta release or a supported production library.
 
@@ -74,7 +75,7 @@ client. Configured pools are owned; caller-supplied pools are borrowed.
 The documented transaction path is safe by default, misuse fails immediately, and public-API tests
 cover commit, rollback, conflict, and failure paths.
 
-### 2. Close the remaining integrity defects — **IN PROGRESS**
+### 2. Close the remaining integrity defects — **DONE**
 
 #### Work
 
@@ -94,7 +95,7 @@ No known path can silently corrupt input, ownership, retry behavior, or durable 
 complete release audit passes. Issue #9 provides the implementation and regression coverage for
 this gate.
 
-### 3. Stabilize the public contract
+### 3. Stabilize the public contract — **DONE**
 
 #### Work
 

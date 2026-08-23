@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RunStateError } from "@durlo/core";
 import type { Worker } from "@durlo/core";
-import { startDashboard } from "@durlo/cli";
+import { startDashboard } from "../../packages/cli/src/dashboard.js";
 import type { DurloConfig } from "@durlo/cli";
 
 describe("local dashboard", () => {

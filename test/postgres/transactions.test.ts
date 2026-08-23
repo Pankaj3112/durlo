@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { deserialize, Durlo, IdempotencyConflictError } from "@durlo/core";
-import type { CreateRunInput, TransactionalDurloAdapter } from "@durlo/core";
-import { postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
+import { Durlo, IdempotencyConflictError } from "@durlo/core";
+import { deserialize } from "../../packages/core/src/serialization.js";
+import type { CreateRunInput, TransactionalDurloAdapter } from "../../packages/core/src/types.js";
+import { postgresAdapter } from "../helpers/postgres-internal.js";
+import type { PostgresAdapter, PostgresTransactionClient } from "../helpers/postgres-internal.js";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 

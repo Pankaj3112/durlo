@@ -1,41 +1,44 @@
 import type {
-  AppRunInput,
   AttemptKind,
   AttemptRecord,
   AttemptStatus,
   BacklogHealth,
+  JsonValue,
+  RetentionCleanupResult,
+  RunKind,
+  RunRecord,
+  RunStatus,
+  RunSummary,
+  SerializedError,
+  StepRecord,
+  StepStatus,
+  TimerRecord,
+  TimerStatus,
+  UnavailableRun
+} from "@durlo/core";
+import type {
+  AppRunInput,
   ClaimedRun,
   ClaimRunsInput,
   CreateRunInput,
   DurloAdapter,
   FailRunInput,
   IdempotencyMismatch,
-  JsonValue,
   OwnedRunInput,
   PersistedRunCreation,
   RegisteredResource,
   RawStepRecord,
   RetentionCleanupInput,
-  RetentionCleanupResult,
-  RunKind,
   RunListInput,
-  RunRecord,
-  RunStatus,
-  RunSummary,
   RawPgTransactionClient,
   SerializationVersion,
-  SerializedError,
   StepInput,
-  StepRecord,
-  StepStatus,
   StoredRunDetails,
-  TimerRecord,
-  TimerStatus,
   TransactionalDurloAdapter,
-  UnavailableRun
-} from "@durlo/core";
+  WaitRunSnapshot
+} from "./core-internal.js";
+import { deserialize } from "./serialization-internal.js";
 import {
-  deserialize,
   IdempotencyConflictError,
   RunStateError,
   StorageLimitError,
@@ -99,6 +102,7 @@ type RunRow = QueryResultRow & {
   status: RunStatus;
   input_json: JsonValue;
   output_json: JsonValue | null;
+  output_kind: "value" | "undefined" | null;
   error_json: SerializedError | null;
   options_json: JsonValue;
   idempotency_key: string | null;
@@ -362,7 +366,8 @@ function mapAttempt(row: AttemptRow, serializationVersion: SerializationVersion)
 }
 
 const RUN_COLUMNS = `
-  id, app_id, kind, resource_id, resource_version, status, input_json, output_json, error_json, options_json,
+  id, app_id, kind, resource_id, resource_version, status, input_json, output_json, output_kind,
+  error_json, options_json,
   idempotency_key, priority, scheduled_at, attempt_count, max_attempts, locked_by,
   lease_token, locked_until, stalled_count, created_at, updated_at, started_at,
   completed_at, cancelled_at
@@ -551,6 +556,20 @@ export class PostgresAdapter implements DurloAdapter {
       [input.appId, input.runId]
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;
+  }
+
+  async getRunForWait(input: AppRunInput): Promise<WaitRunSnapshot | null> {
+    const result = await this.query()<RunRow>(
+      `select ${RUN_COLUMNS} from durlo_runs where app_id = $1 and id = $2`,
+      [input.appId, input.runId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      run: mapRun(row),
+      outputKind: row.output_kind,
+      storedError: row.error_json
+    };
   }
 
   async getRunDetails(input: AppRunInput): Promise<StoredRunDetails | null> {
@@ -999,18 +1018,26 @@ export class PostgresAdapter implements DurloAdapter {
     return result.rowCount === 1;
   }
 
-  async completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void> {
+  async completeRun(
+    input: OwnedRunInput & { output: JsonValue; outputKind: "value" | "undefined" }
+  ): Promise<void> {
     await this.finishOwnedRun(async (client) => {
       const result = await client.query(
         `
           update durlo_runs
-          set status = 'completed', output_json = $4::jsonb, error_json = null,
+          set status = 'completed', output_json = $4::jsonb, output_kind = $5, error_json = null,
               locked_by = null, lease_token = null, locked_until = null,
               updated_at = now(), completed_at = now()
           where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
           returning id
         `,
-        [input.runId, input.workerId, input.leaseToken, JSON.stringify(input.output)]
+        [
+          input.runId,
+          input.workerId,
+          input.leaseToken,
+          JSON.stringify(input.output),
+          input.outputKind
+        ]
       );
       if (result.rowCount !== 1) throw lostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(

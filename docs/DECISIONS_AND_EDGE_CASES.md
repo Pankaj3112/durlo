@@ -24,6 +24,11 @@ inside a Durlo-held transaction; task and workflow handlers never do.
 Polling is the required wakeup mechanism. `LISTEN/NOTIFY` may someday reduce latency but cannot be
 the correctness path because notifications are not durable.
 
+Result waiting therefore polls app-scoped reads and never holds a connection between polls. New
+completions store private output-kind metadata because TypeScript generics do not exist at runtime:
+`undefined` and JSON `null` must be distinguished durably. Legacy rows without that metadata return
+their existing decoded output; guessing would silently change old behavior.
+
 ## Atomic creation is the product wedge
 
 The important differentiator is committing application data and its background work in the same
@@ -56,6 +61,12 @@ Durlo must preserve:
 
 Late local JavaScript may continue after timeout or lease loss, but it must not write durable
 success after another claim rotates ownership.
+
+Intentional failure controls are exact branded values. `PermanentError` stops automatic retry;
+`RetryError` carries one normalized directed time. Both consume the current failure budget, retain
+lease-token fencing, and persist ordinary structured error history. Names and shapes are forgeable,
+so lookalikes and subclasses deliberately receive ordinary failure handling. Cancellation,
+timeout, and a rotated lease remain authoritative when they win a race.
 
 ## Idempotency identifies logical creation
 
@@ -103,6 +114,14 @@ Persisted codec generations are separate internal routing compatibility. Existin
 keep their legacy codec and resource version; new rows use a reserved storage token that maps back
 to the same public resource version. New workers claim both generations, while older workers cannot
 claim rows written with a codec they do not understand.
+
+Package semantic versions are a different contract. Alpha APIs may break between prereleases only
+with changelog or migration-note disclosure. Starting at `1.0`, documented runtime/type exports,
+configuration, CLI behavior, and supported Node.js/PostgreSQL ranges follow Semantic Versioning.
+Breaking changes require a major; deprecations survive until a later major; dropping a supported
+runtime or database major is breaking. Released migrations are immutable and later schema changes
+move forward with explicit code/schema rollout requirements. These promises do not convert
+at-least-once execution into exactly once or imply production support.
 
 ## Cancellation and timeout are cooperative
 
@@ -159,6 +178,12 @@ Raw `pg` is the only v1 transaction integration. The transaction-provider seam s
 there is no public generic adapter SDK. Drizzle is the first possible later client integration;
 Prisma, Kysely, frameworks, and other storage engines depend on demonstrated demand and equal
 guarantees.
+
+Package root exports are exact allowlists rather than wildcard snapshots. Official definitions use
+private registration instead of `_durlo`; codecs, limits/normalization helpers, registered resource
+internals, adapter/provider contracts, and CLI lifecycle helpers stay out of public entry points.
+The CLI executable owns init, migration, worker, and dev behavior; only `defineConfig` and its
+configuration types are programmatic CLI API.
 
 ## Documentation ownership
 

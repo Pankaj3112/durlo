@@ -1,14 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  Durlo,
-  SerializationError,
-  ValidationError,
-  calculateRetryDelay,
-  deserialize,
-  normalizeRetryPolicy,
-  parseDuration,
-  serialize
-} from "@durlo/core";
+import { Durlo, SerializationError, ValidationError } from "@durlo/core";
+import { calculateRetryDelay, normalizeRetryPolicy } from "../../packages/core/src/retry.js";
+import { deserialize, serialize, serializeError } from "../../packages/core/src/serialization.js";
+import { parseDuration } from "../../packages/core/src/validation.js";
 import type {
   CreateRunInput,
   DurloAdapter,
@@ -16,7 +10,7 @@ import type {
   StandardSchema,
   StoredRunDetails,
   TransactionalDurloAdapter
-} from "@durlo/core";
+} from "../../packages/core/src/types.js";
 
 function recordFromInput(input: CreateRunInput): RunRecord {
   const now = new Date();
@@ -216,6 +210,23 @@ describe("Durlo core API", () => {
     await expect(workflow.start({} as { userId: string })).rejects.toThrow("userId is required");
     expect(validate).toHaveBeenCalledTimes(2);
     expect(workflow.version).toBe("1");
+  });
+
+  it("keeps definition registration private and rejects forged worker definitions", () => {
+    const adapter = createAdapter();
+    const durlo = new Durlo({ id: "test-app", adapter });
+    const task = durlo.task({ id: "private-task", run: async () => undefined });
+    const workflow = durlo.workflow({ id: "private-workflow", run: async () => undefined });
+
+    expect(Object.keys(task)).not.toContain("_durlo");
+    expect(Object.keys(workflow)).not.toContain("_durlo");
+    expect(() =>
+      durlo.worker({
+        tasks: [{ id: task.id, version: task.version, kind: "task" }],
+        workflows: [{ id: workflow.id, version: workflow.version, kind: "workflow" }]
+      })
+    ).toThrow("is not a Durlo task definition");
+    expect(() => durlo.worker({ tasks: [task], workflows: [workflow] })).not.toThrow();
   });
 
   it("persists a transformed task input from one synchronous schema call", async () => {
@@ -875,8 +886,7 @@ describe("durable serialization", () => {
     expect(() => serialize(new Map())).toThrow("class instance");
   });
 
-  it("always serializes thrown values, even when the value itself is unsupported", async () => {
-    const { serializeError } = await import("@durlo/core");
+  it("always serializes thrown values, even when the value itself is unsupported", () => {
     expect(serializeError(undefined)).toEqual({
       name: "Error",
       message: "Unknown error",

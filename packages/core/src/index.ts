@@ -1,33 +1,74 @@
 export { Durlo } from "./client.js";
-export {
-  DEFAULT_RETRY_POLICY,
-  calculateRetryDelay,
-  normalizeBackoff,
-  normalizeRetryPolicy
-} from "./retry.js";
-export { deserialize, serialize, serializeError } from "./serialization.js";
-export {
-  DEFAULT_DURLO_LIMITS,
-  assertByteLimit,
-  assertCountLimit,
-  jsonByteSize,
-  normalizeDurloLimits,
-  serializeErrorWithinLimit
-} from "./limits.js";
-export {
-  MAX_DATE_MS,
-  MAX_TIMER_DELAY_MS,
-  parseDuration,
-  parseTimerDuration
-} from "./validation.js";
+export { DEFAULT_RETRY_POLICY } from "./retry.js";
+export { DEFAULT_DURLO_LIMITS } from "./limits.js";
 export { Worker } from "./worker.js";
 export {
   AttemptTimeoutError,
   DurloError,
   IdempotencyConflictError,
+  RunCancelledError,
+  RunFailedError,
+  RunNotFoundError,
   RunStateError,
+  RunWaitTimeoutError,
   SerializationError,
   StorageLimitError,
   ValidationError
 } from "./errors.js";
-export type * from "./types.js";
+export { PermanentError, RetryError } from "./outcomes.js";
+export type {
+  AttemptContext,
+  AttemptKind,
+  AttemptRecord,
+  AttemptStatus,
+  BacklogHealth,
+  BackoffPolicy,
+  BatchItem,
+  DurloLimits,
+  DurloOptions,
+  DurloTransaction,
+  DurationInput,
+  ExponentialBackoffPolicy,
+  FixedBackoffPolicy,
+  JsonPrimitive,
+  JsonValue,
+  Logger,
+  RawPgTransactionClient,
+  RetentionCleanupOptions,
+  RetentionCleanupResult,
+  RetryPolicy,
+  RunContext,
+  RunCreation,
+  RunDetails,
+  RunDiagnostics,
+  RunHandle,
+  RunKind,
+  RunListOptions,
+  RunListPage,
+  RunOptions,
+  RunRecord,
+  RunStatus,
+  RunSummary,
+  RunTimelineEvent,
+  RunTimelineEventType,
+  SerializedError,
+  StandardSchema,
+  StandardSchemaResult,
+  StepRecord,
+  StepStatus,
+  StepTools,
+  TaskContext,
+  TaskDefinition,
+  TaskDefinitionOptions,
+  TerminalRunStatus,
+  TimerRecord,
+  TimerStatus,
+  UnavailableRun,
+  UnavailableRunReason,
+  WorkerCompatibilityReport,
+  WorkerHealth,
+  WorkerOptions,
+  WorkflowContext,
+  WorkflowDefinition,
+  WorkflowDefinitionOptions
+} from "./types.js";

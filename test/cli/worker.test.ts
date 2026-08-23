@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import type { Worker } from "@durlo/core";
-import { configuredWorker, runConfiguredWorker } from "@durlo/cli";
+import { configuredWorker, runConfiguredWorker } from "../../packages/cli/src/worker.js";
 import type { DurloConfig } from "@durlo/cli";
 
 describe("durlo worker", () => {
