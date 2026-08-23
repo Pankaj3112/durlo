@@ -1,11 +1,12 @@
 import { SerializationError } from "./errors.js";
-import type { JsonValue, SerializedError } from "./types.js";
+import type { DurableValue, JsonValue, SerializationVersion, SerializedError } from "./types.js";
 
 const LEGACY_DATE_TAG = "$durlo.date";
 const ENVELOPE_KEY = "$durlo";
 const SERIALIZATION_VERSION = 2;
 const DATE_KIND = "date";
 const OBJECT_KIND = "object";
+export const CURRENT_SERIALIZATION_VERSION: SerializationVersion = SERIALIZATION_VERSION;
 
 type SerializationEnvelope = [
   version: typeof SERIALIZATION_VERSION,
@@ -36,7 +37,10 @@ function isEnvelope(
   );
 }
 
-export function serialize(value: unknown): JsonValue {
+export function serialize(
+  value: unknown,
+  version: SerializationVersion = SERIALIZATION_VERSION
+): JsonValue {
   const seen = new WeakSet<object>();
 
   const visit = (current: unknown, path: string): JsonValue => {
@@ -53,9 +57,11 @@ export function serialize(value: unknown): JsonValue {
     if (current instanceof Date) {
       if (!Number.isFinite(current.getTime()))
         throw new SerializationError(`${path} contains an invalid Date`);
-      return envelope([SERIALIZATION_VERSION, DATE_KIND, current.toISOString()]);
+      return version === 1
+        ? { [LEGACY_DATE_TAG]: current.toISOString() }
+        : envelope([SERIALIZATION_VERSION, DATE_KIND, current.toISOString()]);
     }
-    if (current instanceof Error) return serializeError(current) as unknown as JsonValue;
+    if (current instanceof Error) return serializeError(current, version) as unknown as JsonValue;
     const object = current as object;
     if (seen.has(object)) throw new SerializationError(`${path} contains a circular reference`);
     seen.add(object);
@@ -69,6 +75,7 @@ export function serialize(value: unknown): JsonValue {
       const entries = Object.entries(object).map(
         ([key, item]) => [key, visit(item, `${path}.${key}`)] as [string, JsonValue]
       );
+      if (version === 1) return Object.fromEntries(entries);
       return envelope([SERIALIZATION_VERSION, OBJECT_KIND, entries]);
     } finally {
       seen.delete(object);
@@ -78,34 +85,42 @@ export function serialize(value: unknown): JsonValue {
   return visit(value, "value");
 }
 
-export function deserialize(value: JsonValue): unknown {
+export function deserialize(value: JsonValue, version?: SerializationVersion): DurableValue {
   if (value instanceof Date) return value;
-  if (Array.isArray(value)) return value.map(deserialize);
+  const decode = (item: JsonValue): DurableValue => deserialize(item, version);
+  if (Array.isArray(value)) return value.map(decode);
   if (value && typeof value === "object") {
     const record = value as Record<string, JsonValue>;
-    if (isEnvelope(record)) {
+    if (version !== 1 && isEnvelope(record)) {
       const [, kind, payload] = record[ENVELOPE_KEY] as SerializationEnvelope;
       if (kind === DATE_KIND) return new Date(payload as string);
       return Object.fromEntries(
-        (payload as Array<[string, JsonValue]>).map(([key, item]) => [key, deserialize(item)])
-      );
+        (payload as Array<[string, JsonValue]>).map(([key, item]) => [key, decode(item)])
+      ) as Record<string, DurableValue>;
     }
-    if (Object.keys(record).length === 1 && typeof record[LEGACY_DATE_TAG] === "string") {
+    if (
+      version !== SERIALIZATION_VERSION &&
+      Object.keys(record).length === 1 &&
+      typeof record[LEGACY_DATE_TAG] === "string"
+    ) {
       return new Date(record[LEGACY_DATE_TAG]);
     }
     return Object.fromEntries(
-      Object.entries(record).map(([key, item]) => [key, deserialize(item)])
-    );
+      Object.entries(record).map(([key, item]) => [key, decode(item)])
+    ) as Record<string, DurableValue>;
   }
   return value;
 }
 
-export function serializeError(error: unknown): SerializedError {
+export function serializeError(
+  error: unknown,
+  version: SerializationVersion = SERIALIZATION_VERSION
+): SerializedError {
   if (error instanceof Error) {
     let cause: JsonValue | undefined;
     if (error.cause !== undefined) {
       try {
-        cause = serialize(error.cause);
+        cause = serialize(error.cause, version);
       } catch {
         cause = String(error.cause);
       }
@@ -119,7 +134,7 @@ export function serializeError(error: unknown): SerializedError {
   }
   let cause: JsonValue;
   try {
-    cause = serialize(error);
+    cause = serialize(error, version);
   } catch {
     cause = String(error);
   }

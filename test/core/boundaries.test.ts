@@ -340,6 +340,18 @@ describe("serialization boundaries", () => {
     expect(deserialize(date as unknown as JsonValue)).toBe(date);
   });
 
+  it("uses the persisted codec version to distinguish legacy data from v2 envelopes", () => {
+    const date = new Date("2026-01-02T03:04:05.000Z");
+    const envelopeLookalike = { $durlo: [2, "date", date.toISOString()] } as JsonValue;
+    const legacyValue = { envelopeLookalike, date };
+
+    expect(deserialize(envelopeLookalike, 1)).toEqual(envelopeLookalike);
+    expect(deserialize({ "$durlo.date": date.toISOString() }, 2)).toEqual({
+      "$durlo.date": date.toISOString()
+    });
+    expect(deserialize(serialize(legacyValue, 1), 1)).toEqual(legacyValue);
+  });
+
   it("keeps array paths and conditional Error fields precise", () => {
     expect(() => serialize([{ nested: Number.NaN }])).toThrow(
       "value[0].nested contains a non-finite"

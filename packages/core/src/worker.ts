@@ -6,7 +6,7 @@ import {
   WorkflowSleepError
 } from "./errors.js";
 import { calculateRetryDelay } from "./retry.js";
-import { deserialize, serialize } from "./serialization.js";
+import { CURRENT_SERIALIZATION_VERSION, deserialize, serialize } from "./serialization.js";
 import { createStepTools } from "./steps.js";
 import {
   DEFAULT_DURLO_LIMITS,
@@ -382,7 +382,8 @@ export class Worker {
 
     try {
       limits = this.limitsFor(run);
-      const input = deserialize(run.input);
+      const serializationVersion = run.serializationVersion ?? CURRENT_SERIALIZATION_VERSION;
+      const input = deserialize(run.input, serializationVersion);
       const context = {
         run: {
           id: run.id,
@@ -407,7 +408,10 @@ export class Worker {
           : await this.withTimeout(execution, timeout, abortController);
       await stopHeartbeat();
       if (!ownsLease) return;
-      const serializedOutput = serialize(output === undefined ? null : output);
+      const serializedOutput = serialize(
+        output === undefined ? null : output,
+        serializationVersion
+      );
       assertByteLimit(serializedOutput, "maxOutputBytes", limits.maxOutputBytes, "run output");
       await this.adapter.completeRun({
         runId: run.id,
@@ -442,7 +446,11 @@ export class Worker {
           runId: run.id,
           workerId: this.id,
           leaseToken: run.leaseToken,
-          error: serializeErrorWithinLimit(error, limits.maxErrorBytes),
+          error: serializeErrorWithinLimit(
+            error,
+            limits.maxErrorBytes,
+            run.serializationVersion ?? CURRENT_SERIALIZATION_VERSION
+          ),
           ...(error instanceof AttemptTimeoutError ? { attemptStatus: "timed_out" } : {}),
           outcome
         });
@@ -510,7 +518,10 @@ export class Worker {
   }
 
   private optionsFor(run: ClaimedRun): Record<string, unknown> {
-    const options = deserialize(run.options);
+    const options = deserialize(
+      run.options,
+      run.serializationVersion ?? CURRENT_SERIALIZATION_VERSION
+    );
     if (!options || typeof options !== "object" || Array.isArray(options)) {
       throw new ValidationError(`run ${run.id} has invalid options`);
     }

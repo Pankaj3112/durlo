@@ -11,7 +11,8 @@ const releasedMigrationChecksums = {
   "0003_retention_cleanup": "031e38f84bfaa30a93e58fc87de0b626dcd74603db82034bed49bacab87288f8",
   "0004_observability_reads": "bfd9dd7605c9a2997bef6c568ab0f355c2f1779dddbc58fd910ed3a4c7a612cb",
   "0005_truthful_step_interruptions":
-    "135660d92c76d4d3f77479391fc3f4c09faa7fd2f2a0dcc549d39a95a694118e"
+    "135660d92c76d4d3f77479391fc3f4c09faa7fd2f2a0dcc549d39a95a694118e",
+  "0006_serialization_versions": "50d11fb5e2a3d728a1bbb44f492da7c044386078ca29ec2865eeec58dc2e4b5b"
 } as const;
 
 describe("@durlo/postgres migration immutability", () => {
@@ -58,7 +59,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0002_resource_versions", count: "1" },
         { version: "0003_retention_cleanup", count: "1" },
         { version: "0004_observability_reads", count: "1" },
-        { version: "0005_truthful_step_interruptions", count: "1" }
+        { version: "0005_truthful_step_interruptions", count: "1" },
+        { version: "0006_serialization_versions", count: "1" }
       ]);
 
       const tables = await admin.pool.query<{ count: string }>(
@@ -106,7 +108,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0002_resource_versions" },
         { version: "0003_retention_cleanup" },
         { version: "0004_observability_reads" },
-        { version: "0005_truthful_step_interruptions" }
+        { version: "0005_truthful_step_interruptions" },
+        { version: "0006_serialization_versions" }
       ]);
     } finally {
       await adapter.close();
@@ -144,7 +147,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         { version: "0002_resource_versions" },
         { version: "0003_retention_cleanup" },
         { version: "0004_observability_reads" },
-        { version: "0005_truthful_step_interruptions" }
+        { version: "0005_truthful_step_interruptions" },
+        { version: "0006_serialization_versions" }
       ]);
     } finally {
       await adapter.close();
@@ -197,7 +201,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
       const versions = await adapter.pool.query<{ version: string }>(
         "select version from durlo_schema_migrations order by version"
       );
-      expect(versions.rows.at(-1)).toEqual({ version: "0005_truthful_step_interruptions" });
+      expect(versions.rows.at(-1)).toEqual({ version: "0006_serialization_versions" });
     } finally {
       await adapter.close();
     }
@@ -355,6 +359,62 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
     }
   });
 
+  it("adds serialization routing without rewriting legacy resource versions", async () => {
+    const schema = await createSchema();
+    const adapter = schemaAdapter(schema);
+    const legacyInput = {
+      nested: { $durlo: [2, "date", "2026-01-02T03:04:05.000Z"] }
+    };
+    try {
+      for (const migration of migrations.slice(0, 5)) {
+        await adapter.pool.query(migration.sql);
+      }
+      await adapter.pool.query(`
+        create table durlo_schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `);
+      await adapter.pool.query(
+        `insert into durlo_schema_migrations (version)
+         values ('0001_initial'), ('0002_resource_versions'),
+                ('0003_retention_cleanup'), ('0004_observability_reads'),
+                ('0005_truthful_step_interruptions')`
+      );
+      await adapter.pool.query(
+        `insert into durlo_runs (
+           id, app_id, kind, resource_id, resource_version, status, input_json, options_json
+         ) values ('legacy-codec-run', 'legacy-codec-app', 'task', 'legacy-task',
+                   'legacy-v1', 'pending', $1::jsonb, '{}')`,
+        [JSON.stringify(legacyInput)]
+      );
+
+      await adapter.migrate();
+
+      const raw = await adapter.pool.query<{ resource_version: string }>(
+        "select resource_version from durlo_runs where id = 'legacy-codec-run'"
+      );
+      expect(raw.rows).toEqual([{ resource_version: "legacy-v1" }]);
+      expect(
+        await adapter.getRun({ appId: "legacy-codec-app", runId: "legacy-codec-run" })
+      ).toMatchObject({ resourceVersion: "legacy-v1", input: legacyInput });
+
+      await expect(
+        adapter.pool.query(
+          `insert into durlo_runs (
+             id, app_id, kind, resource_id, resource_version, status, input_json, options_json
+           ) values ('v2-codec-run', 'legacy-codec-app', 'task', 'v2-task',
+                     ' @durlo/serialization/2:v2', 'pending', '{}', '{}')`
+        )
+      ).resolves.toMatchObject({ rowCount: 1 });
+      expect(
+        await adapter.getRun({ appId: "legacy-codec-app", runId: "v2-codec-run" })
+      ).toMatchObject({ resourceVersion: "v2" });
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("rolls back migration bookkeeping after a schema conflict and can recover", async () => {
     const schema = await createSchema();
     await admin.pool.query(`create table ${quoteIdentifier(schema)}.durlo_runs (broken integer)`);
@@ -373,7 +433,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres migrations", ()
         `select count(*)::text as count
          from ${quoteIdentifier(schema)}.durlo_schema_migrations`
       );
-      expect(applied.rows[0]?.count).toBe("5");
+      expect(applied.rows[0]?.count).toBe("6");
     } finally {
       await adapter.close();
     }

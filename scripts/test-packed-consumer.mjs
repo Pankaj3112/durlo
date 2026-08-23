@@ -74,6 +74,7 @@ try {
       import {
         Durlo,
         type BatchItem,
+        type DurableValue,
         type DurloAdapter,
         type RunHandle,
         type StandardSchema
@@ -86,6 +87,7 @@ try {
       import { cliPackageName } from "@durlo/cli";
       const adapter: PostgresAdapter = postgresAdapter({ connectionString: "postgres://unused" });
       const contract: DurloAdapter = adapter;
+      const durableValue: DurableValue = new Date();
       const durlo: Durlo = new Durlo({ id: cliPackageName, adapter });
       type ExternalInput = { raw: string };
       type HandlerInput = { normalized: string };
@@ -130,6 +132,7 @@ try {
       void taskHandle;
       void batchHandles;
       void workflowHandle;
+      void durableValue;
       void durlo;
     `
   );
@@ -263,7 +266,8 @@ function exportAssertions(format) {
       "0002_resource_versions",
       "0003_retention_cleanup",
       "0004_observability_reads",
-      "0005_truthful_step_interruptions"
+      "0005_truthful_step_interruptions",
+      "0006_serialization_versions"
     ])) throw new Error("${format} migration exports changed: " + versions.join(", "));
     if (cli.cliPackageName !== "@durlo/cli") throw new Error("missing ${format} CLI marker");
   `;

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { deserialize, Durlo } from "@durlo/core";
+import { deserialize, Durlo, serialize } from "@durlo/core";
 import type { JsonValue } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
@@ -136,12 +136,95 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     const handle = await task.enqueue({});
     const legacyDate = "2026-01-02T03:04:05.000Z";
 
-    await adapter.pool.query("update durlo_runs set input_json = $2::jsonb where id = $1", [
-      handle.id,
-      JSON.stringify({ "$durlo.date": legacyDate })
-    ]);
+    await adapter.pool.query(
+      "update durlo_runs set resource_version = '1', input_json = $2::jsonb where id = $1",
+      [handle.id, JSON.stringify({ "$durlo.date": legacyDate })]
+    );
 
     const run = await adapter.getRun({ appId: durlo.id, runId: handle.id });
     expect(run?.input).toEqual(new Date(legacyDate));
+  });
+
+  it("preserves legacy v2 lookalikes and replays their completed checkpoints", async () => {
+    const literal = {
+      $durlo: [2, "date", "2026-01-02T03:04:05.000Z"]
+    } as JsonValue;
+    const durlo = new Durlo({ id: "serialization-legacy-envelope", adapter });
+    let stepCalls = 0;
+    const workflow = durlo.workflow<JsonValue, JsonValue>({
+      id: "legacy-envelope-workflow",
+      version: "legacy-v1",
+      run: async ({ step }) =>
+        step.run("saved", () => {
+          stepCalls += 1;
+          return "unexpected";
+        })
+    });
+    const handle = await workflow.start({});
+    const stored = await adapter.pool.query<{ options_json: JsonValue }>(
+      "select options_json from durlo_runs where id = $1",
+      [handle.id]
+    );
+    const legacyOptions = serialize(deserialize(stored.rows[0]!.options_json, 2), 1);
+    await adapter.pool.query(
+      `update durlo_runs
+       set resource_version = 'legacy-v1', input_json = $2::jsonb, options_json = $3::jsonb
+       where id = $1`,
+      [handle.id, JSON.stringify(literal), JSON.stringify(legacyOptions)]
+    );
+    await adapter.pool.query(
+      `insert into durlo_steps (id, run_id, step_id, status, result_json, completed_at)
+       values ('legacy-envelope-step', $1, 'saved', 'completed', $2::jsonb, now())`,
+      [handle.id, JSON.stringify(literal)]
+    );
+
+    const worker = durlo.worker({
+      workflows: [workflow],
+      workerId: "legacy-envelope-worker"
+    });
+    await expect(worker.runOnce()).resolves.toBe(1);
+
+    expect(stepCalls).toBe(0);
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+      resourceVersion: "legacy-v1",
+      input: literal,
+      output: literal
+    });
+    expect(await adapter.getStep(handle.id, "saved")).toMatchObject({ result: literal });
+  });
+
+  it("keeps v2 runs invisible to legacy resource-version claim predicates", async () => {
+    const durlo = new Durlo({ id: "serialization-rollout", adapter });
+    const task = durlo.task({
+      id: "rollout-task",
+      version: "rollout-v1",
+      run: async () => "done"
+    });
+    const handle = await task.enqueue({ value: true });
+
+    const raw = await adapter.pool.query<{ resource_version: string }>(
+      "select resource_version from durlo_runs where id = $1",
+      [handle.id]
+    );
+    expect(raw.rows[0]!.resource_version).not.toBe("rollout-v1");
+    expect(raw.rows[0]!.resource_version.startsWith(" ")).toBe(true);
+    const legacyClaims = await adapter.pool.query<{ id: string }>(
+      `select id from durlo_runs
+       where app_id = $1 and kind = 'task' and resource_id = 'rollout-task'
+         and resource_version = 'rollout-v1' and status = 'pending'`,
+      [durlo.id]
+    );
+    expect(legacyClaims.rows).toEqual([]);
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+      resourceVersion: "rollout-v1"
+    });
+
+    const worker = durlo.worker({ tasks: [task], workerId: "rollout-v2-worker" });
+    await expect(worker.runOnce()).resolves.toBe(1);
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+      status: "completed",
+      output: "done",
+      resourceVersion: "rollout-v1"
+    });
   });
 });

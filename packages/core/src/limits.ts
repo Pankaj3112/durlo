@@ -1,5 +1,10 @@
 import { SerializationError, StorageLimitError, ValidationError } from "./errors.js";
-import type { DurloLimits, PersistedRunLimits, SerializedError } from "./types.js";
+import type {
+  DurloLimits,
+  PersistedRunLimits,
+  SerializationVersion,
+  SerializedError
+} from "./types.js";
 import { serializeError } from "./serialization.js";
 
 export const DEFAULT_DURLO_LIMITS: Readonly<DurloLimits> = Object.freeze({
@@ -89,8 +94,12 @@ export function assertCountLimit(
   }
 }
 
-export function serializeErrorWithinLimit(error: unknown, maxErrorBytes: number): SerializedError {
-  const serialized = serializeError(error);
+export function serializeErrorWithinLimit(
+  error: unknown,
+  maxErrorBytes: number,
+  version?: SerializationVersion
+): SerializedError {
+  const serialized = serializeError(error, version);
   const actual = jsonByteSize(serialized);
   if (actual <= maxErrorBytes) return serialized;
 

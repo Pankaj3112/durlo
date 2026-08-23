@@ -29,7 +29,7 @@ continuous high-priority work can starve lower priorities.
 
 If creation throws after an uncertain connection failure, use an idempotency key before retrying.
 The handle's output type is currently phantom: `runs.get()` returns a `RunRecord` whose output is
-`JsonValue`, and there is no public wait-for-result method.
+`DurableValue` (JSON plus `Date`), and there is no public wait-for-result method.
 
 ### Idempotency
 
@@ -105,19 +105,25 @@ the versioned envelope and preserve that literal object shape. The codec rejects
 numbers, `BigInt`, `undefined`, functions, symbols, circular objects, invalid dates, and unsupported
 class instances.
 
+The PostgreSQL adapter associates one codec generation with the whole run. Existing rows retain
+the legacy codec; new rows use codec v2. The generation is carried by an internal storage-routing
+token while public resource versions remain unchanged. New workers can claim both generations,
+but workers from before codec v2 cannot claim v2 rows. This also lets new readers preserve old
+literal objects that happen to resemble the v2 envelope.
+
 ## Storage limits
 
 Limits are configured on `Durlo` and measured as compact serialized UTF-8 JSON.
 
-| Limit | Default | Behavior |
-| --- | ---: | --- |
-| `maxInputBytes` | 1 MiB | Rejects creation before persistence |
-| `maxOutputBytes` | 1 MiB | Fails the attempt without storing the output |
-| `maxErrorBytes` | 64 KiB | Replaces oversized errors with bounded diagnostics |
-| `maxBatchItems` | 1,000 | Rejects the whole batch |
-| `maxBatchBytes` | 10 MiB | Rejects the whole batch |
-| `maxStepResultBytes` | 1 MiB | Fails the step and workflow attempt |
-| `maxWorkflowSteps` | 1,000 | Counts durable steps and sleeps |
+| Limit                | Default | Behavior                                           |
+| -------------------- | ------: | -------------------------------------------------- |
+| `maxInputBytes`      |   1 MiB | Rejects creation before persistence                |
+| `maxOutputBytes`     |   1 MiB | Fails the attempt without storing the output       |
+| `maxErrorBytes`      |  64 KiB | Replaces oversized errors with bounded diagnostics |
+| `maxBatchItems`      |   1,000 | Rejects the whole batch                            |
+| `maxBatchBytes`      |  10 MiB | Rejects the whole batch                            |
+| `maxStepResultBytes` |   1 MiB | Fails the step and workflow attempt                |
+| `maxWorkflowSteps`   |   1,000 | Counts durable steps and sleeps                    |
 
 Output, error, step-result, and workflow-step limits are persisted in run options so later workers
 use the creation-time values. Runs created before persisted limits use worker defaults.
@@ -201,6 +207,10 @@ in one database transaction and only while the run is still sleeping.
 
 Definition versions are opaque strings, defaulting to `"1"`. Runs retain their creation version
 through delays, retries, sleeps, lease recovery, and manual retry. Workers claim exact matches.
+
+The PostgreSQL adapter additionally fences internal serialization generations. That routing detail
+does not change the definition version returned by public reads or require application definitions
+to bump their version for the codec-v2 rollout.
 
 Keep a version only when new code can read every active input and checkpoint and preserves existing
 step meanings, including the transformed input persisted by a Standard Schema. For a breaking

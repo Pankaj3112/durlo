@@ -47,12 +47,21 @@ export type TerminalRunStatus = "completed" | "failed" | "dead_letter" | "cancel
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type DurableValue = JsonPrimitive | Date | DurableValue[] | { [key: string]: DurableValue };
+export type SerializationVersion = 1 | 2;
 
 export type SerializedError = {
   name: string;
   message: string;
   stack?: string;
   cause?: JsonValue;
+};
+
+export type DecodedSerializedError = {
+  name: string;
+  message: string;
+  stack?: string;
+  cause?: DurableValue;
 };
 
 export type DurloLimits = {
@@ -77,10 +86,10 @@ export type RunRecord = {
   resourceId: string;
   resourceVersion: string;
   status: RunStatus;
-  input: JsonValue;
-  output: JsonValue | null;
-  error: SerializedError | null;
-  options: JsonValue;
+  input: DurableValue;
+  output: DurableValue | null;
+  error: DecodedSerializedError | null;
+  options: DurableValue;
   idempotencyKey: string | null;
   priority: number;
   scheduledAt: Date;
@@ -154,12 +163,18 @@ export type RunListInput = {
   createdBefore: Date | null;
 };
 
-export type ClaimedRun = RunRecord & {
+export type ClaimedRun = Omit<RunRecord, "input" | "output" | "error" | "options"> & {
+  input: JsonValue;
+  output: JsonValue | null;
+  error: SerializedError | null;
+  options: JsonValue;
   status: "running";
   lockedBy: string;
   leaseToken: string;
   lockedUntil: Date;
   failureCount: number;
+  /** Persisted codec for every durable value owned by this run. */
+  serializationVersion?: SerializationVersion;
 };
 
 export type ClaimRunsInput = {
@@ -238,15 +253,21 @@ export type StepRecord = {
   runId: string;
   stepId: string;
   status: StepStatus;
-  result: JsonValue | null;
-  error: SerializedError | null;
-  options: JsonValue;
+  result: DurableValue | null;
+  error: DecodedSerializedError | null;
+  options: DurableValue;
   attemptCount: number;
   maxAttempts: number;
   createdAt: Date;
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+};
+
+export type RawStepRecord = Omit<StepRecord, "result" | "error" | "options"> & {
+  result: JsonValue | null;
+  error: SerializedError | null;
+  options: JsonValue;
 };
 
 export type StepInput = OwnedRunInput & { stepId: string };
@@ -263,7 +284,7 @@ export type AttemptRecord = {
   attemptNumber: number;
   status: AttemptStatus;
   workerId: string | null;
-  error: SerializedError | null;
+  error: DecodedSerializedError | null;
   startedAt: Date;
   completedAt: Date | null;
 };
@@ -321,7 +342,7 @@ export type RunTimelineEvent = {
   attemptNumber?: number;
   workerId?: string;
   status?: RunStatus | StepStatus | TimerStatus | AttemptStatus;
-  error?: SerializedError;
+  error?: DecodedSerializedError;
   scheduledAt?: Date;
   fireAt?: Date;
 };
@@ -438,8 +459,10 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   getStep(runId: string, stepId: string): Promise<StepRecord | null>;
   startStep(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
   /** Encoded step access used by the worker before it performs one decode. */
-  getStepRaw?(runId: string, stepId: string): Promise<StepRecord | null>;
-  startStepRaw?(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
+  getStepRaw?(runId: string, stepId: string): Promise<RawStepRecord | null>;
+  startStepRaw?(
+    input: StepInput & { maxAttempts: number; maxSteps: number }
+  ): Promise<RawStepRecord>;
   completeStep(input: StepInput & { result: JsonValue }): Promise<void>;
   failStep(input: StepInput & { error: SerializedError }): Promise<void>;
   getTimer(runId: string, stepId: string): Promise<TimerRecord | null>;

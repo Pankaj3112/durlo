@@ -12,6 +12,7 @@ import type {
   JsonValue,
   OwnedRunInput,
   RegisteredResource,
+  RawStepRecord,
   RetentionCleanupInput,
   RetentionCleanupResult,
   RunKind,
@@ -20,6 +21,7 @@ import type {
   RunStatus,
   RunSummary,
   RawPgTransactionClient,
+  SerializationVersion,
   SerializedError,
   StepInput,
   StepRecord,
@@ -47,6 +49,37 @@ export type PostgresAdapterOptions = (PoolConfig & { pool?: never }) | { pool: P
 export type PostgresTransactionClient = RawPgTransactionClient;
 
 const TRANSACTION_PROVIDER = Symbol.for("@durlo/core/transaction-provider");
+const SERIALIZED_RESOURCE_VERSION_PREFIX = " @durlo/serialization/2:";
+
+function storedResourceVersion(resourceVersion: string): string {
+  return `${SERIALIZED_RESOURCE_VERSION_PREFIX}${resourceVersion}`;
+}
+
+function storedResourceVersions(resourceVersion: string): string[] {
+  return [resourceVersion, storedResourceVersion(resourceVersion)];
+}
+
+function decodeStoredResourceVersion(value: string): {
+  resourceVersion: string;
+  serializationVersion: SerializationVersion;
+} {
+  return value.startsWith(SERIALIZED_RESOURCE_VERSION_PREFIX)
+    ? {
+        resourceVersion: value.slice(SERIALIZED_RESOURCE_VERSION_PREFIX.length),
+        serializationVersion: 2
+      }
+    : { resourceVersion: value, serializationVersion: 1 };
+}
+
+function expandRegisteredResources(resources: RegisteredResource[]): RegisteredResource[] {
+  return resources.flatMap(({ kind, resourceId, resourceVersion = "1" }) =>
+    storedResourceVersions(resourceVersion).map((storedVersion) => ({
+      kind,
+      resourceId,
+      resourceVersion: storedVersion
+    }))
+  );
+}
 
 type RunRow = QueryResultRow & {
   id: string;
@@ -153,24 +186,24 @@ type Query = <R extends QueryResultRow = QueryResultRow>(
   values?: unknown[]
 ) => Promise<QueryResult<R>>;
 
-function mapRun(row: RunRow, decode = true): RunRecord {
+function mapRun(row: RunRow): RunRecord {
+  const { resourceVersion, serializationVersion } = decodeStoredResourceVersion(
+    row.resource_version
+  );
   return {
     id: row.id,
     appId: row.app_id,
     kind: row.kind,
     resourceId: row.resource_id,
-    resourceVersion: row.resource_version,
+    resourceVersion,
     status: row.status,
-    input: (decode ? deserialize(row.input_json) : row.input_json) as JsonValue,
-    output:
-      row.output_json === null
-        ? null
-        : ((decode ? deserialize(row.output_json) : row.output_json) as JsonValue),
+    input: deserialize(row.input_json, serializationVersion),
+    output: row.output_json === null ? null : deserialize(row.output_json, serializationVersion),
     error:
       row.error_json === null
         ? null
-        : ((decode ? deserialize(row.error_json) : row.error_json) as SerializedError),
-    options: (decode ? deserialize(row.options_json) : row.options_json) as JsonValue,
+        : (deserialize(row.error_json, serializationVersion) as RunRecord["error"]),
+    options: deserialize(row.options_json, serializationVersion),
     idempotencyKey: row.idempotency_key,
     priority: row.priority,
     scheduledAt: row.scheduled_at,
@@ -188,21 +221,70 @@ function mapRun(row: RunRow, decode = true): RunRecord {
   };
 }
 
-function mapStep(row: StepRow, decode = true): StepRecord {
+function mapClaimedRun(row: RunRow, failureCount: number): ClaimedRun {
+  const { resourceVersion, serializationVersion } = decodeStoredResourceVersion(
+    row.resource_version
+  );
+  return {
+    id: row.id,
+    appId: row.app_id,
+    kind: row.kind,
+    resourceId: row.resource_id,
+    resourceVersion,
+    status: "running",
+    input: row.input_json,
+    output: row.output_json,
+    error: row.error_json,
+    options: row.options_json,
+    idempotencyKey: row.idempotency_key,
+    priority: row.priority,
+    scheduledAt: row.scheduled_at,
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    lockedBy: row.locked_by!,
+    leaseToken: row.lease_token!,
+    lockedUntil: row.locked_until!,
+    stalledCount: row.stalled_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    cancelledAt: row.cancelled_at,
+    failureCount,
+    serializationVersion
+  };
+}
+
+function mapStep(row: StepRow, serializationVersion: SerializationVersion): StepRecord {
   return {
     id: row.id,
     runId: row.run_id,
     stepId: row.step_id,
     status: row.status,
-    result:
-      row.result_json === null
-        ? null
-        : ((decode ? deserialize(row.result_json) : row.result_json) as JsonValue),
+    result: row.result_json === null ? null : deserialize(row.result_json, serializationVersion),
     error:
       row.error_json === null
         ? null
-        : ((decode ? deserialize(row.error_json) : row.error_json) as SerializedError),
-    options: (decode ? deserialize(row.options_json) : row.options_json) as JsonValue,
+        : (deserialize(row.error_json, serializationVersion) as StepRecord["error"]),
+    options: deserialize(row.options_json, serializationVersion),
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at
+  };
+}
+
+function mapStepRaw(row: StepRow): RawStepRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    stepId: row.step_id,
+    status: row.status,
+    result: row.result_json,
+    error: row.error_json,
+    options: row.options_json,
     attemptCount: row.attempt_count,
     maxAttempts: row.max_attempts,
     createdAt: row.created_at,
@@ -213,11 +295,12 @@ function mapStep(row: StepRow, decode = true): StepRecord {
 }
 
 function mapRunSummary(row: RunSummaryRow): RunSummary {
+  const { resourceVersion } = decodeStoredResourceVersion(row.resource_version);
   return {
     id: row.id,
     kind: row.kind,
     resourceId: row.resource_id,
-    resourceVersion: row.resource_version,
+    resourceVersion,
     status: row.status,
     priority: row.priority,
     scheduledAt: row.scheduled_at,
@@ -245,7 +328,7 @@ function mapTimer(row: TimerRow): TimerRecord {
   };
 }
 
-function mapAttempt(row: AttemptRow): AttemptRecord {
+function mapAttempt(row: AttemptRow, serializationVersion: SerializationVersion): AttemptRecord {
   return {
     id: row.id,
     runId: row.run_id,
@@ -254,7 +337,10 @@ function mapAttempt(row: AttemptRow): AttemptRecord {
     attemptNumber: row.attempt_number,
     status: row.status,
     workerId: row.worker_id,
-    error: row.error_json === null ? null : (deserialize(row.error_json) as SerializedError),
+    error:
+      row.error_json === null
+        ? null
+        : (deserialize(row.error_json, serializationVersion) as AttemptRecord["error"]),
     startedAt: row.started_at,
     completedAt: row.completed_at
   };
@@ -412,10 +498,11 @@ export class PostgresAdapter implements DurloAdapter {
       );
       const clock = await client.query<{ checked_at: Date }>("select now() as checked_at");
       await client.query("commit");
+      const { serializationVersion } = decodeStoredResourceVersion(row.resource_version);
       return {
         run: mapRun(row),
-        steps: steps.rows.map((step) => mapStep(step)),
-        attempts: attempts.rows.map(mapAttempt),
+        steps: steps.rows.map((step) => mapStep(step, serializationVersion)),
+        attempts: attempts.rows.map((attempt) => mapAttempt(attempt, serializationVersion)),
         timers: timers.rows.map(mapTimer),
         checkedAt: clock.rows[0]!.checked_at
       };
@@ -532,7 +619,7 @@ export class PostgresAdapter implements DurloAdapter {
           and (cardinality($2::text[]) = 0 or status = any($2::text[]))
           and (cardinality($3::text[]) = 0 or kind = any($3::text[]))
           and ($4::text is null or resource_id = $4)
-          and ($5::text is null or resource_version = $5)
+          and (cardinality($5::text[]) = 0 or resource_version = any($5::text[]))
           and ($6::timestamptz is null or created_at > $6)
           and ($7::timestamptz is null or created_at < $7)
           and (
@@ -547,7 +634,7 @@ export class PostgresAdapter implements DurloAdapter {
         input.statuses,
         input.kinds,
         input.resourceId,
-        input.resourceVersion,
+        input.resourceVersion === null ? [] : storedResourceVersions(input.resourceVersion),
         input.createdAfter,
         input.createdBefore,
         input.cursor?.createdAt ?? null,
@@ -608,9 +695,10 @@ export class PostgresAdapter implements DurloAdapter {
 
   async claimRuns(input: ClaimRunsInput): Promise<ClaimedRun[]> {
     if (input.resources.length === 0 || input.limit <= 0) return [];
-    const resourceKinds = input.resources.map(({ kind }) => kind);
-    const resourceIds = input.resources.map(({ resourceId }) => resourceId);
-    const resourceVersions = input.resources.map(({ resourceVersion }) => resourceVersion ?? "1");
+    const storedResources = expandRegisteredResources(input.resources);
+    const resourceKinds = storedResources.map(({ kind }) => kind);
+    const resourceIds = storedResources.map(({ resourceId }) => resourceId);
+    const resourceVersions = storedResources.map(({ resourceVersion }) => resourceVersion!);
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -749,7 +837,7 @@ export class PostgresAdapter implements DurloAdapter {
           `,
           [randomUUID(), row.id, row.attempt_count, input.workerId, leaseToken]
         );
-        claimed.push({ ...mapRun(row, false), failureCount } as ClaimedRun);
+        claimed.push(mapClaimedRun(row, failureCount));
       }
       await client.query("commit");
       return claimed;
@@ -767,9 +855,10 @@ export class PostgresAdapter implements DurloAdapter {
     limit: number;
   }): Promise<UnavailableRun[]> {
     if (input.limit <= 0) return [];
-    const resourceKinds = input.resources.map(({ kind }) => kind);
-    const resourceIds = input.resources.map(({ resourceId }) => resourceId);
-    const resourceVersions = input.resources.map(({ resourceVersion }) => resourceVersion ?? "1");
+    const storedResources = expandRegisteredResources(input.resources);
+    const resourceKinds = storedResources.map(({ kind }) => kind);
+    const resourceIds = storedResources.map(({ resourceId }) => resourceId);
+    const resourceVersions = storedResources.map(({ resourceVersion }) => resourceVersion!);
     const result = await this.query()<RunRow>(
       `
         select ${RUN_COLUMNS}
@@ -933,19 +1022,25 @@ export class PostgresAdapter implements DurloAdapter {
   }
 
   async getStep(runId: string, stepId: string): Promise<StepRecord | null> {
-    const result = await this.query()<StepRow>(
-      `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2`,
+    const result = await this.query()<StepRow & { run_resource_version: string }>(
+      `select step.*, run.resource_version as run_resource_version
+       from durlo_steps as step
+       join durlo_runs as run on run.id = step.run_id
+       where step.run_id = $1 and step.step_id = $2`,
       [runId, stepId]
     );
-    return result.rows[0] ? mapStep(result.rows[0]) : null;
+    const row = result.rows[0];
+    if (!row) return null;
+    const { serializationVersion } = decodeStoredResourceVersion(row.run_resource_version);
+    return mapStep(row, serializationVersion);
   }
 
-  async getStepRaw(runId: string, stepId: string): Promise<StepRecord | null> {
+  async getStepRaw(runId: string, stepId: string): Promise<RawStepRecord | null> {
     const result = await this.query()<StepRow>(
       `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2`,
       [runId, stepId]
     );
-    return result.rows[0] ? mapStep(result.rows[0], false) : null;
+    return result.rows[0] ? mapStepRaw(result.rows[0]) : null;
   }
 
   async startStep(
@@ -956,18 +1051,28 @@ export class PostgresAdapter implements DurloAdapter {
 
   async startStepRaw(
     input: StepInput & { maxAttempts: number; maxSteps: number }
-  ): Promise<StepRecord> {
+  ): Promise<RawStepRecord> {
     return this.startStepInternal(input, false);
   }
 
   private async startStepInternal(
     input: StepInput & { maxAttempts: number; maxSteps: number },
+    decode: true
+  ): Promise<StepRecord>;
+  private async startStepInternal(
+    input: StepInput & { maxAttempts: number; maxSteps: number },
+    decode: false
+  ): Promise<RawStepRecord>;
+
+  private async startStepInternal(
+    input: StepInput & { maxAttempts: number; maxSteps: number },
     decode: boolean
-  ): Promise<StepRecord> {
+  ): Promise<StepRecord | RawStepRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      await this.assertOwnedRun(client, input);
+      const runResourceVersion = await this.assertOwnedRun(client, input);
+      const { serializationVersion } = decodeStoredResourceVersion(runResourceVersion);
       let selected = await client.query<StepRow>(
         `select ${STEP_COLUMNS} from durlo_steps where run_id = $1 and step_id = $2 for update`,
         [input.runId, input.stepId]
@@ -990,7 +1095,7 @@ export class PostgresAdapter implements DurloAdapter {
       if (!current) throw new Error(`step '${input.stepId}' could not be created`);
       if (current.status === "completed") {
         await client.query("commit");
-        return mapStep(current, decode);
+        return decode ? mapStep(current, serializationVersion) : mapStepRaw(current);
       }
       const updated = await client.query<StepRow>(
         `
@@ -1022,7 +1127,7 @@ export class PostgresAdapter implements DurloAdapter {
         ]
       );
       await client.query("commit");
-      return mapStep(row, decode);
+      return decode ? mapStep(row, serializationVersion) : mapStepRaw(row);
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -1371,7 +1476,7 @@ export class PostgresAdapter implements DurloAdapter {
         input.appId,
         input.kind,
         input.resourceId,
-        input.resourceVersion,
+        storedResourceVersion(input.resourceVersion),
         JSON.stringify(input.input),
         JSON.stringify(input.options),
         input.idempotencyKey,
@@ -1399,16 +1504,17 @@ export class PostgresAdapter implements DurloAdapter {
     }
   }
 
-  private async assertOwnedRun(client: PoolClient, input: OwnedRunInput): Promise<void> {
-    const result = await client.query(
+  private async assertOwnedRun(client: PoolClient, input: OwnedRunInput): Promise<string> {
+    const result = await client.query<{ resource_version: string }>(
       `
-        select id from durlo_runs
+        select resource_version from durlo_runs
         where id = $1 and locked_by = $2 and lease_token = $3 and status = 'running'
         for update
       `,
       [input.runId, input.workerId, input.leaseToken]
     );
     if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+    return result.rows[0]!.resource_version;
   }
 
   private async closeOwnedSteps(
