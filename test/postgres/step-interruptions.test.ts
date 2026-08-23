@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo, LostLeaseError } from "@durlo/core";
+import { Durlo } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
@@ -32,7 +32,7 @@ describe
       const workflow = durlo.workflow({
         id: "retry-timeout-step",
         timeout: "200ms",
-        retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+        retry: { attempts: 2, backoff: { type: "fixed", delay: 1 } },
         run: async ({ attempt, step }) =>
           step.run("work", async () => {
             if (attempt.number === 1) {
@@ -46,8 +46,8 @@ describe
       const worker = durlo.worker({ workflows: [workflow], workerId: "timeout-worker" });
 
       expect(await worker.runOnce()).toBe(1);
-      expect(await durlo.runs.get(handle)).toMatchObject({ status: "pending" });
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await durlo.runs.get(handle.run)).toMatchObject({ status: "pending" });
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "timed_out",
         result: null,
         error: { name: "AttemptTimeoutError" },
@@ -59,18 +59,18 @@ describe
       releaseFirst();
       await delay(25);
 
-      expect(await durlo.runs.get(handle)).toMatchObject({
+      expect(await durlo.runs.get(handle.run)).toMatchObject({
         status: "completed",
         output: "recovered"
       });
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "completed",
         result: "recovered",
         error: null,
         attemptCount: 2
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["timed_out", "succeeded"]);
-      const details = await durlo.runs.getDetails(handle);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["timed_out", "succeeded"]);
+      const details = await durlo.runs.getDetails(handle.run);
       expect(details?.timeline.map(({ type }) => type)).toContain("step_attempt_timed_out");
       expect(details?.attempts.some(({ status }) => status === "running")).toBe(false);
     });
@@ -90,21 +90,21 @@ describe
       const handle = await workflow.start({});
 
       expect(await durlo.worker({ workflows: [workflow] }).runOnce()).toBe(1);
-      expect(await durlo.runs.get(handle)).toMatchObject({
+      expect(await durlo.runs.get(handle.run)).toMatchObject({
         status: "failed",
         error: { name: "AttemptTimeoutError" }
       });
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "timed_out",
         result: null,
         error: { name: "AttemptTimeoutError" },
         completedAt: expect.any(Date)
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["timed_out"]);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["timed_out"]);
 
       releaseStep();
       await delay(25);
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "timed_out",
         result: null
       });
@@ -138,7 +138,7 @@ describe
         .worker({ workflows: [workflow], workerId: "expired-owner", leaseDuration: "30s" })
         .runOnce();
       await started;
-      await expireRun(handle.id);
+      await expireRun(handle.run.id);
 
       expect(
         await durlo
@@ -148,19 +148,19 @@ describe
       releaseFirst();
       await firstExecution;
 
-      expect(await durlo.runs.get(handle)).toMatchObject({
+      expect(await durlo.runs.get(handle.run)).toMatchObject({
         status: "completed",
         output: "recovered",
         attemptCount: 2,
         stalledCount: 1
       });
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "completed",
         result: "recovered",
         attemptCount: 2
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["stalled", "succeeded"]);
-      const details = await durlo.runs.getDetails(handle);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["stalled", "succeeded"]);
+      const details = await durlo.runs.getDetails(handle.run);
       expect(details?.timeline.map(({ type }) => type)).toContain("step_attempt_stalled");
       expect(details?.steps.some(({ status }) => status === "running")).toBe(false);
     });
@@ -190,7 +190,7 @@ describe
         .worker({ workflows: [workflow], workerId: "expired-owner", leaseDuration: "30s" })
         .runOnce();
       await started;
-      await expireRun(handle.id);
+      await expireRun(handle.run.id);
 
       expect(
         await durlo
@@ -200,18 +200,18 @@ describe
       releaseStep();
       await firstExecution;
 
-      expect(await durlo.runs.get(handle)).toMatchObject({
+      expect(await durlo.runs.get(handle.run)).toMatchObject({
         status: "failed",
         error: { name: "StalledError" },
         stalledCount: 1
       });
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "stalled",
         result: null,
         error: { name: "StalledError" },
         completedAt: expect.any(Date)
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["stalled"]);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["stalled"]);
     });
 
     it("fails any owned active step when ordinary run failure persistence is the fallback", async () => {
@@ -231,7 +231,7 @@ describe
         ]
       });
       await adapter.startStep({
-        runId: handle.id,
+        runId: handle.run.id,
         workerId: "failure-owner",
         leaseToken: claim!.leaseToken,
         stepId: "work",
@@ -240,28 +240,28 @@ describe
       });
 
       await adapter.failRun({
-        runId: handle.id,
+        runId: handle.run.id,
         workerId: "failure-owner",
         leaseToken: claim!.leaseToken,
         error: { name: "Error", message: "workflow failed" },
         outcome: { status: "failed" }
       });
 
-      expect(await adapter.getStep(handle.id, "work")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "work")).toMatchObject({
         status: "failed",
         error: { name: "Error", message: "workflow failed" },
         completedAt: expect.any(Date)
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["failed"]);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["failed"]);
       await expect(
         adapter.completeStep({
-          runId: handle.id,
+          runId: handle.run.id,
           workerId: "failure-owner",
           leaseToken: claim!.leaseToken,
           stepId: "work",
           result: "late-result"
         })
-      ).rejects.toBeInstanceOf(LostLeaseError);
+      ).rejects.toThrow("lease lost");
     });
 
     it("never downgrades a completed checkpoint when its running workflow is cancelled", async () => {
@@ -286,17 +286,17 @@ describe
       const execution = durlo.worker({ workflows: [workflow], leaseDuration: "30s" }).runOnce();
       await waiting;
 
-      await durlo.runs.cancel(handle);
+      await durlo.runs.cancel(handle.run);
       releaseWorkflow();
       await execution;
 
-      expect(await adapter.getStep(handle.id, "checkpoint")).toMatchObject({
+      expect(await adapter.getStep(handle.run.id, "checkpoint")).toMatchObject({
         status: "completed",
         result: "saved",
         error: null,
         attemptCount: 1
       });
-      expect(await stepAttemptStatuses(handle.id)).toEqual(["succeeded"]);
+      expect(await stepAttemptStatuses(handle.run.id)).toEqual(["succeeded"]);
     });
 
     async function expireRun(runId: string): Promise<void> {

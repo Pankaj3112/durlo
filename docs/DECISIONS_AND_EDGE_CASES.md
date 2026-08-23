@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
 Status: Current
-Updated: 2026-07-26
+Updated: 2026-08-23
 
 This file records decisions that should survive refactors. It explains why Durlo has its current
 boundary; it does not repeat every API rule or track unfinished work.
@@ -63,9 +63,14 @@ An idempotency key is scoped by app, resource kind, and resource id. Resource ve
 a deployment does not authorize duplicate logical work. The reservation lasts as long as the run
 row.
 
-The public result must eventually distinguish created from deduplicated work and prevent accidental
-reuse with incompatible input/options. Silent conflict acceptance is not an acceptable long-term
-contract.
+Every creation surface returns `{ run, created }`; `created` is the single-call insertion result.
+Batch items are explicit `{ input, options? }` records so a business payload cannot be mistaken for
+metadata. A duplicate key compares resource version, schema-transformed durable input, normalized
+execution options, and canonical schedule intent. Incompatible reuse throws
+`IdempotencyConflictError` with sorted mismatch categories and does not mutate the original row.
+Rows from before the comparison metadata migration are explicitly `legacy_unverifiable`, never
+silently accepted. The key uniqueness scope remains app + kind + resource + key so version changes
+do not create duplicate logical work.
 
 ## Workflows use checkpoints, not replay
 
@@ -107,6 +112,15 @@ the application's responsibility.
 
 CPU-heavy work can block heartbeat timers. V1 must either state that only cooperative I/O-oriented
 handlers are supported or add execution isolation before making broader production claims.
+
+## Timing and health are bounded
+
+Timer-backed durations use the safe Node.js maximum of `2_147_483_647` milliseconds. Polling,
+lease, and retry backoff intervals must be positive; immediate scheduling with `delay: 0` is valid.
+Retry calculation saturates rather than overflowing. Worker health keeps polling failures separate
+from unresolved execution persistence failures and only clears the latter after a confirmed durable
+outcome: completion, failure/retry, sleep, or release. Lease loss and stale-write suppression are
+ownership outcomes, not database-health successes or failures.
 
 ## Concurrency is process-local in v1
 

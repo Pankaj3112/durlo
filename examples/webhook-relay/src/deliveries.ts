@@ -44,10 +44,12 @@ export async function enqueueDelivery(input: WebhookDeliveryInput) {
       `update webhook_relay_deliveries
        set run_id = coalesce(run_id, $2), updated_at = now()
        where id = $1 and (run_id is null or run_id = $2)`,
-      [input.deliveryId, handle.id]
+      [input.deliveryId, handle.run.id]
     );
     if (linked.rowCount !== 1) {
-      throw new Error(`delivery '${input.deliveryId}' could not be linked to run '${handle.id}'`);
+      throw new Error(
+        `delivery '${input.deliveryId}' could not be linked to run '${handle.run.id}'`
+      );
     }
     return handle;
   });

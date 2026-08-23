@@ -9,8 +9,10 @@ import type {
   CreateRunInput,
   DurloAdapter,
   FailRunInput,
+  IdempotencyMismatch,
   JsonValue,
   OwnedRunInput,
+  PersistedRunCreation,
   RegisteredResource,
   RawStepRecord,
   RetentionCleanupInput,
@@ -34,7 +36,7 @@ import type {
 } from "@durlo/core";
 import {
   deserialize,
-  LostLeaseError,
+  IdempotencyConflictError,
   RunStateError,
   StorageLimitError,
   ValidationError
@@ -50,6 +52,13 @@ export type PostgresTransactionClient = RawPgTransactionClient;
 
 const TRANSACTION_PROVIDER = Symbol.for("@durlo/core/transaction-provider");
 const SERIALIZED_RESOURCE_VERSION_PREFIX = " @durlo/serialization/2:";
+const lostLeaseSignals = new WeakSet<object>();
+
+function lostLeaseError(message: string): Error {
+  const error = new Error(message);
+  lostLeaseSignals.add(error);
+  return error;
+}
 
 function storedResourceVersion(resourceVersion: string): string {
   return `${SERIALIZED_RESOURCE_VERSION_PREFIX}${resourceVersion}`;
@@ -106,6 +115,12 @@ type RunRow = QueryResultRow & {
   started_at: Date | null;
   completed_at: Date | null;
   cancelled_at: Date | null;
+  created?: boolean;
+  idempotency_metadata_version?: number | null;
+  idempotency_resource_version?: string | null;
+  idempotency_input_json?: JsonValue | null;
+  idempotency_execution_options_json?: JsonValue | null;
+  idempotency_schedule_json?: JsonValue | null;
 };
 
 type StepRow = QueryResultRow & {
@@ -372,6 +387,69 @@ const ATTEMPT_COLUMNS = `
   id, run_id, step_id, kind, attempt_number, status, worker_id, error_json,
   started_at, completed_at
 `;
+const IDEMPOTENCY_RUN_COLUMNS = `
+  ${RUN_COLUMNS}, idempotency_metadata_version, idempotency_resource_version, idempotency_input_json,
+  idempotency_execution_options_json, idempotency_schedule_json
+`;
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const envelope = record["$durlo"];
+    if (
+      Object.keys(record).length === 1 &&
+      Array.isArray(envelope) &&
+      envelope[0] === 2 &&
+      envelope[1] === "object" &&
+      Array.isArray(envelope[2]) &&
+      envelope[2].every(
+        (entry: unknown) =>
+          Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string"
+      )
+    ) {
+      const entries = [...(envelope[2] as Array<[string, unknown]>)]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => `[${JSON.stringify(key)},${canonicalJson(item)}]`)
+        .join(",");
+      return `{"$durlo":[2,"object",[${entries}]]}`;
+    }
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function idempotencyMismatches(input: CreateRunInput, row: RunRow): IdempotencyMismatch[] {
+  if (row.idempotency_metadata_version !== 1) {
+    return ["legacy_unverifiable"];
+  }
+  const mismatches: IdempotencyMismatch[] = [];
+  const metadata = input.idempotency ?? {
+    resourceVersion: input.resourceVersion,
+    input: input.input,
+    executionOptions: input.options,
+    schedule: { type: "immediate" as const }
+  };
+  if (row.idempotency_resource_version !== metadata.resourceVersion) {
+    mismatches.push("resource_version");
+  }
+  if (canonicalJson(row.idempotency_input_json) !== canonicalJson(metadata.input)) {
+    mismatches.push("input");
+  }
+  if (
+    canonicalJson(row.idempotency_execution_options_json) !==
+    canonicalJson(metadata.executionOptions)
+  ) {
+    mismatches.push("execution_options");
+  }
+  if (canonicalJson(row.idempotency_schedule_json) !== canonicalJson(metadata.schedule)) {
+    mismatches.push("schedule");
+  }
+  return mismatches;
+}
 
 export class PostgresAdapter implements DurloAdapter {
   readonly pool: Pool;
@@ -443,11 +521,15 @@ export class PostgresAdapter implements DurloAdapter {
     await this.closePromise;
   }
 
-  async createRun(input: CreateRunInput): Promise<RunRecord> {
+  isLeaseLoss(error: unknown): boolean {
+    return typeof error === "object" && error !== null && lostLeaseSignals.has(error);
+  }
+
+  async createRun(input: CreateRunInput): Promise<PersistedRunCreation> {
     return this.insertRun(this.query(), input);
   }
 
-  async createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]> {
+  async createRuns(inputs: CreateRunInput[]): Promise<PersistedRunCreation[]> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
@@ -930,7 +1012,7 @@ export class PostgresAdapter implements DurloAdapter {
         `,
         [input.runId, input.workerId, input.leaseToken, JSON.stringify(input.output)]
       );
-      if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      if (result.rowCount !== 1) throw lostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(
         `update durlo_attempts set status = 'succeeded', completed_at = now()
          where run_id = $1 and lease_token = $2 and kind = 'run' and status = 'running'`,
@@ -963,7 +1045,7 @@ export class PostgresAdapter implements DurloAdapter {
           JSON.stringify(input.error)
         ]
       );
-      if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      if (result.rowCount !== 1) throw lostLeaseError(`lease lost for run ${input.runId}`);
       await this.closeOwnedSteps(
         client,
         input.runId,
@@ -1234,7 +1316,7 @@ export class PostgresAdapter implements DurloAdapter {
         `,
         [input.runId, input.workerId, input.leaseToken]
       );
-      if (runResult.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+      if (runResult.rowCount !== 1) throw lostLeaseError(`lease lost for run ${input.runId}`);
       await client.query(
         `
           update durlo_attempts set status = 'succeeded', completed_at = now()
@@ -1447,28 +1529,45 @@ export class PostgresAdapter implements DurloAdapter {
     return (text, values) => this.pool.query(text, values);
   }
 
-  private async insertRuns(query: Query, inputs: CreateRunInput[]): Promise<RunRecord[]> {
+  private async insertRuns(
+    query: Query,
+    inputs: CreateRunInput[]
+  ): Promise<Array<{ run: RunRecord; created: boolean }>> {
     const keys = inputs
       .map((input) => input.idempotencyKey)
       .filter((key): key is string => key !== null);
     if (new Set(keys).size !== keys.length) {
       throw new Error("duplicate idempotency keys in one batch are not allowed");
     }
-    const records: RunRecord[] = [];
+    const records: Array<{ run: RunRecord; created: boolean }> = [];
     for (const input of inputs) records.push(await this.insertRun(query, input));
     return records;
   }
 
-  private async insertRun(query: Query, input: CreateRunInput): Promise<RunRecord> {
+  private async insertRun(
+    query: Query,
+    input: CreateRunInput
+  ): Promise<{ run: RunRecord; created: boolean }> {
+    const metadata = input.idempotency ?? {
+      resourceVersion: input.resourceVersion,
+      input: input.input,
+      executionOptions: input.options,
+      schedule: { type: "immediate" as const }
+    };
     const result = await query<RunRow>(
       `
         insert into durlo_runs (
           id, app_id, kind, resource_id, resource_version, status, input_json, options_json,
-          idempotency_key, priority, scheduled_at, max_attempts
-        ) values ($1, $2, $3, $4, $5, 'pending', $6::jsonb, $7::jsonb, $8, $9, $10, $11)
+          idempotency_key, priority, scheduled_at, max_attempts,
+          idempotency_metadata_version, idempotency_resource_version, idempotency_input_json,
+          idempotency_execution_options_json, idempotency_schedule_json
+        ) values (
+          $1, $2, $3, $4, $5, 'pending', $6::jsonb, $7::jsonb, $8, $9, $10, $11,
+          $12, $13, $14::jsonb, $15::jsonb, $16::jsonb
+        )
         on conflict (app_id, kind, resource_id, idempotency_key)
           where idempotency_key is not null
-        do update set id = durlo_runs.id
+        do nothing
         returning ${RUN_COLUMNS}
       `,
       [
@@ -1482,12 +1581,34 @@ export class PostgresAdapter implements DurloAdapter {
         input.idempotencyKey,
         input.priority,
         input.scheduledAt,
-        input.maxAttempts
+        input.maxAttempts,
+        1,
+        metadata.resourceVersion,
+        JSON.stringify(metadata.input),
+        JSON.stringify(metadata.executionOptions),
+        JSON.stringify(metadata.schedule)
       ]
     );
     const row = result.rows[0];
-    if (!row) throw new Error("Postgres did not return the created run");
-    return mapRun(row);
+    if (row) return { run: mapRun(row), created: true };
+    if (input.idempotencyKey === null) {
+      throw new Error("Postgres did not return the created run");
+    }
+    const existing = await query<RunRow>(
+      `
+        select ${IDEMPOTENCY_RUN_COLUMNS}
+        from durlo_runs
+        where app_id = $1 and kind = $2 and resource_id = $3 and idempotency_key = $4
+      `,
+      [input.appId, input.kind, input.resourceId, input.idempotencyKey]
+    );
+    const existingRow = existing.rows[0];
+    if (!existingRow) throw new Error("Postgres did not return the idempotent run");
+    const mismatches = idempotencyMismatches(input, existingRow);
+    if (mismatches.length > 0) {
+      throw new IdempotencyConflictError(input.idempotencyKey, existingRow.id, mismatches);
+    }
+    return { run: mapRun(existingRow), created: false };
   }
 
   private async finishOwnedRun(operation: (client: PoolClient) => Promise<void>): Promise<void> {
@@ -1513,7 +1634,7 @@ export class PostgresAdapter implements DurloAdapter {
       `,
       [input.runId, input.workerId, input.leaseToken]
     );
-    if (result.rowCount !== 1) throw new LostLeaseError(`lease lost for run ${input.runId}`);
+    if (result.rowCount !== 1) throw lostLeaseError(`lease lost for run ${input.runId}`);
     return result.rows[0]!.resource_version;
   }
 

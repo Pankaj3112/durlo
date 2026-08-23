@@ -40,6 +40,14 @@ export type RunOptions = {
   timeout?: DurationInput;
 };
 
+export type IdempotencyMismatch =
+  "resource_version" | "input" | "execution_options" | "schedule" | "legacy_unverifiable";
+
+export type ScheduleIntent =
+  | { type: "immediate" }
+  | { type: "delay"; milliseconds: number }
+  | { type: "runAt"; timestamp: string };
+
 export type RunKind = "task" | "workflow";
 export type RunStatus =
   "pending" | "running" | "sleeping" | "completed" | "failed" | "dead_letter" | "cancelled";
@@ -110,6 +118,11 @@ export type RunHandle<TOutput = unknown> = Pick<
   RunRecord,
   "id" | "kind" | "resourceId" | "resourceVersion" | "status" | "createdAt"
 > & { readonly __output?: TOutput };
+
+export type RunCreation<TOutput = unknown> = {
+  readonly run: RunHandle<TOutput>;
+  readonly created: boolean;
+};
 
 export type RunSummary = Pick<
   RunRecord,
@@ -406,11 +419,22 @@ export type CreateRunInput = {
   priority: number;
   scheduledAt: Date;
   maxAttempts: number;
+  idempotency?: {
+    resourceVersion: string;
+    input: JsonValue;
+    executionOptions: JsonValue;
+    schedule: ScheduleIntent;
+  };
+};
+
+export type PersistedRunCreation = {
+  run: RunRecord;
+  created: boolean;
 };
 
 export interface TransactionalDurloAdapter {
-  createRun(input: CreateRunInput): Promise<RunRecord>;
-  createRuns(inputs: CreateRunInput[]): Promise<RunRecord[]>;
+  createRun(input: CreateRunInput): Promise<PersistedRunCreation>;
+  createRuns(inputs: CreateRunInput[]): Promise<PersistedRunCreation[]>;
 }
 
 export type RawPgTransactionClient = {
@@ -426,16 +450,16 @@ export type DurloTransaction = {
     task: TaskDefinition<TInput, TOutput, THandlerInput>,
     input: TInput,
     options?: RunOptions
-  ): Promise<RunHandle<TOutput>>;
+  ): Promise<RunCreation<TOutput>>;
   start<TInput, TOutput, THandlerInput>(
     workflow: WorkflowDefinition<TInput, TOutput, THandlerInput>,
     input: TInput,
     options?: RunOptions
-  ): Promise<RunHandle<TOutput>>;
+  ): Promise<RunCreation<TOutput>>;
   batchEnqueue<TInput, TOutput, THandlerInput>(
     task: TaskDefinition<TInput, TOutput, THandlerInput>,
-    items: Array<TInput | BatchItem<TInput>>
-  ): Promise<Array<RunHandle<TOutput>>>;
+    items: ReadonlyArray<BatchItem<TInput>>
+  ): Promise<Array<RunCreation<TOutput>>>;
 };
 
 export interface DurloAdapter extends TransactionalDurloAdapter {
@@ -456,6 +480,7 @@ export interface DurloAdapter extends TransactionalDurloAdapter {
   completeRun(input: OwnedRunInput & { output: JsonValue }): Promise<void>;
   failRun(input: FailRunInput): Promise<void>;
   releaseRun(input: OwnedRunInput): Promise<boolean>;
+  isLeaseLoss?(error: unknown): boolean;
   getStep(runId: string, stepId: string): Promise<StepRecord | null>;
   startStep(input: StepInput & { maxAttempts: number; maxSteps: number }): Promise<StepRecord>;
   /** Encoded step access used by the worker before it performs one decode. */
@@ -575,8 +600,8 @@ export interface TaskDefinition<
   readonly name?: string;
   readonly kind: "task";
   readonly options: TaskDefinitionOptions<TInput, TOutput, THandlerInput>;
-  enqueue(input: TInput, options?: RunOptions): Promise<RunHandle<TOutput>>;
-  batchEnqueue(items: Array<TInput | BatchItem<TInput>>): Promise<Array<RunHandle<TOutput>>>;
+  enqueue(input: TInput, options?: RunOptions): Promise<RunCreation<TOutput>>;
+  batchEnqueue(items: ReadonlyArray<BatchItem<TInput>>): Promise<Array<RunCreation<TOutput>>>;
 }
 
 export interface RegisteredWorkflowDefinition {
@@ -598,7 +623,7 @@ export interface WorkflowDefinition<
   readonly name?: string;
   readonly kind: "workflow";
   readonly options: WorkflowDefinitionOptions<TInput, TOutput, THandlerInput>;
-  start(input: TInput, options?: RunOptions): Promise<RunHandle<TOutput>>;
+  start(input: TInput, options?: RunOptions): Promise<RunCreation<TOutput>>;
 }
 
 export type Logger = {
@@ -636,8 +661,10 @@ export type WorkerHealth = {
     healthy: boolean;
     claimFailures: number;
     timerFailures: number;
+    persistenceFailures: number;
     lastSuccessfulClaimAt: Date | null;
     lastSuccessfulTimerPromotionAt: Date | null;
+    lastSuccessfulPersistenceAt: Date | null;
     lastError: {
       operation: "claim" | "timer" | "execution" | "release";
       message: string;

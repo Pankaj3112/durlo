@@ -4,7 +4,7 @@ import type {
   NormalizedRetryPolicy,
   RetryPolicy
 } from "./types.js";
-import { parseDuration, validateBackoff } from "./validation.js";
+import { MAX_TIMER_DELAY_MS, parseDuration, validateBackoff } from "./validation.js";
 
 export const DEFAULT_RETRY_POLICY: NormalizedRetryPolicy = {
   attempts: 3,
@@ -18,13 +18,21 @@ export function normalizeBackoff(
   if (!policy) return { ...fallback };
   validateBackoff(policy);
   if (policy.type === "fixed") {
-    return { type: "fixed", delay: parseDuration(policy.delay), jitter: policy.jitter ?? 0 };
+    return {
+      type: "fixed",
+      delay: parseDuration(policy.delay, "backoff delay"),
+      jitter: policy.jitter ?? 0
+    };
   }
   return {
     type: "exponential",
-    delay: parseDuration(policy.delay),
+    delay: parseDuration(policy.delay, "backoff delay"),
     factor: policy.factor ?? 2,
-    ...(policy.maxDelay === undefined ? {} : { maxDelay: parseDuration(policy.maxDelay) }),
+    ...(policy.maxDelay === undefined
+      ? {}
+      : {
+          maxDelay: parseDuration(policy.maxDelay, "maximum backoff delay")
+        }),
     jitter: policy.jitter ?? 0
   };
 }
@@ -45,13 +53,21 @@ export function calculateRetryDelay(
   attemptNumber: number,
   random: () => number = Math.random
 ): number {
-  const base =
-    backoff.type === "fixed"
-      ? backoff.delay
-      : Math.min(
-          backoff.delay * backoff.factor ** Math.max(0, attemptNumber - 1),
-          backoff.maxDelay ?? Infinity
-        );
+  let base = backoff.delay;
+  if (backoff.type === "exponential") {
+    for (let attempt = 1; attempt < Math.max(1, attemptNumber); attempt += 1) {
+      if (backoff.maxDelay !== undefined && base > backoff.maxDelay / backoff.factor) {
+        base = backoff.maxDelay;
+        break;
+      }
+      if (base > MAX_TIMER_DELAY_MS / backoff.factor) {
+        base = backoff.maxDelay ?? MAX_TIMER_DELAY_MS;
+        break;
+      }
+      base *= backoff.factor;
+    }
+  }
+  base = Math.min(base, MAX_TIMER_DELAY_MS);
   const spread = base * backoff.jitter;
-  return Math.max(0, Math.round(base - spread + random() * spread * 2));
+  return Math.max(1, Math.round(base - spread + random() * spread * 2));
 }

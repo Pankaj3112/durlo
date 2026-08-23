@@ -1,10 +1,9 @@
 # Durlo Execution Semantics
 
 Status: Current pre-release behavior
-Updated: 2026-08-22
+Updated: 2026-08-23
 
-This document describes what the current public API does, including known defects. It is not a
-promise that roadmap work is already implemented.
+This document describes the current public API and its deliberate pre-release boundaries.
 
 ## Guarantee model
 
@@ -21,7 +20,9 @@ promise that roadmap work is already implemented.
 ## Run creation
 
 `task.enqueue(input, options?)` creates a task run. `workflow.start(input, options?)` creates a
-workflow run. Both return a `RunHandle` after persistence.
+workflow run. Both return `{ run, created }` after persistence. `run` is the durable handle and
+`created` is `true` only when this call inserted the row; a compatible idempotency reuse returns
+`created: false`.
 
 Supported options are `delay`, `runAt`, `attempts`, `backoff`, `idempotencyKey`, `priority`, and
 `timeout`. `delay` and `runAt` are mutually exclusive. Higher priority values are claimed first;
@@ -39,26 +40,34 @@ The key scope is:
 app id + resource kind + resource id + idempotency key
 ```
 
-The resource version is intentionally outside the scope. A duplicate key returns the existing run,
-including its original version. The current conflict path does not compare input, options, or
-version and does not report whether creation was deduplicated. Callers must not reuse one key for
-different logical work.
+The resource version is part of the compared creation intent, but not part of the uniqueness scope:
+a deployment cannot create a second logical run by changing its version. A duplicate key compares
+the resource version, transformed durable input, normalized execution options (retry, timeout,
+persisted limits, and priority), and canonical schedule intent (`immediate`, `delay(milliseconds)`,
+or exact `runAt(timestamp)`). A mismatch throws the exported `IdempotencyConflictError` with the
+existing run id and sorted unique mismatch names: `resource_version`, `input`,
+`execution_options`, or `schedule`. The conflict performs no mutation.
+
+Rows created before comparison metadata existed are not guessed to be compatible. Reusing their key
+throws a conflict containing only `legacy_unverifiable`; operators should choose a new key or
+explicitly inspect the legacy row. Object-property ordering does not change a comparison, and the
+comparison uses the schema-transformed input that was persisted.
 
 The key remains reserved while the run row exists. Deleting a terminal run through cleanup also
 releases its key.
 
 ### Batch creation
 
-`task.batchEnqueue(items)` validates all items before persistence and creates the batch in one
-transaction. Returned handles preserve order. Duplicate idempotency keys inside one batch are
-rejected.
+`task.batchEnqueue(items)` accepts only `ReadonlyArray<{ input: TInput; options?: RunOptions }>`.
+Every item is explicit, including when the input itself has `input` or `options` properties. The
+method validates all items before persistence, creates the batch in one transaction, and returns
+creation results in input order. Duplicate idempotency keys inside one batch are rejected.
 
 When a task has a Standard Schema, every batch item is validated once and its transformed output is
 persisted in the corresponding run. Transaction-bound creation uses the same input/output contract.
 
-The current `Array<TInput | { input: TInput; options?: RunOptions }>` API is ambiguous. An object
-input whose only keys are `input` and `options` is interpreted as batch metadata. Avoid that payload
-shape until the API is replaced.
+Plain `TInput[]` is intentionally not accepted by the TypeScript API. Transaction-bound batch
+creation uses the same explicit item shape and result contract.
 
 ## Transaction-bound creation
 
@@ -171,8 +180,12 @@ Workflow re-entry after successful sleeps increases `attempt_count` without cons
 budget. Consequently `context.attempt.number` can exceed `context.attempt.maxAttempts`; the former
 is a claim count and the latter a failure budget.
 
-Backoff factor and delay currently have no practical combined ceiling. Extreme exponential
-settings can overflow into an invalid retry date.
+All timer-backed durations are finite and bounded by `2_147_483_647` milliseconds, the safe
+Node.js timer range. Poll and lease intervals and retry backoff must be greater than zero; other
+positive timer durations must be at least 1 millisecond. Schedule `delay: 0` remains valid and
+means immediate execution. Exponential retry calculation saturates at the timer bound without
+overflowing. Durations larger than the valid JavaScript date range and invalid `runAt` values are
+rejected before persistence.
 
 ## Timeouts, cancellation, and user code
 
@@ -186,9 +199,9 @@ Durlo state transitions, closes the owned active step as `cancelled`, and cancel
 Running code observes cancellation only after the next failed heartbeat, and arbitrary JavaScript
 may continue locally.
 
-`WorkflowSleepError` and `LostLeaseError` are currently public exports used as internal worker
-sentinels. If user code throws them, the worker can suppress ordinary failure persistence. Do not
-throw these classes from application code.
+Workflow sleep and lease-loss control flow uses module-private identity signals. Their constructors
+are not public exports, and an ordinary error with the old name or shape is persisted as a normal
+handler failure.
 
 ## Workflow checkpoints and sleeps
 
@@ -224,7 +237,11 @@ prove fleet-wide unavailability.
 - `runs.list()` returns payload-free newest-first keyset pages; default 50, maximum 200.
 - `runs.getDetails()` returns one repeatable-read snapshot plus a derived timeline and diagnostics.
 - `runs.getBacklogHealth()` aggregates active state and lag for one app.
-- `worker.getHealth()` reports one process's claim and timer polling state.
+- `worker.getHealth()` reports one process's claim, timer, and execution-persistence state. Its
+  `database.healthy` flag is true only when `claimFailures`, `timerFailures`, and
+  `persistenceFailures` are all zero. `lastSuccessfulPersistenceAt` advances only after a confirmed
+  durable run outcome—completion, failure/retry, sleep, or release; polling, lease loss, suppressed
+  stale writes, and handler-only failures do not clear persistence failures.
 - `worker.getCompatibilityReport()` returns at most 1,000 worker-relative unavailable runs.
 - `runs.cancel()` and `runs.retry()` perform app-scoped state transitions.
 - `runs.cleanup()` deletes bounded terminal history.

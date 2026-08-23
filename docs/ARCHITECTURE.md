@@ -1,7 +1,7 @@
 # Durlo Architecture
 
 Status: Current
-Updated: 2026-07-26
+Updated: 2026-08-23
 
 This document describes the implementation that exists today. Public behavior belongs in
 [Execution Semantics](EXECUTION_SEMANTICS.md), deployment guidance in
@@ -42,8 +42,8 @@ does not implement another execution state machine.
 
 The schema in `packages/postgres/src/migrations.ts` contains:
 
-- `durlo_runs`: scheduling state, current status, input/output/error, lease, retained summary, and
-  internal serialization-generation routing
+- `durlo_runs`: scheduling state, current status, input/output/error, lease, retained summary,
+  internal serialization-generation routing, and idempotency comparison metadata
 - `durlo_steps`: workflow checkpoint state and result
 - `durlo_timers`: durable sleep state
 - `durlo_attempts`: run and step execution evidence
@@ -61,6 +61,10 @@ worker renews the lease while executing user code outside a database transaction
 Completion, failure, release, checkpoint, and sleep writes verify the current lease token. Once a
 new claim rotates that token, writes from the older worker are rejected. This fences durable state;
 it cannot prevent a late external side effect.
+
+Workflow sleep and lease-loss control flow is represented by module-private identity signals rather
+than public error classes or forgeable names. The Postgres adapter uses the same private lease-loss
+identity for its storage errors; the worker never trusts an error's public name or shape.
 
 Claiming currently selects a bounded group and then performs failure counts, state updates, and
 attempt inserts sequentially for each run while row locks remain held. Timer promotion and batch
@@ -107,6 +111,12 @@ One worker runs:
 Both polling loops use the configured `pollInterval` and recover from query failures with bounded
 backoff and jitter. Every worker currently polls timers even if it registers only tasks.
 
+Execution persistence is tracked independently from polling. `persistenceFailures` counts consecutive
+unresolved completion, failure, release, checkpoint, and sleep writes; lease-loss and stale-write
+suppression do not count. `lastSuccessfulPersistenceAt` advances after a confirmed durable run
+outcome (completion, failure/retry, sleep, or release), and `database.healthy` requires all three
+failure counters to be zero. Claim/timer polls cannot mask an unresolved execution write.
+
 `worker.stop()` stops new claims and timer promotion. The promise returned by `worker.start()`
 settles after active executions drain. `worker.getHealth()` describes only that process;
 `durlo.runs.getBacklogHealth()` describes stored work for one app; and
@@ -139,6 +149,11 @@ aggregates active state using the PostgreSQL clock.
 Cancellation and manual retry are app-scoped storage transitions. Retention cleanup deletes a
 bounded set of terminal parent runs and cascades to their steps, timers, and attempts. There is no
 automatic cleanup scheduler.
+
+Creation metadata is persisted with each new run. The unique key remains app + kind + resource +
+idempotency key, while a conflict compares resource version, transformed input, normalized
+execution options, and canonical schedule intent. Migration `0007` adds these fields; rows without
+them are returned as `legacy_unverifiable` conflicts rather than guessed compatible.
 
 ## Source of truth
 

@@ -30,17 +30,17 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
     const logicalRuns = 40;
     const requests = shuffle(
       Array.from({ length: logicalRuns }, (_, logical) =>
-        Array.from({ length: 3 }, (_, duplicate) => ({ logical, duplicate }))
+        Array.from({ length: 3 }, () => ({ logical }))
       ).flat(),
       random
     );
 
     const handles = await Promise.all(
-      requests.map(({ logical, duplicate }) =>
-        task.enqueue({ logical, duplicate }, { idempotencyKey: `seed:${seed}:logical:${logical}` })
+      requests.map(({ logical }) =>
+        task.enqueue({ logical }, { idempotencyKey: `seed:${seed}:logical:${logical}` })
       )
     );
-    expect(new Set(handles.map(({ id }) => id)).size).toBe(logicalRuns);
+    expect(new Set(handles.map(({ run }) => run.id)).size).toBe(logicalRuns);
 
     const resources = [{ kind: "task" as const, resourceId: task.id }];
     const claimGroups = await Promise.all(
@@ -123,7 +123,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
       }
     });
     const handles = await task.batchEnqueue(
-      Array.from({ length: runCount }, (_, sequence) => ({ sequence }))
+      Array.from({ length: runCount }, (_, sequence) => ({ input: { sequence } }))
     );
     const workerAdapters = Array.from({ length: 4 }, () =>
       postgresAdapter({ connectionString: databaseUrl!, max: 4 })
@@ -166,7 +166,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
          count(distinct run_id)::text as distinct_runs,
          count(*) filter (where status = 'running')::text as active_attempts
        from durlo_attempts where run_id = any($1::text[]) and kind = 'run'`,
-      [handles.map(({ id }) => id)]
+      [handles.map(({ run }) => run.id)]
     );
     expect(conservation.rows[0]).toEqual({
       attempts: String(runCount),
@@ -219,11 +219,11 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
         const completed = await adapter.pool.query<{ count: string }>(
           `select count(*)::text as count from durlo_runs
            where id = any($1::text[]) and status = 'completed'`,
-          [fast.map(({ id }) => id)]
+          [fast.map(({ run }) => run.id)]
         );
         return Number(completed.rows[0]?.count) >= 8;
       });
-      expect(await adapter.getRun({ appId, runId: slow.id })).toMatchObject({
+      expect(await adapter.getRun({ appId, runId: slow.run.id })).toMatchObject({
         status: "running"
       });
       releaseSlow();
@@ -276,7 +276,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
     await adapter.pool.query(
       `update durlo_timers set fire_at = now() - interval '500 milliseconds'
        where run_id = any($1::text[])`,
-      [workflowHandles.map(({ id }) => id)]
+      [workflowHandles.map(({ run }) => run.id)]
     );
     const lagged = await durlo.runs.getBacklogHealth();
     expect(lagged.timers).toMatchObject({ pending: workflowCount, due: workflowCount });
@@ -319,7 +319,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres seeded contenti
       const promoted = await adapter.pool.query<{ count: string }>(
         `select count(*)::text as count from durlo_runs
          where id = any($1::text[]) and status = 'pending'`,
-        [workflowHandles.map(({ id }) => id)]
+        [workflowHandles.map(({ run }) => run.id)]
       );
       expect(promoted.rows[0]?.count).toBe(String(workflowCount));
       releaseBlockers();

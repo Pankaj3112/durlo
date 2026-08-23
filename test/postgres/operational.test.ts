@@ -69,7 +69,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres operational gua
       finish();
       await execution;
       expect(
-        await workerAdapter.getRun({ appId: "transaction-check", runId: handle.id })
+        await workerAdapter.getRun({ appId: "transaction-check", runId: handle.run.id })
       ).toMatchObject({
         status: "completed",
         output: "done"
@@ -106,7 +106,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres operational gua
         }
       });
       const handles = await task.batchEnqueue(
-        Array.from({ length: executionCount }, (_, value) => ({ value }))
+        Array.from({ length: executionCount }, (_, value) => ({ input: { value } }))
       );
       execution = durlo
         .worker({
@@ -143,7 +143,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres operational gua
       const completed = await observer.pool.query<{ count: string }>(
         `select count(*)::text as count from durlo_runs
          where id = any($1::text[]) and status = 'completed'`,
-        [handles.map(({ id }) => id)]
+        [handles.map(({ run }) => run.id)]
       );
       expect(completed.rows[0]?.count).toBe(String(executionCount));
     } finally {

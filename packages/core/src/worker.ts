@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  AttemptTimeoutError,
-  LostLeaseError,
-  ValidationError,
-  WorkflowSleepError
-} from "./errors.js";
+import { AttemptTimeoutError, ValidationError } from "./errors.js";
+import { createLostLeaseSignal, isLostLeaseSignal, isWorkflowSleepSignal } from "./control.js";
 import { calculateRetryDelay } from "./retry.js";
 import { CURRENT_SERIALIZATION_VERSION, deserialize, serialize } from "./serialization.js";
 import { createStepTools } from "./steps.js";
@@ -27,7 +23,7 @@ import type {
   WorkerHealth,
   WorkerOptions
 } from "./types.js";
-import { parseDuration } from "./validation.js";
+import { parseTimerDuration } from "./validation.js";
 
 const OPERATIONAL_BACKOFF_INITIAL = 100;
 const OPERATIONAL_BACKOFF_MAX = 30_000;
@@ -52,8 +48,8 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function isLostLease(error: unknown): boolean {
-  return error instanceof LostLeaseError;
+function isLostLease(error: unknown, adapter: DurloAdapter): boolean {
+  return isLostLeaseSignal(error) || adapter.isLeaseLoss?.(error) === true;
 }
 
 function errorMessage(error: unknown): string {
@@ -82,8 +78,10 @@ export class Worker {
   private stopController: AbortController | undefined;
   private claimFailures = 0;
   private timerFailures = 0;
+  private persistenceFailures = 0;
   private lastSuccessfulClaimAt: Date | null = null;
   private lastSuccessfulTimerPromotionAt: Date | null = null;
+  private lastSuccessfulPersistenceAt: Date | null = null;
   private lastError: WorkerHealth["database"]["lastError"] = null;
   private started = false;
 
@@ -103,10 +101,12 @@ export class Worker {
     if (!Number.isInteger(this.concurrency) || this.concurrency < 1 || this.concurrency > 1_000) {
       throw new ValidationError("worker concurrency must be an integer from 1 to 1000");
     }
-    this.pollInterval = parseDuration(options.pollInterval ?? "1s", "poll interval");
-    this.leaseDuration = parseDuration(options.leaseDuration ?? "30s", "lease duration");
-    if (this.leaseDuration <= 0)
-      throw new ValidationError("lease duration must be greater than zero");
+    this.pollInterval = parseTimerDuration(options.pollInterval ?? "1s", "poll interval", {
+      allowZero: false
+    });
+    this.leaseDuration = parseTimerDuration(options.leaseDuration ?? "30s", "lease duration", {
+      allowZero: false
+    });
     for (const task of options.tasks ?? []) {
       const key = resourceKey(task.id, task.version);
       if (this.tasks.has(key)) {
@@ -132,7 +132,6 @@ export class Worker {
     this.started = true;
     this.claimFailures = 0;
     this.timerFailures = 0;
-    this.lastError = null;
     const stopController = new AbortController();
     this.stopController = stopController;
     this.log("info", "worker.started", { concurrency: this.concurrency });
@@ -166,11 +165,14 @@ export class Worker {
       activeRuns: this.activeRuns.size,
       concurrency: this.concurrency,
       database: {
-        healthy: this.claimFailures === 0 && this.timerFailures === 0,
+        healthy:
+          this.claimFailures === 0 && this.timerFailures === 0 && this.persistenceFailures === 0,
         claimFailures: this.claimFailures,
         timerFailures: this.timerFailures,
+        persistenceFailures: this.persistenceFailures,
         lastSuccessfulClaimAt: this.lastSuccessfulClaimAt,
         lastSuccessfulTimerPromotionAt: this.lastSuccessfulTimerPromotionAt,
+        lastSuccessfulPersistenceAt: this.lastSuccessfulPersistenceAt,
         lastError: this.lastError
       }
     };
@@ -257,10 +259,12 @@ export class Worker {
         );
         for (const result of released) {
           if (result.status === "rejected") {
-            this.recordError("release", result.reason);
+            this.notePersistenceFailure(result.reason, "release");
             this.log("error", "worker.release_failed", {
               error: errorMessage(result.reason)
             });
+          } else if (result.value) {
+            this.notePersistenceSuccess();
           }
         }
         return;
@@ -308,7 +312,6 @@ export class Worker {
   private trackRun(run: ClaimedRun): void {
     const tracked = this.executeRun(run)
       .catch((error: unknown) => {
-        this.recordError("execution", error);
         this.log("error", "run.persistence_failed", {
           runId: run.id,
           resourceId: run.resourceId,
@@ -341,11 +344,18 @@ export class Worker {
     const task = run.kind === "task" ? this.tasks.get(key) : undefined;
     const workflow = run.kind === "workflow" ? this.workflows.get(key) : undefined;
     if (!task && !workflow) {
-      const released = await this.adapter.releaseRun({
-        runId: run.id,
-        workerId: this.id,
-        leaseToken: run.leaseToken
-      });
+      let released = false;
+      try {
+        released = await this.adapter.releaseRun({
+          runId: run.id,
+          workerId: this.id,
+          leaseToken: run.leaseToken
+        });
+      } catch (error) {
+        this.notePersistenceFailure(error, "release");
+        throw error;
+      }
+      if (released) this.notePersistenceSuccess();
       this.log("error", "run.incompatible_claim", {
         runId: run.id,
         kind: run.kind,
@@ -398,7 +408,9 @@ export class Worker {
         ? task._durlo.run(input, context)
         : workflow!._durlo.run({
             input,
-            step: createStepTools(this.adapter, run, limits),
+            step: createStepTools(this.adapter, run, limits, (error) =>
+              this.notePersistenceFailure(error)
+            ),
             ...context
           });
       const timeout = this.timeoutFor(run);
@@ -413,12 +425,18 @@ export class Worker {
         serializationVersion
       );
       assertByteLimit(serializedOutput, "maxOutputBytes", limits.maxOutputBytes, "run output");
-      await this.adapter.completeRun({
-        runId: run.id,
-        workerId: this.id,
-        leaseToken: run.leaseToken,
-        output: serializedOutput
-      });
+      try {
+        await this.adapter.completeRun({
+          runId: run.id,
+          workerId: this.id,
+          leaseToken: run.leaseToken,
+          output: serializedOutput
+        });
+      } catch (error) {
+        this.notePersistenceFailure(error);
+        throw error;
+      }
+      this.notePersistenceSuccess();
       this.log("info", "run.completed", {
         runId: run.id,
         kind: run.kind,
@@ -427,11 +445,12 @@ export class Worker {
       });
     } catch (error) {
       await stopHeartbeat();
-      if (error instanceof WorkflowSleepError) {
+      if (isWorkflowSleepSignal(error)) {
+        this.notePersistenceSuccess();
         this.log("debug", "run.sleeping", { runId: run.id, resourceId: run.resourceId });
         return;
       }
-      if (!ownsLease || isLostLease(error)) return;
+      if (!ownsLease || isLostLease(error, this.adapter)) return;
       const retry = this.retryFor(run);
       const failureNumber = run.failureCount + 1;
       const exhausted = failureNumber >= run.maxAttempts;
@@ -454,6 +473,7 @@ export class Worker {
           ...(error instanceof AttemptTimeoutError ? { attemptStatus: "timed_out" } : {}),
           outcome
         });
+        this.notePersistenceSuccess();
         this.log(outcome.status === "pending" ? "warn" : "error", "run.failed", {
           runId: run.id,
           kind: run.kind,
@@ -463,7 +483,10 @@ export class Worker {
           error: errorMessage(error)
         });
       } catch (writeError) {
-        if (!isLostLease(writeError)) throw writeError;
+        if (!isLostLease(writeError, this.adapter)) {
+          this.notePersistenceFailure(writeError);
+          throw writeError;
+        }
       }
     } finally {
       await stopHeartbeat();
@@ -473,7 +496,7 @@ export class Worker {
   private async runHeartbeat(
     run: ClaimedRun,
     signal: AbortSignal,
-    loseLease: (error: LostLeaseError) => void
+    loseLease: (error: Error) => void
   ): Promise<void> {
     const interval = Math.max(1, Math.floor(this.leaseDuration / 3));
     while (!signal.aborted) {
@@ -487,11 +510,11 @@ export class Worker {
           leaseDuration: this.leaseDuration
         });
         if (!extended) {
-          loseLease(new LostLeaseError(`lease lost for run ${run.id}`));
+          loseLease(createLostLeaseSignal(`lease lost for run ${run.id}`));
           return;
         }
       } catch {
-        loseLease(new LostLeaseError(`lease renewal failed for run ${run.id}`));
+        loseLease(createLostLeaseSignal(`lease renewal failed for run ${run.id}`));
         return;
       }
     }
@@ -558,6 +581,20 @@ export class Worker {
     error: unknown
   ): void {
     this.lastError = { operation, message: errorMessage(error), at: new Date() };
+  }
+
+  private notePersistenceFailure(
+    error: unknown,
+    operation: "execution" | "release" = "execution"
+  ): void {
+    if (isLostLease(error, this.adapter)) return;
+    this.persistenceFailures += 1;
+    this.recordError(operation, error);
+  }
+
+  private notePersistenceSuccess(): void {
+    this.persistenceFailures = 0;
+    this.lastSuccessfulPersistenceAt = new Date();
   }
 
   private log(

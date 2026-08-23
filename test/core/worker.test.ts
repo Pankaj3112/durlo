@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AttemptTimeoutError, Durlo, LostLeaseError, jsonByteSize } from "@durlo/core";
+import { AttemptTimeoutError, Durlo, jsonByteSize } from "@durlo/core";
 import type { ClaimedRun, DurloAdapter, TaskContext, TransactionalDurloAdapter } from "@durlo/core";
 
 function createWorkerAdapter(): DurloAdapter {
@@ -50,7 +50,7 @@ function claimedTask(resourceId: string, id = "run-1"): ClaimedRun {
     options: {
       retry: {
         attempts: 3,
-        backoff: { type: "fixed", delay: 0, jitter: 0 }
+        backoff: { type: "fixed", delay: 1, jitter: 0 }
       }
     },
     idempotencyKey: null,
@@ -115,6 +115,7 @@ describe("worker lifecycle", () => {
     expect(() => durlo.worker({ concurrency: 0 })).toThrow("worker concurrency");
     expect(() => durlo.worker({ concurrency: 1.5 })).toThrow("worker concurrency");
     expect(() => durlo.worker({ concurrency: 1_001 })).toThrow("worker concurrency");
+    expect(() => durlo.worker({ pollInterval: 0 })).toThrow("poll interval");
     expect(() => durlo.worker({ leaseDuration: 0 })).toThrow("lease duration");
     expect(() => durlo.worker({ tasks: [task, task] })).toThrow("registered more than once");
     expect(() => durlo.worker({ workflows: [workflow, workflow] })).toThrow(
@@ -464,6 +465,171 @@ describe("worker lifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps health unhealthy until a durable run outcome is confirmed", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "persistence-task", run: async () => "done" });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+    adapter.completeRun = vi.fn(async () => {
+      throw new Error("completion write failed");
+    });
+    adapter.failRun = vi.fn(async () => {
+      throw new Error("failure write failed");
+    });
+
+    const worker = durlo.worker({ tasks: [task], workerId: "persistence-worker" });
+    await expect(worker.runOnce()).rejects.toThrow("failure write failed");
+
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: false,
+        persistenceFailures: expect.any(Number),
+        lastSuccessfulPersistenceAt: null,
+        lastError: { message: "failure write failed" }
+      }
+    });
+  });
+
+  it("clears persistence failures only after a confirmed terminal write", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "recovering-persistence-task", run: async () => "done" });
+    const claim = claimedTask(task.id);
+    adapter.claimRuns = vi.fn(async () => [claim]);
+    adapter.completeRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("completion write failed"))
+      .mockResolvedValue(undefined);
+
+    const worker = durlo.worker({ tasks: [task], workerId: "persistence-worker" });
+    await expect(worker.runOnce()).resolves.toBe(1);
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: true,
+        persistenceFailures: 0,
+        lastSuccessfulPersistenceAt: expect.any(Date)
+      }
+    });
+  });
+
+  it("preserves unresolved persistence health across worker restart", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "restart-persistence-task", run: async () => "done" });
+    adapter.claimRuns = vi.fn(async () => [claimedTask(task.id)]);
+    adapter.completeRun = vi.fn(async () => {
+      throw new Error("completion write failed");
+    });
+    adapter.failRun = vi.fn(async () => {
+      throw new Error("failure write failed");
+    });
+
+    const worker = durlo.worker({ tasks: [task], workerId: "persistence-worker" });
+    await expect(worker.runOnce()).rejects.toThrow("failure write failed");
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: false,
+        persistenceFailures: expect.any(Number),
+        lastError: { message: "failure write failed" }
+      }
+    });
+
+    adapter.claimRuns = vi.fn(async () => {
+      worker.stop();
+      return [];
+    });
+    await expect(worker.start()).resolves.toBeUndefined();
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: false,
+        persistenceFailures: expect.any(Number),
+        lastError: { message: "failure write failed" }
+      }
+    });
+  });
+
+  it("clears persistence failures after a confirmed release", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "persistence-release-task", run: async () => "done" });
+    adapter.claimRuns = vi
+      .fn()
+      .mockResolvedValueOnce([claimedTask(task.id)])
+      .mockResolvedValueOnce([claimedTask("missing-resource", "released-run")]);
+    adapter.completeRun = vi.fn(async () => {
+      throw new Error("completion write failed");
+    });
+    adapter.failRun = vi.fn(async () => {
+      throw new Error("failure write failed");
+    });
+    adapter.releaseRun = vi.fn(async () => true);
+
+    const worker = durlo.worker({ tasks: [task], workerId: "persistence-worker" });
+    await expect(worker.runOnce()).rejects.toThrow("failure write failed");
+    expect(worker.getHealth()).toMatchObject({
+      database: { healthy: false, persistenceFailures: expect.any(Number) }
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(1);
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: true,
+        persistenceFailures: 0,
+        lastSuccessfulPersistenceAt: expect.any(Date)
+      }
+    });
+  });
+
+  it("clears persistence failures after a confirmed durable sleep", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({ id: "persistence-release-task", run: async () => "done" });
+    const workflow = durlo.workflow({
+      id: "persistence-sleep-workflow",
+      run: async ({ step }) => step.sleep("wait", 1)
+    });
+    const sleepingRun = { ...claimedTask(workflow.id), kind: "workflow" as const };
+    adapter.claimRuns = vi
+      .fn()
+      .mockResolvedValueOnce([claimedTask(task.id)])
+      .mockResolvedValueOnce([sleepingRun]);
+    adapter.completeRun = vi.fn(async () => {
+      throw new Error("completion write failed");
+    });
+    adapter.failRun = vi.fn(async () => {
+      throw new Error("failure write failed");
+    });
+    adapter.sleepRun = vi.fn(async () => ({
+      id: "timer-1",
+      runId: sleepingRun.id,
+      stepId: "wait",
+      fireAt: new Date(Date.now() + 1),
+      status: "pending" as const,
+      createdAt: new Date(),
+      firedAt: null,
+      cancelledAt: null
+    }));
+
+    const worker = durlo.worker({
+      tasks: [task],
+      workflows: [workflow],
+      workerId: "persistence-worker"
+    });
+    await expect(worker.runOnce()).rejects.toThrow("failure write failed");
+    expect(worker.getHealth()).toMatchObject({
+      database: { healthy: false, persistenceFailures: expect.any(Number) }
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(1);
+    expect(worker.getHealth()).toMatchObject({
+      database: {
+        healthy: true,
+        persistenceFailures: 0,
+        lastSuccessfulPersistenceAt: expect.any(Date)
+      }
+    });
+  });
 });
 
 describe("worker heartbeats", () => {
@@ -484,7 +650,7 @@ describe("worker heartbeats", () => {
         leaseDuration: 30
       });
       expect(controlled.context()?.signal.aborted).toBe(true);
-      expect(controlled.context()?.signal.reason).toBeInstanceOf(LostLeaseError);
+      expect(controlled.context()?.signal.reason).toBeInstanceOf(Error);
       expect(controlled.context()?.signal.reason).toMatchObject({ message: expectedMessage });
 
       controlled.resolveExecution("late result");
@@ -584,6 +750,30 @@ describe("worker logging", () => {
       expect.objectContaining({ runId: "run-1", kind: "task" })
     );
   });
+
+  it("does not treat a user error shaped like a removed control signal as internal", async () => {
+    const adapter = createWorkerAdapter();
+    const durlo = new Durlo({ id: "worker-tests", adapter });
+    const task = durlo.task({
+      id: "ordinary-control-shaped-error",
+      retry: { attempts: 1 },
+      run: async () => {
+        const error = new Error("ordinary failure");
+        Object.defineProperty(error, "name", { value: "WorkflowSleepError" });
+        throw error;
+      }
+    });
+    const claim = claimedTask(task.id);
+    claim.maxAttempts = 1;
+    adapter.claimRuns = vi.fn(async () => [claim]);
+
+    await expect(
+      durlo.worker({ tasks: [task], workerId: "control-shaped-worker" }).runOnce()
+    ).resolves.toBe(1);
+    expect(adapter.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: { status: "dead_letter" } })
+    );
+  });
 });
 
 describe("worker timeouts", () => {
@@ -613,7 +803,7 @@ describe("worker timeouts", () => {
       const claim = claimedTask(task.id);
       claim.maxAttempts = 1;
       claim.options = {
-        retry: { attempts: 1, backoff: { type: "fixed", delay: 0, jitter: 0 } },
+        retry: { attempts: 1, backoff: { type: "fixed", delay: 1, jitter: 0 } },
         timeout: 5
       };
       adapter.claimRuns = vi.fn(async () => [claim]);

@@ -14,16 +14,20 @@ export {
   normalizeDurloLimits,
   serializeErrorWithinLimit
 } from "./limits.js";
-export { parseDuration } from "./validation.js";
+export {
+  MAX_DATE_MS,
+  MAX_TIMER_DELAY_MS,
+  parseDuration,
+  parseTimerDuration
+} from "./validation.js";
 export { Worker } from "./worker.js";
 export {
   AttemptTimeoutError,
   DurloError,
-  LostLeaseError,
+  IdempotencyConflictError,
   RunStateError,
   SerializationError,
   StorageLimitError,
-  ValidationError,
-  WorkflowSleepError
+  ValidationError
 } from "./errors.js";
 export type * from "./types.js";
