@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo, LostLeaseError, RunStateError } from "@durlo/core";
+import { Durlo, RunStateError } from "@durlo/core";
 import type { CreateRunInput } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
@@ -16,7 +16,7 @@ function createRunInput(overrides: Partial<CreateRunInput> = {}): CreateRunInput
     resourceVersion: "1",
     input: {},
     options: {
-      retry: { attempts: 3, backoff: { type: "fixed", delay: 0, jitter: 0 } }
+      retry: { attempts: 3, backoff: { type: "fixed", delay: 1, jitter: 0 } }
     },
     idempotencyKey: null,
     priority: 0,
@@ -61,7 +61,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       adapter.findUnavailableRuns({ appId: "matrix-tests", resources, limit: 10 })
     ).resolves.toMatchObject([
       {
-        id: unavailable.id,
+        id: unavailable.run.id,
         resourceId: "unregistered",
         resourceVersion: "1",
         reason: "unregistered_resource"
@@ -93,7 +93,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       leaseDuration: 10_000,
       resources
     });
-    expect(first.map(({ id }) => id)).toEqual([high.id]);
+    expect(first.map(({ id }) => id)).toEqual([high.run.id]);
 
     const second = await adapter.claimRuns({
       appId: "matrix-tests",
@@ -102,8 +102,8 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       leaseDuration: 10_000,
       resources
     });
-    expect(second.map(({ id }) => id)).toEqual([low.id]);
-    expect(second.some(({ id }) => id === future.id)).toBe(false);
+    expect(second.map(({ id }) => id)).toEqual([low.run.id]);
+    expect(second.some(({ id }) => id === future.run.id)).toBe(false);
   });
 
   it("claims expired leases before pending work after splitting queue scans", async () => {
@@ -120,7 +120,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     });
     await adapter.pool.query(
       "update durlo_runs set locked_until = now() - interval '1 second' where id = $1",
-      [expired.id]
+      [expired.run.id]
     );
     const pending = await task.enqueue({ name: "pending" }, { priority: 100 });
 
@@ -132,7 +132,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       resources
     });
 
-    expect(claims.map(({ id }) => id)).toEqual([expired.id, pending.id]);
+    expect(claims.map(({ id }) => id)).toEqual([expired.run.id, pending.run.id]);
   });
 
   it("rolls back every row when a database error occurs inside a batch", async () => {
@@ -149,7 +149,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const durlo = new Durlo({ id: "matrix-tests", adapter });
     const task = durlo.task({ id: "committed-transaction", run: async () => undefined });
     const runId = await durlo.transaction(async (transaction) => {
-      const id = (await transaction.enqueue(task, { committed: true })).id;
+      const id = (await transaction.enqueue(task, { committed: true })).run.id;
       expect(await adapter.getRun({ appId: "matrix-tests", runId: id })).toBeNull();
       return id;
     });
@@ -166,7 +166,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const pending = await pendingTask.enqueue({});
 
     await expect(
-      adapter.retryRun({ appId: "matrix-tests", runId: pending.id })
+      adapter.retryRun({ appId: "matrix-tests", runId: pending.run.id })
     ).rejects.toBeInstanceOf(RunStateError);
     await expect(
       adapter.retryRun({ appId: "matrix-tests", runId: "missing-run" })
@@ -175,12 +175,12 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       adapter.cancelRun({ appId: "matrix-tests", runId: "missing-run" })
     ).rejects.toBeInstanceOf(RunStateError);
 
-    await adapter.cancelRun({ appId: "matrix-tests", runId: pending.id });
+    await adapter.cancelRun({ appId: "matrix-tests", runId: pending.run.id });
     await expect(
-      adapter.retryRun({ appId: "matrix-tests", runId: pending.id })
+      adapter.retryRun({ appId: "matrix-tests", runId: pending.run.id })
     ).rejects.toBeInstanceOf(RunStateError);
     await expect(
-      adapter.cancelRun({ appId: "matrix-tests", runId: pending.id })
+      adapter.cancelRun({ appId: "matrix-tests", runId: pending.run.id })
     ).resolves.toMatchObject({ status: "cancelled" });
   });
 
@@ -188,7 +188,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const durlo = new Durlo({ id: "matrix-tests", adapter });
     const stepThenTimer = durlo.workflow({
       id: "step-then-timer",
-      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 1 } },
       run: async ({ attempt, step }) => {
         if (attempt.number === 1) {
           await step.run("shared-id", () => "checkpoint");
@@ -201,11 +201,11 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const firstWorker = durlo.worker({ workflows: [stepThenTimer], workerId: "step-first" });
     await firstWorker.runOnce();
     await firstWorker.runOnce();
-    expect(await adapter.getRun({ appId: "matrix-tests", runId: first.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: first.run.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: expect.stringContaining("used by step.run") }
     });
-    expect(await adapter.getTimer(first.id, "shared-id")).toBeNull();
+    expect(await adapter.getTimer(first.run.id, "shared-id")).toBeNull();
 
     const timerThenStep = durlo.workflow({
       id: "timer-then-step",
@@ -219,7 +219,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const secondWorker = durlo.worker({ workflows: [timerThenStep], workerId: "timer-first" });
     await secondWorker.runOnce();
     await secondWorker.runOnce();
-    expect(await adapter.getRun({ appId: "matrix-tests", runId: second.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: second.run.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: expect.stringContaining("used by a sleep") }
     });
@@ -235,11 +235,11 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
     const handle = await workflow.start({});
     await durlo.worker({ workflows: [workflow] }).runOnce();
 
-    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.run.id })).toMatchObject({
       status: "failed",
       error: { name: "ValidationError", message: "sleepUntil date must be valid" }
     });
-    expect(await adapter.getTimer(handle.id, "invalid")).toBeNull();
+    expect(await adapter.getTimer(handle.run.id, "invalid")).toBeNull();
   });
 
   it("does not persist a step result after cancellation invalidates ownership", async () => {
@@ -266,32 +266,32 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres state matrix", 
       .worker({ workflows: [workflow], workerId: "step-owner", leaseDuration: "30s" })
       .runOnce();
     await started;
-    await adapter.cancelRun({ appId: "matrix-tests", runId: handle.id });
+    await adapter.cancelRun({ appId: "matrix-tests", runId: handle.run.id });
     finishStep();
     await execution;
 
-    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "matrix-tests", runId: handle.run.id })).toMatchObject({
       status: "cancelled",
       output: null
     });
-    expect(await adapter.getStep(handle.id, "blocked")).toMatchObject({
+    expect(await adapter.getStep(handle.run.id, "blocked")).toMatchObject({
       status: "cancelled",
       result: null,
       error: null,
       completedAt: expect.any(Date)
     });
-    const details = await durlo.runs.getDetails(handle);
+    const details = await durlo.runs.getDetails(handle.run);
     expect(details?.timeline.map(({ type }) => type)).toContain("step_attempt_cancelled");
     expect(details?.steps.some(({ status }) => status === "running")).toBe(false);
     expect(details?.attempts.some(({ status }) => status === "running")).toBe(false);
     await expect(
       adapter.completeStep({
-        runId: handle.id,
+        runId: handle.run.id,
         workerId: "step-owner",
         leaseToken: "stale-token",
         stepId: "blocked",
         result: "stale-result"
       })
-    ).rejects.toBeInstanceOf(LostLeaseError);
+    ).rejects.toThrow("lease lost");
   });
 });

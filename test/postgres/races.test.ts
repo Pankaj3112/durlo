@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo, LostLeaseError, RunStateError } from "@durlo/core";
+import { Durlo, RunStateError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
@@ -34,9 +34,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     });
 
     const [cancel, complete] = await Promise.allSettled([
-      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.run.id }),
       adapter.completeRun({
-        runId: handle.id,
+        runId: handle.run.id,
         workerId: "worker",
         leaseToken: claim!.leaseToken,
         output: "completed"
@@ -44,13 +44,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     ]);
 
     expect([cancel.status, complete.status].sort()).toEqual(["fulfilled", "rejected"]);
-    const run = await adapter.getRun({ appId: "race-tests", runId: handle.id });
+    const run = await adapter.getRun({ appId: "race-tests", runId: handle.run.id });
     expect(["cancelled", "completed"]).toContain(run?.status);
     expect(run).toMatchObject({ lockedBy: null, leaseToken: null, lockedUntil: null });
     if (run?.status === "cancelled") {
       expect(cancel.status).toBe("fulfilled");
       expect(complete.status).toBe("rejected");
-      if (complete.status === "rejected") expect(complete.reason).toBeInstanceOf(LostLeaseError);
+      if (complete.status === "rejected")
+        expect(complete.reason).toMatchObject({ message: expect.stringContaining("lease lost") });
     } else {
       expect(complete.status).toBe("fulfilled");
       expect(cancel.status).toBe("rejected");
@@ -59,7 +60,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
 
     const attempts = await adapter.pool.query<{ status: string }>(
       "select status from durlo_attempts where run_id = $1 and kind = 'run'",
-      [handle.id]
+      [handle.run.id]
     );
     expect(attempts.rows).toHaveLength(1);
     expect(["cancelled", "succeeded"]).toContain(attempts.rows[0]?.status);
@@ -78,9 +79,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     });
 
     const [cancel, fail] = await Promise.allSettled([
-      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.run.id }),
       adapter.failRun({
-        runId: handle.id,
+        runId: handle.run.id,
         workerId: "worker",
         leaseToken: claim!.leaseToken,
         error: { name: "Error", message: "failed" },
@@ -89,13 +90,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     ]);
 
     expect([cancel.status, fail.status].sort()).toEqual(["fulfilled", "rejected"]);
-    const run = await adapter.getRun({ appId: "race-tests", runId: handle.id });
+    const run = await adapter.getRun({ appId: "race-tests", runId: handle.run.id });
     expect(["cancelled", "dead_letter"]).toContain(run?.status);
     expect(run).toMatchObject({ lockedBy: null, leaseToken: null, lockedUntil: null });
     if (run?.status === "cancelled") {
       expect(cancel.status).toBe("fulfilled");
       expect(fail.status).toBe("rejected");
-      if (fail.status === "rejected") expect(fail.reason).toBeInstanceOf(LostLeaseError);
+      if (fail.status === "rejected")
+        expect(fail.reason).toMatchObject({ message: expect.stringContaining("lease lost") });
     } else {
       expect(fail.status).toBe("fulfilled");
       expect(cancel.status).toBe("rejected");
@@ -117,23 +119,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     await worker.runOnce();
     await adapter.pool.query(
       "update durlo_timers set fire_at = now() - interval '1 second' where run_id = $1",
-      [handle.id]
+      [handle.run.id]
     );
 
     const [cancel, fired] = await Promise.all([
-      adapter.cancelRun({ appId: "race-tests", runId: handle.id }),
+      adapter.cancelRun({ appId: "race-tests", runId: handle.run.id }),
       adapter.fireDueTimers({ appId: "race-tests", limit: 1 })
     ]);
 
     expect(cancel.status).toBe("cancelled");
     expect([0, 1]).toContain(fired.length);
-    expect(await adapter.getRun({ appId: "race-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "race-tests", runId: handle.run.id })).toMatchObject({
       status: "cancelled",
       output: null,
       lockedBy: null,
       leaseToken: null
     });
-    const timer = await adapter.getTimer(handle.id, "due");
+    const timer = await adapter.getTimer(handle.run.id, "due");
     expect(["cancelled", "fired"]).toContain(timer?.status);
     expect(timer?.status).toBe(fired.length === 1 ? "fired" : "cancelled");
     expect(await worker.runOnce()).toBe(0);
@@ -152,14 +154,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres races", () => {
     await durlo.worker({ tasks: [task] }).runOnce();
     await adapter.pool.query(
       "update durlo_runs set updated_at = now() - interval '2 days' where id = $1",
-      [handle.id]
+      [handle.run.id]
     );
 
     const [cleanup, retry] = await Promise.allSettled([
       durlo.runs.cleanup({ olderThan: "1d", limit: 1 }),
-      durlo.runs.retry(handle)
+      durlo.runs.retry(handle.run)
     ]);
-    const run = await durlo.runs.get(handle);
+    const run = await durlo.runs.get(handle.run);
 
     if (cleanup.status === "fulfilled" && cleanup.value.deletedRuns === 1) {
       expect(retry.status).toBe("rejected");

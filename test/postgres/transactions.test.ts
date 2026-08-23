@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { deserialize, Durlo } from "@durlo/core";
+import { deserialize, Durlo, IdempotencyConflictError } from "@durlo/core";
 import type { CreateRunInput, TransactionalDurloAdapter } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter, PostgresTransactionClient } from "@durlo/postgres";
@@ -43,13 +43,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
       const taskHandle = await transaction.enqueue(task, { source: "single" });
       const workflowHandle = await transaction.start(workflow, { source: "workflow" });
       const batchHandles = await transaction.batchEnqueue(task, [
-        { source: "batch-1" },
-        { source: "batch-2" }
+        { input: { source: "batch-1" } },
+        { input: { source: "batch-2" } }
       ]);
       return { taskHandle, workflowHandle, batchHandles };
     });
 
-    expect(result.batchHandles.map(({ resourceId }) => resourceId)).toEqual([
+    expect(result.batchHandles.map(({ run }) => run.resourceId)).toEqual([
       "transaction-task",
       "transaction-task"
     ]);
@@ -62,9 +62,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
     );
     expect(new Set(runs.rows.map(({ id }) => id))).toEqual(
       new Set([
-        result.taskHandle.id,
-        result.workflowHandle.id,
-        ...result.batchHandles.map(({ id }) => id)
+        result.taskHandle.run.id,
+        result.workflowHandle.run.id,
+        ...result.batchHandles.map(({ run }) => run.id)
       ])
     );
     expect(
@@ -80,7 +80,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
         deserialize(input_json as Parameters<typeof deserialize>[0])
       ])
     );
-    expect(result.batchHandles.map(({ id }) => inputByRunId.get(id))).toEqual([
+    expect(result.batchHandles.map(({ run }) => inputByRunId.get(run.id))).toEqual([
       { source: "batch-1" },
       { source: "batch-2" }
     ]);
@@ -195,14 +195,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("owned raw pg transactions", () 
           { version: "duplicate" },
           { idempotencyKey: "same" }
         );
-        expect(duplicate.id).toBe(existing.id);
+        expect(duplicate.run.id).toBe(existing.run.id);
         throw new Error("rollback after conflict");
       })
-    ).rejects.toThrow("rollback after conflict");
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
 
     await expectPersistedCounts(adapter, 0, 1);
     expect(
-      await adapter.getRun({ appId: "transaction-idempotency", runId: existing.id })
+      await adapter.getRun({ appId: "transaction-idempotency", runId: existing.run.id })
     ).toMatchObject({
       input: { version: "original" }
     });

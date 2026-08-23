@@ -76,22 +76,22 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
     const handle = await task.enqueue({});
     const child = startFaultWorker("after-claim", task.id);
     await waitForLine(child, "CLAIMED");
-    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.run.id })).toMatchObject({
       status: "running",
       lockedBy: "crashed-worker"
     });
 
     await killChild(child);
     children.delete(child);
-    await expireLease(handle.id);
+    await expireLease(handle.run.id);
     expect(await durlo.worker({ tasks: [task], workerId: "recovery-worker" }).runOnce()).toBe(1);
 
-    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.run.id })).toMatchObject({
       status: "completed",
       output: "recovered",
       stalledCount: 1
     });
-    expect(await runAttemptStatuses(handle.id)).toEqual(["stalled", "succeeded"]);
+    expect(await runAttemptStatuses(handle.run.id)).toEqual(["stalled", "succeeded"]);
   });
 
   it("demonstrates at-least-once side effects after a process crash", async () => {
@@ -107,7 +107,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
 
     await killChild(child);
     children.delete(child);
-    await expireLease(handle.id);
+    await expireLease(handle.run.id);
 
     const recovery = new Durlo({ id: "fault-tests", adapter });
     const recoveryTask = recovery.task({
@@ -125,10 +125,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
 
     const effects = await adapter.pool.query<{ count: string }>(
       "select count(*)::text as count from durlo_test_effects where run_id = $1",
-      [handle.id]
+      [handle.run.id]
     );
     expect(effects.rows[0]?.count).toBe("2");
-    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.run.id })).toMatchObject({
       status: "completed",
       output: "recovered",
       stalledCount: 1
@@ -145,14 +145,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
     const handle = await queuedWorkflow.start({});
     const child = startFaultWorker("after-checkpoint", queuedWorkflow.id);
     await waitForLine(child, "CHECKPOINTED");
-    expect(await adapter.getStep(handle.id, "durable-step")).toMatchObject({
+    expect(await adapter.getStep(handle.run.id, "durable-step")).toMatchObject({
       status: "completed",
       result: "checkpointed"
     });
 
     await killChild(child);
     children.delete(child);
-    await expireLease(handle.id);
+    await expireLease(handle.run.id);
 
     const recovery = new Durlo({ id: "fault-tests", adapter });
     const recoveryWorkflow = recovery.workflow({
@@ -173,15 +173,15 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres process crashes
 
     const effects = await adapter.pool.query<{ count: string }>(
       "select count(*)::text as count from durlo_test_effects where run_id = $1",
-      [handle.id]
+      [handle.run.id]
     );
     expect(effects.rows[0]?.count).toBe("1");
-    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: "fault-tests", runId: handle.run.id })).toMatchObject({
       status: "completed",
       output: "checkpointed",
       stalledCount: 1
     });
-    expect(await runAttemptStatuses(handle.id)).toEqual(["stalled", "succeeded"]);
+    expect(await runAttemptStatuses(handle.run.id)).toEqual(["stalled", "succeeded"]);
   });
 
   async function runAttemptStatuses(runId: string): Promise<string[]> {

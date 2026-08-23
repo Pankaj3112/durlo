@@ -43,7 +43,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres database outage
     });
     const task = producer.task<{ kind: "lease-loss" | "queued" }, string>({
       id: "outage-task",
-      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 1 } },
       run: async ({ kind }, { attempt, signal }) => {
         if (kind === "lease-loss" && attempt.number === 1) {
           markFirstStarted();
@@ -71,11 +71,11 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres database outage
 
       await firstAborted;
       await waitFor(() => Promise.resolve(!worker.getHealth().database.healthy));
-      expect(await observer.getRun({ appId, runId: leaseLoss.id })).toMatchObject({
+      expect(await observer.getRun({ appId, runId: leaseLoss.run.id })).toMatchObject({
         status: "running",
         lockedBy: "outage-worker"
       });
-      expect(await observer.getRun({ appId, runId: queued.id })).toMatchObject({
+      expect(await observer.getRun({ appId, runId: queued.run.id })).toMatchObject({
         status: "pending"
       });
 
@@ -84,25 +84,25 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres database outage
         const result = await observer.pool.query<{ completed: string }>(
           `select count(*)::text as completed from durlo_runs
            where id = any($1::text[]) and status = 'completed'`,
-          [[leaseLoss.id, queued.id]]
+          [[leaseLoss.run.id, queued.run.id]]
         );
         return result.rows[0]?.completed === "2";
       });
       await waitFor(() => Promise.resolve(worker.getHealth().database.healthy));
 
-      expect(await observer.getRun({ appId, runId: leaseLoss.id })).toMatchObject({
+      expect(await observer.getRun({ appId, runId: leaseLoss.run.id })).toMatchObject({
         status: "completed",
         output: "reclaimed",
         stalledCount: 1
       });
-      expect(await observer.getRun({ appId, runId: queued.id })).toMatchObject({
+      expect(await observer.getRun({ appId, runId: queued.run.id })).toMatchObject({
         status: "completed",
         output: "queued-after-outage"
       });
       const attempts = await observer.pool.query<{ status: string }>(
         `select status from durlo_attempts
          where run_id = $1 and kind = 'run' order by started_at, id`,
-        [leaseLoss.id]
+        [leaseLoss.run.id]
       );
       expect(attempts.rows.map(({ status }) => status)).toEqual(["stalled", "succeeded"]);
     } finally {

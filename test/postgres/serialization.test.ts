@@ -50,7 +50,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     let workflowStepCalls = 0;
     const workflow = durlo.workflow<Payload, Payload>({
       id: "codec-workflow",
-      retry: { attempts: 2, backoff: { type: "fixed", delay: 0 } },
+      retry: { attempts: 2, backoff: { type: "fixed", delay: 1 } },
       run: async ({ attempt, input, step }) => {
         const checkpoint = await step.run("payload", () => {
           workflowStepCalls += 1;
@@ -74,7 +74,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
 
     const rawInput = await adapter.pool.query<{ input_json: JsonValue; options_json: JsonValue }>(
       "select input_json, options_json from durlo_runs where id = $1",
-      [taskHandle.id]
+      [taskHandle.run.id]
     );
     expect(rawInput.rows[0]?.input_json).not.toEqual(payload);
     expect(deserialize(rawInput.rows[0]!.input_json)).toEqual(payload);
@@ -82,7 +82,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
       retry: { attempts: 1 },
       limits: expect.objectContaining({ maxOutputBytes: expect.any(Number) })
     });
-    expect(await adapter.getRun({ appId: durlo.id, runId: taskHandle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: taskHandle.run.id })).toMatchObject({
       input: payload
     });
 
@@ -97,33 +97,35 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
 
     const rawOutput = await adapter.pool.query<{ output_json: JsonValue }>(
       "select output_json from durlo_runs where id = $1",
-      [taskHandle.id]
+      [taskHandle.run.id]
     );
     expect(deserialize(rawOutput.rows[0]!.output_json)).toEqual(payload);
-    expect(await adapter.getRun({ appId: durlo.id, runId: taskHandle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: taskHandle.run.id })).toMatchObject({
       output: payload
     });
 
     const rawStep = await adapter.pool.query<{ result_json: JsonValue }>(
       "select result_json from durlo_steps where run_id = $1 and step_id = 'payload'",
-      [workflowHandle.id]
+      [workflowHandle.run.id]
     );
     expect(deserialize(rawStep.rows[0]!.result_json)).toEqual(payload);
-    expect(await adapter.getStep(workflowHandle.id, "payload")).toMatchObject({ result: payload });
-    expect(await adapter.getRun({ appId: durlo.id, runId: workflowHandle.id })).toMatchObject({
+    expect(await adapter.getStep(workflowHandle.run.id, "payload")).toMatchObject({
+      result: payload
+    });
+    expect(await adapter.getRun({ appId: durlo.id, runId: workflowHandle.run.id })).toMatchObject({
       output: payload
     });
 
     const rawError = await adapter.pool.query<{ error_json: JsonValue }>(
       "select error_json from durlo_runs where id = $1",
-      [errorHandle.id]
+      [errorHandle.run.id]
     );
     expect(deserialize(rawError.rows[0]!.error_json)).toMatchObject({
       name: "Error",
       message: "expected failure",
       cause: payload
     });
-    expect(await adapter.getRun({ appId: durlo.id, runId: errorHandle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: errorHandle.run.id })).toMatchObject({
       error: { name: "Error", message: "expected failure", cause: payload }
     });
     expect(Object.prototype.hasOwnProperty.call(literal, "__proto__")).toBe(true);
@@ -138,10 +140,10 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
 
     await adapter.pool.query(
       "update durlo_runs set resource_version = '1', input_json = $2::jsonb where id = $1",
-      [handle.id, JSON.stringify({ "$durlo.date": legacyDate })]
+      [handle.run.id, JSON.stringify({ "$durlo.date": legacyDate })]
     );
 
-    const run = await adapter.getRun({ appId: durlo.id, runId: handle.id });
+    const run = await adapter.getRun({ appId: durlo.id, runId: handle.run.id });
     expect(run?.input).toEqual(new Date(legacyDate));
   });
 
@@ -163,19 +165,19 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     const handle = await workflow.start({});
     const stored = await adapter.pool.query<{ options_json: JsonValue }>(
       "select options_json from durlo_runs where id = $1",
-      [handle.id]
+      [handle.run.id]
     );
     const legacyOptions = serialize(deserialize(stored.rows[0]!.options_json, 2), 1);
     await adapter.pool.query(
       `update durlo_runs
        set resource_version = 'legacy-v1', input_json = $2::jsonb, options_json = $3::jsonb
        where id = $1`,
-      [handle.id, JSON.stringify(literal), JSON.stringify(legacyOptions)]
+      [handle.run.id, JSON.stringify(literal), JSON.stringify(legacyOptions)]
     );
     await adapter.pool.query(
       `insert into durlo_steps (id, run_id, step_id, status, result_json, completed_at)
        values ('legacy-envelope-step', $1, 'saved', 'completed', $2::jsonb, now())`,
-      [handle.id, JSON.stringify(literal)]
+      [handle.run.id, JSON.stringify(literal)]
     );
 
     const worker = durlo.worker({
@@ -185,12 +187,12 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
     await expect(worker.runOnce()).resolves.toBe(1);
 
     expect(stepCalls).toBe(0);
-    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.run.id })).toMatchObject({
       resourceVersion: "legacy-v1",
       input: literal,
       output: literal
     });
-    expect(await adapter.getStep(handle.id, "saved")).toMatchObject({ result: literal });
+    expect(await adapter.getStep(handle.run.id, "saved")).toMatchObject({ result: literal });
   });
 
   it("keeps v2 runs invisible to legacy resource-version claim predicates", async () => {
@@ -204,7 +206,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
 
     const raw = await adapter.pool.query<{ resource_version: string }>(
       "select resource_version from durlo_runs where id = $1",
-      [handle.id]
+      [handle.run.id]
     );
     expect(raw.rows[0]!.resource_version).not.toBe("rollout-v1");
     expect(raw.rows[0]!.resource_version.startsWith(" ")).toBe(true);
@@ -215,13 +217,13 @@ describe.runIf(Boolean(databaseUrl)).sequential("collision-safe serialization pe
       [durlo.id]
     );
     expect(legacyClaims.rows).toEqual([]);
-    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.run.id })).toMatchObject({
       resourceVersion: "rollout-v1"
     });
 
     const worker = durlo.worker({ tasks: [task], workerId: "rollout-v2-worker" });
     await expect(worker.runOnce()).resolves.toBe(1);
-    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.run.id })).toMatchObject({
       status: "completed",
       output: "done",
       resourceVersion: "rollout-v1"

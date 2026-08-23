@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Durlo } from "@durlo/core";
+import { Durlo, IdempotencyConflictError } from "@durlo/core";
 import { postgresAdapter } from "@durlo/postgres";
 import type { PostgresAdapter } from "@durlo/postgres";
 
@@ -52,23 +52,23 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
       workerId: "version-1-worker"
     });
     expect(await oldWorker.runOnce()).toBe(1);
-    expect(await durlo.runs.get(oldRun)).toMatchObject({
+    expect(await durlo.runs.get(oldRun.run)).toMatchObject({
       status: "sleeping",
       resourceVersion: "2026-01"
     });
     expect(oldCheckpointExecutions).toBe(1);
 
-    const deduplicated = await version2.start(
-      { orderId: "must-not-replace-input" },
-      { idempotencyKey: "business-operation" }
-    );
-    expect(deduplicated).toMatchObject({
-      id: oldRun.id,
-      resourceVersion: "2026-01",
-      status: "sleeping"
-    });
+    await expect(
+      version2.start(
+        { orderId: "must-not-replace-input" },
+        { idempotencyKey: "business-operation" }
+      )
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
 
-    const newRun = await version2.start({ orderId: "order-new" });
+    const newRun = await version2.start(
+      { orderId: "order-new" },
+      { idempotencyKey: "business-operation-v2" }
+    );
     const newOnlyWorker = durlo.worker({
       workflows: [version2],
       workerId: "version-2-worker"
@@ -76,14 +76,14 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
     await expect(newOnlyWorker.getCompatibilityReport()).resolves.toMatchObject({
       unavailableRuns: [
         expect.objectContaining({
-          id: oldRun.id,
+          id: oldRun.run.id,
           resourceVersion: "2026-01",
           reason: "incompatible_version"
         })
       ]
     });
     expect(await newOnlyWorker.runOnce()).toBe(1);
-    expect(await durlo.runs.get(newRun)).toMatchObject({
+    expect(await durlo.runs.get(newRun.run)).toMatchObject({
       status: "completed",
       output: "reserved-v2:order-new",
       resourceVersion: "2026-07"
@@ -91,15 +91,15 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
 
     await adapter.pool.query(
       `update durlo_timers set fire_at = now() - interval '1 second' where run_id = $1`,
-      [oldRun.id]
+      [oldRun.run.id]
     );
     expect(await newOnlyWorker.runOnce()).toBe(0);
-    expect(await durlo.runs.get(oldRun)).toMatchObject({
+    expect(await durlo.runs.get(oldRun.run)).toMatchObject({
       status: "pending",
       resourceVersion: "2026-01"
     });
     await expect(newOnlyWorker.getCompatibilityReport()).resolves.toMatchObject({
-      unavailableRuns: [expect.objectContaining({ id: oldRun.id })]
+      unavailableRuns: [expect.objectContaining({ id: oldRun.run.id })]
     });
 
     const mixedFleetWorker = durlo.worker({
@@ -107,7 +107,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
       workerId: "mixed-version-worker"
     });
     expect(await mixedFleetWorker.runOnce()).toBe(1);
-    expect(await durlo.runs.get(oldRun)).toMatchObject({
+    expect(await durlo.runs.get(oldRun.run)).toMatchObject({
       status: "completed",
       output: "reserved:order-old",
       resourceVersion: "2026-01"
@@ -118,7 +118,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
     await expect(oldWorker.getCompatibilityReport()).resolves.toMatchObject({
       unavailableRuns: [
         expect.objectContaining({
-          id: rollbackRun.id,
+          id: rollbackRun.run.id,
           resourceVersion: "2026-07",
           reason: "incompatible_version"
         })
@@ -126,6 +126,6 @@ describe.runIf(Boolean(databaseUrl)).sequential("@durlo/postgres rolling deploym
     });
     expect(await oldWorker.runOnce()).toBe(0);
     expect(await newOnlyWorker.runOnce()).toBe(1);
-    expect(await durlo.runs.get(rollbackRun)).toMatchObject({ status: "completed" });
+    expect(await durlo.runs.get(rollbackRun.run)).toMatchObject({ status: "completed" });
   });
 });

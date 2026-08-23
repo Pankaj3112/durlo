@@ -52,7 +52,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
     });
 
     const handle = await task.enqueue({ raw: "  durable  " });
-    const persisted = await adapter.getRun({ appId: durlo.id, runId: handle.id });
+    const persisted = await adapter.getRun({ appId: durlo.id, runId: handle.run.id });
     expect(persisted?.input).toEqual({
       normalized: "durable",
       characters: ["d", "u", "r", "a", "b", "l", "e"]
@@ -69,7 +69,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
         characters: ["d", "u", "r", "a", "b", "l", "e"]
       }
     ]);
-    await expect(adapter.getRun({ appId: durlo.id, runId: handle.id })).resolves.toMatchObject({
+    await expect(adapter.getRun({ appId: durlo.id, runId: handle.run.id })).resolves.toMatchObject({
       status: "completed",
       output: "durable"
     });
@@ -97,7 +97,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
 
     const handle = await workflow.start({ raw: "  workflow  " });
     expect(validate).toHaveBeenCalledOnce();
-    expect(await adapter.getRun({ appId: durlo.id, runId: handle.id })).toMatchObject({
+    expect(await adapter.getRun({ appId: durlo.id, runId: handle.run.id })).toMatchObject({
       input: { normalized: "WORKFLOW" }
     });
 
@@ -126,9 +126,9 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
       run: async (input: HandlerInput) => input.doubled
     });
 
-    await expect(task.batchEnqueue([{ value: 1 }, { value: 2 }])).rejects.toThrow(
-      "value 2 is not allowed"
-    );
+    await expect(
+      task.batchEnqueue([{ input: { value: 1 } }, { input: { value: 2 } }])
+    ).rejects.toThrow("value 2 is not allowed");
     expect(validate).toHaveBeenCalledTimes(2);
     await expect(
       adapter.pool.query<{ count: string }>(
@@ -162,12 +162,15 @@ describe.runIf(Boolean(databaseUrl)).sequential("Standard Schema persistence", (
     const created = await durlo.transaction(async (transaction) => ({
       task: await transaction.enqueue(task, { raw: " task " }),
       workflow: await transaction.start(workflow, { raw: " workflow " }),
-      batch: await transaction.batchEnqueue(task, [{ raw: " batch-1 " }, { raw: " batch-2 " }])
+      batch: await transaction.batchEnqueue(task, [
+        { input: { raw: " batch-1 " } },
+        { input: { raw: " batch-2 " } }
+      ])
     }));
     const records = await Promise.all([
-      adapter.getRun({ appId: durlo.id, runId: created.task.id }),
-      adapter.getRun({ appId: durlo.id, runId: created.workflow.id }),
-      ...created.batch.map((handle) => adapter.getRun({ appId: durlo.id, runId: handle.id }))
+      adapter.getRun({ appId: durlo.id, runId: created.task.run.id }),
+      adapter.getRun({ appId: durlo.id, runId: created.workflow.run.id }),
+      ...created.batch.map((handle) => adapter.getRun({ appId: durlo.id, runId: handle.run.id }))
     ]);
 
     expect(validate).toHaveBeenCalledTimes(4);

@@ -221,5 +221,15 @@ export const migrations: readonly Migration[] = [
           )
         );
     `
+  },
+  {
+    version: "0007_idempotency_comparison_metadata",
+    sql: `
+      alter table durlo_runs
+        add column idempotency_resource_version text,
+        add column idempotency_input_json jsonb,
+        add column idempotency_execution_options_json jsonb,
+        add column idempotency_schedule_json jsonb;
+    `
   }
 ];
