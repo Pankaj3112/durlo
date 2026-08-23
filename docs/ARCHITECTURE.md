@@ -113,9 +113,9 @@ backoff and jitter. Every worker currently polls timers even if it registers onl
 
 Execution persistence is tracked independently from polling. `persistenceFailures` counts consecutive
 unresolved completion, failure, release, checkpoint, and sleep writes; lease-loss and stale-write
-suppression do not count. `lastSuccessfulPersistenceAt` advances after a confirmed terminal run
-outcome, and `database.healthy` requires all three failure counters to be zero. Claim/timer polls
-cannot mask an unresolved execution write.
+suppression do not count. `lastSuccessfulPersistenceAt` advances after a confirmed durable run
+outcome (completion, failure/retry, sleep, or release), and `database.healthy` requires all three
+failure counters to be zero. Claim/timer polls cannot mask an unresolved execution write.
 
 `worker.stop()` stops new claims and timer promotion. The promise returned by `worker.start()`
 settles after active executions drain. `worker.getHealth()` describes only that process;

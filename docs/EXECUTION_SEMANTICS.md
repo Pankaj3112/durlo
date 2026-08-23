@@ -239,8 +239,8 @@ prove fleet-wide unavailability.
 - `worker.getHealth()` reports one process's claim, timer, and execution-persistence state. Its
   `database.healthy` flag is true only when `claimFailures`, `timerFailures`, and
   `persistenceFailures` are all zero. `lastSuccessfulPersistenceAt` advances only after a confirmed
-  durable terminal run outcome; polling, lease loss, suppressed stale writes, and handler-only
-  failures do not clear persistence failures.
+  durable run outcome—completion, failure/retry, sleep, or release; polling, lease loss, suppressed
+  stale writes, and handler-only failures do not clear persistence failures.
 - `worker.getCompatibilityReport()` returns at most 1,000 worker-relative unavailable runs.
 - `runs.cancel()` and `runs.retry()` perform app-scoped state transitions.
 - `runs.cleanup()` deletes bounded terminal history.

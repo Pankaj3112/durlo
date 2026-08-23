@@ -119,8 +119,8 @@ Timer-backed durations use the safe Node.js maximum of `2_147_483_647` milliseco
 lease, and retry backoff intervals must be positive; immediate scheduling with `delay: 0` is valid.
 Retry calculation saturates rather than overflowing. Worker health keeps polling failures separate
 from unresolved execution persistence failures and only clears the latter after a confirmed durable
-terminal outcome. Lease loss and stale-write suppression are ownership outcomes, not database-health
-successes or failures.
+outcome: completion, failure/retry, sleep, or release. Lease loss and stale-write suppression are
+ownership outcomes, not database-health successes or failures.
 
 ## Concurrency is process-local in v1
 

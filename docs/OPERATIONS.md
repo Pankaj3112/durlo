@@ -153,10 +153,10 @@ At minimum collect:
 
 `worker.getHealth().database.healthy` is true only when consecutive claim, timer, and execution
 persistence failures are all zero. Inspect `persistenceFailures` and
-`lastSuccessfulPersistenceAt` alongside the polling timestamps. A confirmed durable terminal run
-outcome resets persistence failures; claim/timer polls, lease loss, stale-write suppression, and
-handler-only failures do not. The CLI and local dashboard serialize these fields in their health
-JSON.
+`lastSuccessfulPersistenceAt` alongside the polling timestamps. A confirmed durable run
+outcome—completion, failure/retry, sleep, or release—resets persistence failures; claim/timer polls,
+lease loss, stale-write suppression, and handler-only failures do not. The CLI and local dashboard
+serialize these fields in their health JSON.
 
 Run detail and timelines are diagnostic snapshots, not a complete event log. A displayed `running`
 step attempt should have a currently running parent run with the same lease; interruption close
