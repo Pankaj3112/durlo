@@ -70,6 +70,78 @@ try {
     `
   );
   await writeFile(
+    join(consumer, "mixed.mjs"),
+    `
+      import { createRequire } from "node:module";
+      import * as esm from "@durlo/core";
+
+      const cjs = createRequire(import.meta.url)("@durlo/core");
+      const now = new Date("2026-08-23T00:00:00.000Z");
+
+      async function runCrossFormatOutcome(id, createError) {
+        let failure;
+        const adapter = {
+          fireDueTimers: async () => [],
+          claimRuns: async () => [{
+            id: "run-" + id,
+            appId: "mixed-formats",
+            kind: "task",
+            resourceId: id,
+            resourceVersion: "1",
+            status: "running",
+            input: {},
+            output: null,
+            error: null,
+            options: { retry: { attempts: 3, backoff: { type: "fixed", delay: 1, jitter: 0 } } },
+            idempotencyKey: null,
+            priority: 0,
+            scheduledAt: now,
+            attemptCount: 1,
+            maxAttempts: 3,
+            lockedBy: "mixed-worker",
+            leaseToken: "lease-" + id,
+            lockedUntil: new Date(now.getTime() + 30_000),
+            stalledCount: 0,
+            failureCount: 0,
+            createdAt: now,
+            updatedAt: now,
+            startedAt: now,
+            completedAt: null,
+            cancelledAt: null
+          }],
+          extendRunLease: async () => true,
+          failRun: async (input) => { failure = input; }
+        };
+        const cjsDurlo = new cjs.Durlo({ id: "mixed-formats", adapter });
+        const task = cjsDurlo.task({ id, run: async () => { throw createError(); } });
+        const worker = new esm.Worker("mixed-formats", adapter, {
+          tasks: [task],
+          workerId: "mixed-worker"
+        });
+        await worker.runOnce();
+        if (!failure) throw new Error("mixed-format worker did not persist a failure");
+        return failure.outcome;
+      }
+
+      const permanent = await runCrossFormatOutcome(
+        "mixed-permanent",
+        () => new cjs.PermanentError("stop")
+      );
+      if (permanent.status !== "dead_letter") {
+        throw new Error("mixed-format PermanentError lost its provenance");
+      }
+
+      const retryAt = new Date(Date.now() + 60_000);
+      const retry = await runCrossFormatOutcome(
+        "mixed-retry",
+        () => new cjs.RetryError({ at: retryAt })
+      );
+      if (retry.status !== "pending" || retry.scheduledAt.getTime() !== retryAt.getTime()) {
+        throw new Error("mixed-format RetryError lost its directed schedule");
+      }
+    `
+  );
+  await writeFile(
     join(consumer, "typecheck.ts"),
     `
       import {
@@ -164,6 +236,12 @@ try {
       const adapterOptions: PostgresAdapterOptions = { connectionString: "postgres://unused" };
       const adapter = postgresAdapter(adapterOptions);
       const adapterFromConstructor = new PostgresAdapter(adapterOptions);
+      // @ts-expect-error Execution storage controls are private to Durlo.
+      adapter.createRun;
+      // @ts-expect-error Claim controls are private to Durlo workers.
+      adapter.claimRuns;
+      // @ts-expect-error Lease-fenced completion is not a public adapter control.
+      adapter.completeRun;
       const durlo: Durlo = new Durlo({ id: "packed-consumer", adapter });
       type ExternalInput = { raw: string };
       type HandlerInput = { normalized: string };
@@ -271,6 +349,7 @@ try {
   inspectDeclarationExports(consumer);
   run(node, ["esm.mjs"], consumer, "loading packed ESM artifacts");
   run(node, ["cjs.cjs"], consumer, "loading packed CJS artifacts");
+  run(node, ["mixed.mjs"], consumer, "mixing packed ESM and CommonJS objects");
   run(
     join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
     ["--help"],
@@ -448,6 +527,24 @@ function inspectDeclarationExports(consumerDirectory) {
   }
   if (!/constructor\(appId: string, adapter: object,/.test(coreDeclaration)) {
     throw new Error("Worker's storage adapter must remain opaque in core declarations");
+  }
+
+  const postgresSource = program.getSourceFile(files.postgres);
+  const postgresModule = postgresSource && checker.getSymbolAtLocation(postgresSource);
+  const postgresAdapterSymbol = postgresModule
+    ? checker.getExportsOfModule(postgresModule).find(({ name }) => name === "PostgresAdapter")
+    : undefined;
+  if (!postgresAdapterSymbol) throw new Error("missing PostgresAdapter declaration");
+  const postgresAdapterMembers = checker
+    .getDeclaredTypeOfSymbol(postgresAdapterSymbol)
+    .getProperties()
+    .map(({ name }) => name)
+    .sort();
+  const expectedPostgresAdapterMembers = ["close", "migrate", "pool"];
+  if (JSON.stringify(postgresAdapterMembers) !== JSON.stringify(expectedPostgresAdapterMembers)) {
+    throw new Error(
+      `PostgresAdapter instance surface changed: ${postgresAdapterMembers.join(", ")}`
+    );
   }
 }
 

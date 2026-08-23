@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { migrations, postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter } from "@durlo/postgres";
+import { migrations, postgresAdapter } from "../helpers/postgres-internal.js";
+import type { PostgresAdapter } from "../helpers/postgres-internal.js";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 

@@ -63,8 +63,8 @@ helpers, registered-definition internals, and private control signals are not pu
   be unique within one `Durlo` instance. `name` is descriptive and does not affect routing.
 - `durlo.worker({ tasks?, workflows?, concurrency?, pollInterval?, leaseDuration?, workerId? })`
   registers genuine definitions. Concurrency defaults to 10, poll interval to one second, lease
-  duration to 30 seconds, and worker id to a UUID. `new Worker(appId, adapter, options, logger?,
-  limits?)` is the corresponding direct constructor for the official adapter.
+  duration to 30 seconds, and worker id to a UUID. The corresponding direct constructor for the
+  official adapter is `new Worker(appId, adapter, options, logger?, limits?)`.
 - `new PostgresAdapter(options)` and `postgresAdapter(options)` accept either `pg.PoolConfig` or
   `{ pool }`. Configuration creates an owned pool; a supplied pool is borrowed. `migrate()` applies
   immutable migrations and idempotent `close()` closes only an owned pool.
@@ -344,8 +344,9 @@ All exported errors extend `DurloError`. `ValidationError`, `SerializationError`
 `StorageLimitError`, `RunStateError`, `AttemptTimeoutError`, and `IdempotencyConflictError` describe
 creation, storage, state, execution, or idempotency failures. `RunWaitTimeoutError` has readonly
 `runId` and normalized `timeout`; `RunNotFoundError` and `RunCancelledError` have readonly `runId`;
-`RunFailedError` has readonly `runId`, terminal `status`, and structured stored `error`. Durlo does
-not reconstruct arbitrary stored `Error` subclasses.
+`RunFailedError` has readonly `runId`, terminal `status`, and the stored `SerializedError`. Its
+`JsonValue` cause remains in the durable storage encoding; Durlo does not decode it into richer
+runtime values or reconstruct arbitrary stored `Error` subclasses.
 
 The timeline is derived from current durable records, not a complete event history. Its existing
 `step_attempt_stalled`, `step_attempt_timed_out`, and `step_attempt_cancelled` events come from the

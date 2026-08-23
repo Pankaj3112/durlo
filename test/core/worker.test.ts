@@ -806,6 +806,9 @@ describe("explicit handler outcomes", () => {
       expect(() => new RetryError({} as never)).toThrow(ValidationError);
       expect(() => new RetryError({ after: "1s", at: retryAt } as never)).toThrow(ValidationError);
       expect(() => new RetryError({ at: "not-a-date" })).toThrow(ValidationError);
+      for (const at of [null, true, false, [], {}]) {
+        expect(() => new RetryError({ at } as never)).toThrow(ValidationError);
+      }
       expect(() => new RetryError({ after: -1 })).toThrow(ValidationError);
     } finally {
       vi.useRealTimers();

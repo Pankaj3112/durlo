@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Durlo, RunCancelledError, RunFailedError, RunNotFoundError } from "@durlo/core";
-import { postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter } from "@durlo/postgres";
+import { postgresAdapter } from "../helpers/postgres-internal.js";
+import type { PostgresAdapter } from "../helpers/postgres-internal.js";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 
@@ -86,7 +86,7 @@ describe.runIf(Boolean(databaseUrl)).sequential("PostgreSQL run result waiting",
       name: RunFailedError.name,
       runId: failedTask.run.id,
       status: "dead_letter",
-      error: { name: "Error", message: "task failed", cause: { code: "TASK" } }
+      error: { name: "Error", message: "task failed" }
     });
     await expect(durlo.runs.wait(failedWorkflow.run, { timeout: "1s" })).rejects.toMatchObject({
       name: RunFailedError.name,
@@ -99,6 +99,34 @@ describe.runIf(Boolean(databaseUrl)).sequential("PostgreSQL run result waiting",
     await expect(durlo.runs.wait(cancelled.run, { timeout: "1s" })).rejects.toBeInstanceOf(
       RunNotFoundError
     );
+  });
+
+  it("returns the stored SerializedError without decoding durable cause values", async () => {
+    const occurredAt = new Date("2026-08-23T12:34:56.000Z");
+    const task = durlo.task({
+      id: "wait-stored-error",
+      retry: { attempts: 1 },
+      run: async () => {
+        throw new Error("dated failure", { cause: { occurredAt } });
+      }
+    });
+    const creation = await task.enqueue({});
+    await durlo.worker({ tasks: [task] }).runOnce();
+    const stored = await adapter.pool.query<{ error_json: Record<string, unknown> }>(
+      "select error_json from durlo_runs where id = $1",
+      [creation.run.id]
+    );
+
+    let failure: unknown;
+    try {
+      await durlo.runs.wait(creation.run, { timeout: "1s" });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(RunFailedError);
+    expect(failure).toMatchObject({ error: stored.rows[0]!.error_json });
+    expect((failure as RunFailedError).error?.cause).not.toBeInstanceOf(Date);
   });
 
   it("keeps the decoded legacy output when output-kind metadata is absent", async () => {

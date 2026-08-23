@@ -1,5 +1,5 @@
 import { Durlo } from "../../packages/core/src/index.js";
-import { postgresAdapter } from "../../packages/postgres/src/index.js";
+import { postgresAdapter } from "../../packages/postgres/src/adapter.js";
 
 const databaseUrl = requiredEnvironment("DURLO_TEST_DATABASE_URL");
 const mode = requiredEnvironment("DURLO_FAULT_MODE");

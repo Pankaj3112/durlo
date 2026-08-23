@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Durlo, IdempotencyConflictError } from "@durlo/core";
-import { postgresAdapter } from "@durlo/postgres";
-import type { PostgresAdapter } from "@durlo/postgres";
+import { postgresAdapter } from "../helpers/postgres-internal.js";
+import type { PostgresAdapter } from "../helpers/postgres-internal.js";
 
 const databaseUrl = process.env.DURLO_TEST_DATABASE_URL;
 

@@ -565,14 +565,10 @@ export class PostgresAdapter implements DurloAdapter {
     );
     const row = result.rows[0];
     if (!row) return null;
-    const { serializationVersion } = decodeStoredResourceVersion(row.resource_version);
     return {
       run: mapRun(row),
       outputKind: row.output_kind,
-      storedError:
-        row.error_json === null
-          ? null
-          : (deserialize(row.error_json, serializationVersion) as SerializedError)
+      storedError: row.error_json
     };
   }
 
