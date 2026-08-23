@@ -30,6 +30,8 @@
     "test:mutations:core": "stryker run",
     "test:package": "node scripts/test-packed-consumer.mjs",
     "test:quickstart": "node scripts/test-phase4-quickstart.mjs",
+    "test:registry": "node scripts/test-packed-consumer.mjs --registry",
+    "test:registry-quickstart": "node scripts/test-phase4-quickstart.mjs --registry",
     "test:reference-apps": "node scripts/test-reference-apps.mjs",
     "test:release-contract": "node scripts/check-release-contract.mjs",
     "test:release": "node --test test/release-plan.test.mjs",

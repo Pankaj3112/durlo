@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,27 +17,44 @@ const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const node = process.execPath;
-const temp = await mkdtemp(join(tmpdir(), "durlo-phase4-quickstart-"));
+const source = process.argv[2] === "--registry" ? "registry" : "packed";
+if (process.argv.length > 2 && process.argv[2] !== "--registry") {
+  throw new Error(`unknown quickstart source '${process.argv[2]}'`);
+}
+const version = JSON.parse(await readFile(join(workspaceRoot, "package.json"), "utf8")).version;
+const temp = await mkdtemp(join(tmpdir(), `durlo-${source}-quickstart-`));
 const tarballs = join(temp, "tarballs");
 const consumer = join(temp, "consumer");
 const children = new Set();
 const pool = new Pool({ connectionString: databaseUrl });
 
 try {
-  run(pnpm, ["build"], workspaceRoot, "building workspace packages");
-  await Promise.all([mkdir(tarballs), mkdir(consumer)]);
-  for (const packageDir of ["packages/core", "packages/postgres", "packages/cli"]) {
-    run(
-      pnpm,
-      ["pack", "--pack-destination", tarballs],
-      resolve(workspaceRoot, packageDir),
-      `packing ${packageDir}`
-    );
+  const packageDirectories = ["packages/core", "packages/postgres", "packages/cli"];
+  await mkdir(consumer);
+  let packageSpecs = packageDirectories.map((packageDirectory) => {
+    const name = packageDirectory.split("/").at(-1);
+    return `@durlo/${name}@${version}`;
+  });
+  if (source === "packed") {
+    run(pnpm, ["build"], workspaceRoot, "building workspace packages");
+    await mkdir(tarballs);
+    for (const packageDir of packageDirectories) {
+      run(
+        pnpm,
+        ["pack", "--pack-destination", tarballs],
+        resolve(workspaceRoot, packageDir),
+        `packing ${packageDir}`
+      );
+    }
+    packageSpecs = (await readdir(tarballs))
+      .filter((name) => name.endsWith(".tgz"))
+      .map((name) => join(tarballs, name));
+    if (packageSpecs.length !== packageDirectories.length) {
+      throw new Error(
+        `expected ${packageDirectories.length} tarballs, found ${packageSpecs.length}`
+      );
+    }
   }
-  const packed = (await readdir(tarballs))
-    .filter((name) => name.endsWith(".tgz"))
-    .map((name) => join(tarballs, name));
-  if (packed.length !== 3) throw new Error(`expected 3 tarballs, found ${packed.length}`);
 
   await cp(
     resolve(workspaceRoot, "examples/quickstart/durlo.config.ts"),
@@ -48,17 +65,13 @@ try {
   });
   await writeFile(
     join(consumer, "package.json"),
-    JSON.stringify(
-      { name: "durlo-phase4-packed-quickstart", private: true, type: "module" },
-      null,
-      2
-    )
+    JSON.stringify({ name: `durlo-${source}-quickstart`, private: true, type: "module" }, null, 2)
   );
   run(
     npm,
-    ["install", ...packed, "pg@8.22.0", "tsx@4.23.0"],
+    ["install", ...packageSpecs, "pg@8.22.0", "tsx@4.23.0"],
     consumer,
-    "installing packed quickstart dependencies"
+    `installing ${source} quickstart dependencies`
   );
 
   const cli = join(
@@ -68,7 +81,7 @@ try {
     process.platform === "win32" ? "durlo.cmd" : "durlo"
   );
   const environment = { ...process.env, DATABASE_URL: databaseUrl };
-  run(cli, ["migrate"], consumer, "migrating from the packed CLI", environment);
+  run(cli, ["migrate"], consumer, `migrating from the ${source} CLI`, environment);
   await cleanupDatabase();
 
   const crashWorker = start(cli, ["worker"], consumer, {
@@ -83,7 +96,9 @@ try {
     environment
   );
   const runId = started.stdout.match(/^RUN_ID=(.+)$/m)?.[1];
+  const taskRunId = started.stdout.match(/^TASK_RUN_ID=(.+)$/m)?.[1];
   if (!runId) throw new Error(`quickstart did not print a run id:\n${started.stdout}`);
+  if (!taskRunId) throw new Error(`quickstart did not print a task run id:\n${started.stdout}`);
 
   await crashWorker.waitFor(new RegExp(`CRASH_READY runId=${escapeRegex(runId)} `), 15_000);
   crashWorker.child.kill("SIGKILL");
@@ -96,6 +111,10 @@ try {
   if (!dashboardUrl) throw new Error(`could not read dashboard URL from:\n${dashboardOutput}`);
 
   const details = await waitForCompletion(dashboardUrl, runId, 20_000);
+  const taskDetails = await waitForCompletion(dashboardUrl, taskRunId, 20_000);
+  if (taskDetails.run.resourceId !== "record-order-created") {
+    throw new Error(`quickstart task used unexpected resource ${taskDetails.run.resourceId}`);
+  }
   const types = details.timeline.map((event) => event.type);
   for (const required of [
     "run_attempt_stalled",
@@ -119,6 +138,13 @@ try {
       `expected one checkpointed inventory effect, found ${inventory.rows[0]?.count}`
     );
   }
+  const taskEffect = await pool.query(
+    "select count(*)::integer as count from quickstart_effects where run_id = $1 and effect_key = 'order-created'",
+    [taskRunId]
+  );
+  if (taskEffect.rows[0]?.count !== 1) {
+    throw new Error(`expected one idempotent task effect, found ${taskEffect.rows[0]?.count}`);
+  }
 
   const unsafeCancel = await fetch(`${dashboardUrl}/api/runs/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
@@ -135,7 +161,7 @@ try {
   await recovery.waitForExit(10_000);
   children.delete(recovery);
   process.stdout.write(
-    "packed Phase 4 quickstart passed: crash recovery, checkpoint reuse, sleep, retry, dashboard timeline, and safe controls\n"
+    `${source} quickstart passed: atomic task/workflow creation, crash recovery, checkpoint reuse, sleep, retry, dashboard timeline, and safe controls\n`
   );
 } finally {
   for (const processLog of children) {

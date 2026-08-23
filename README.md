@@ -35,22 +35,31 @@ npm install @durlo/core@0.1.0-alpha.0 @durlo/postgres@0.1.0-alpha.0 \
   @durlo/cli@0.1.0-alpha.0 pg
 ```
 
-| Package           | Role                                                                     |
-| ----------------- | ------------------------------------------------------------------------ |
-| `@durlo/core`     | Definitions, creation, workers, workflow tools, reads, controls, types   |
-| `@durlo/postgres` | PostgreSQL persistence, transactions, and ordered schema migrations      |
+| Package           | Role                                                                       |
+| ----------------- | -------------------------------------------------------------------------- |
+| `@durlo/core`     | Definitions, creation, workers, workflow tools, reads, controls, types     |
+| `@durlo/postgres` | PostgreSQL persistence, transactions, and ordered schema migrations        |
 | `@durlo/cli`      | Config scaffolding, migrations, workers, and loopback-only local dashboard |
 
-| Consumer/runtime | Alpha compatibility                    |
-| ---------------- | -------------------------------------- |
-| Node.js          | 22 through 26                          |
-| PostgreSQL       | 14 through 18                          |
-| Modules/types    | ESM, CommonJS, and strict TypeScript   |
+| Consumer/runtime | Alpha compatibility                  |
+| ---------------- | ------------------------------------ |
+| Node.js          | 22 through 26                        |
+| PostgreSQL       | 14 through 18                        |
+| Modules/types    | ESM, CommonJS, and strict TypeScript |
 
 All three packages use one version and are released together. Package-specific installation,
 minimal usage, requirements, and exports are documented in
 [`@durlo/core`](packages/core/README.md), [`@durlo/postgres`](packages/postgres/README.md), and
 [`@durlo/cli`](packages/cli/README.md).
+
+## Published-package quickstart
+
+The [clean `0.1.0-alpha.0` quickstart](examples/quickstart/README.md) starts PostgreSQL, installs the
+three exact versions from the public npm registry, applies migrations, and downloads only the
+example application files from the matching immutable tag. It then proves atomic application/task/
+workflow creation, a separately running worker, forced worker termination and lease recovery,
+automatic retry, checkpoint reuse, and dashboard inspection, with explicit cleanup and security
+limitations.
 
 ## Run the repository locally
 
@@ -67,7 +76,7 @@ suite, packed crash-and-resume quickstart, and both reference applications. It d
 VPS or access to another repository.
 
 To explore one application manually, use the
-[crash-and-resume example](examples/quickstart/README.md), the
+[published-package quickstart](examples/quickstart/README.md), the
 [webhook relay](examples/webhook-relay/README.md), or the
 [catalog import](examples/catalog-import/README.md).
 

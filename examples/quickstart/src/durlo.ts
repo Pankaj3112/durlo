@@ -21,6 +21,19 @@ type OrderOutput = {
   courier: { provider: string; bookingId: string };
 };
 
+export const recordOrderCreatedTask = durlo.task<OrderInput, { recorded: true }>({
+  id: "record-order-created",
+  run: async (input, { run }) => {
+    await adapter.pool.query(
+      `insert into quickstart_effects (run_id, effect_key, detail)
+       values ($1, 'order-created', $2)
+       on conflict (run_id, effect_key) do nothing`,
+      [run.id, input.orderId]
+    );
+    return { recorded: true };
+  }
+});
+
 export const orderWorkflow = durlo.workflow<OrderInput, OrderOutput>({
   id: "fulfill-order",
   retry: {

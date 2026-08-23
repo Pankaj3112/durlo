@@ -15,7 +15,9 @@ assert(root.version === releaseVersion, `root version must be ${releaseVersion}`
 
 const manifests = await Promise.all(publicPackages.map((path) => readJson(`${path}/package.json`)));
 for (const manifest of manifests) {
-  const packageDirectory = publicPackages.find((path) => path.endsWith(manifest.name.split("/")[1]));
+  const packageDirectory = publicPackages.find((path) =>
+    path.endsWith(manifest.name.split("/")[1])
+  );
   assert(manifest.version === releaseVersion, `${manifest.name} version must be ${releaseVersion}`);
   assert(
     manifest.engines?.node === nodeRange,
@@ -28,7 +30,10 @@ for (const manifest of manifests) {
   );
   assert(manifest.license === "MIT", `${manifest.name} must declare the MIT license`);
   assert(manifest.repository?.type === "git", `${manifest.name} must declare a git repository`);
-  assert(manifest.repository?.url === repositoryUrl, `${manifest.name} repository URL is incorrect`);
+  assert(
+    manifest.repository?.url === repositoryUrl,
+    `${manifest.name} repository URL is incorrect`
+  );
   assert(
     manifest.repository?.directory === packageDirectory,
     `${manifest.name} repository directory is incorrect`
@@ -36,8 +41,14 @@ for (const manifest of manifests) {
   assert(manifest.homepage === homepageUrl, `${manifest.name} homepage is incorrect`);
   assert(manifest.bugs?.url === bugsUrl, `${manifest.name} bugs URL is incorrect`);
   assert(manifest.publishConfig?.access === "public", `${manifest.name} must publish publicly`);
-  assert(manifest.publishConfig?.provenance === true, `${manifest.name} must publish with provenance`);
-  assert(Array.isArray(manifest.keywords) && manifest.keywords.length >= 4, `${manifest.name} needs accurate keywords`);
+  assert(
+    manifest.publishConfig?.provenance === true,
+    `${manifest.name} must publish with provenance`
+  );
+  assert(
+    Array.isArray(manifest.keywords) && manifest.keywords.length >= 4,
+    `${manifest.name} needs accurate keywords`
+  );
   for (const forbidden of ["author", "maintainers", "contributors"]) {
     assert(!(forbidden in manifest), `${manifest.name} must omit inferred ${forbidden} metadata`);
   }
@@ -103,7 +114,10 @@ for (const packageDirectory of publicPackages) {
     new URL(`../${packageDirectory}/LICENSE`, import.meta.url),
     "utf8"
   );
-  assert(readme.includes(`@durlo/${packageName}`), `${packageDirectory} README must name its package`);
+  assert(
+    readme.includes(`@durlo/${packageName}`),
+    `${packageDirectory} README must name its package`
+  );
   for (const requirement of ["Installation", "Requirements", "Exports", "Alpha status"]) {
     assert(readme.includes(requirement), `${packageDirectory} README must include ${requirement}`);
   }
@@ -146,6 +160,8 @@ for (const requirement of [
   "pnpm test:audit",
   "node scripts/release.mjs audit",
   "node scripts/release.mjs publish",
+  "pnpm test:registry",
+  "pnpm test:registry-quickstart",
   "NPM_BOOTSTRAP_TOKEN",
   "--verify-tag",
   "--prerelease"
@@ -169,7 +185,10 @@ const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
 assert(readme.includes("Node.js 22 through 26"), "README must declare Node boundaries");
 assert(readme.includes("PostgreSQL 14 through 18"), "README must declare PostgreSQL boundaries");
 assert(readme.includes("0.1.0-alpha.0"), "README must identify the alpha version");
-assert(readme.includes("not a production-support promise"), "README must state the support boundary");
+assert(
+  readme.includes("not a production-support promise"),
+  "README must state the support boundary"
+);
 
 const roadmap = await readFile(new URL("../docs/ROADMAP.md", import.meta.url), "utf8");
 const publicContractPhase = roadmap.match(

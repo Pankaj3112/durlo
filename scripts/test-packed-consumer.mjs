@@ -9,40 +9,51 @@ const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const node = process.execPath;
-const temp = await mkdtemp(join(tmpdir(), "durlo-packed-consumer-"));
+const source = process.argv[2] === "--registry" ? "registry" : "packed";
+if (process.argv.length > 2 && process.argv[2] !== "--registry") {
+  throw new Error(`unknown consumer source '${process.argv[2]}'`);
+}
+const version = JSON.parse(await readFile(join(workspaceRoot, "package.json"), "utf8")).version;
+const temp = await mkdtemp(join(tmpdir(), `durlo-${source}-consumer-`));
 const tarballs = join(temp, "tarballs");
 const consumer = join(temp, "consumer");
 
 try {
-  run(pnpm, ["build"], workspaceRoot, "building workspace packages");
-  await Promise.all([mkdir(tarballs), mkdir(consumer)]);
-
   const packageDirs = ["packages/core", "packages/postgres", "packages/cli"];
-  for (const packageDir of packageDirs) {
-    const inventory = run(
-      pnpm,
-      ["pack", "--dry-run", "--json"],
-      resolve(workspaceRoot, packageDir),
-      `inspecting ${packageDir}`
-    );
-    inspectPackage(packageDir, JSON.parse(inventory.stdout));
-    run(
-      pnpm,
-      ["pack", "--pack-destination", tarballs],
-      resolve(workspaceRoot, packageDir),
-      `packing ${packageDir}`
-    );
-  }
-  const packed = (await readdir(tarballs))
-    .filter((name) => name.endsWith(".tgz"))
-    .map((name) => join(tarballs, name));
-  if (packed.length !== packageDirs.length) {
-    throw new Error(`expected ${packageDirs.length} tarballs, found ${packed.length}`);
+  await mkdir(consumer);
+  let packageSpecs = packageDirs.map((packageDir) => {
+    const name = packageDir.split("/").at(-1);
+    return `@durlo/${name}@${version}`;
+  });
+  if (source === "packed") {
+    run(pnpm, ["build"], workspaceRoot, "building workspace packages");
+    await mkdir(tarballs);
+    for (const packageDir of packageDirs) {
+      const inventory = run(
+        pnpm,
+        ["pack", "--dry-run", "--json"],
+        resolve(workspaceRoot, packageDir),
+        `inspecting ${packageDir}`
+      );
+      inspectPackage(packageDir, JSON.parse(inventory.stdout));
+      run(
+        pnpm,
+        ["pack", "--pack-destination", tarballs],
+        resolve(workspaceRoot, packageDir),
+        `packing ${packageDir}`
+      );
+    }
+    packageSpecs = (await readdir(tarballs))
+      .filter((name) => name.endsWith(".tgz"))
+      .map((name) => join(tarballs, name));
+    if (packageSpecs.length !== packageDirs.length) {
+      throw new Error(`expected ${packageDirs.length} tarballs, found ${packageSpecs.length}`);
+    }
   }
 
   await writeFile(
     join(consumer, "package.json"),
-    JSON.stringify({ name: "durlo-packed-consumer", private: true, type: "module" }, null, 2)
+    JSON.stringify({ name: `durlo-${source}-consumer`, private: true, type: "module" }, null, 2)
   );
   await writeFile(
     join(consumer, "esm.mjs"),
@@ -360,31 +371,39 @@ try {
     )
   );
 
-  run(npm, ["install", ...packed], consumer, "installing packed artifacts");
+  run(
+    npm,
+    ["install", ...packageSpecs, "typescript@5.9.3"],
+    consumer,
+    `installing ${source} artifacts`
+  );
   await inspectInstalledPackageManifests(consumer);
   inspectDeclarationExports(consumer);
-  run(node, ["esm.mjs"], consumer, "loading packed ESM artifacts");
-  run(node, ["cjs.cjs"], consumer, "loading packed CJS artifacts");
-  run(node, ["mixed.mjs"], consumer, "mixing packed ESM and CommonJS objects");
+  run(node, ["esm.mjs"], consumer, `loading ${source} ESM artifacts`);
+  run(node, ["cjs.cjs"], consumer, `loading ${source} CommonJS artifacts`);
+  run(node, ["mixed.mjs"], consumer, `mixing ${source} ESM and CommonJS objects`);
   run(
     join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
     ["--help"],
     consumer,
-    "running the packed CLI binary"
+    `running the ${source} CLI binary`
   );
   run(
     join(consumer, "node_modules", ".bin", process.platform === "win32" ? "durlo.cmd" : "durlo"),
     ["init"],
     consumer,
-    "scaffolding with the packed CLI"
+    `scaffolding with the ${source} CLI`
   );
   run(
-    join(workspaceRoot, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc"),
+    join(consumer, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc"),
     ["--project", join(consumer, "tsconfig.json")],
     consumer,
-    "typechecking packed artifacts"
+    `typechecking ${source} artifacts`
   );
-  process.stdout.write("packed ESM, CJS, and TypeScript consumer checks passed\n");
+  if (source === "registry") {
+    run(npm, ["audit", "signatures"], consumer, "verifying registry signatures and provenance");
+  }
+  process.stdout.write(`${source} ESM, CJS, TypeScript, CLI, and migration checks passed\n`);
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
@@ -434,13 +453,15 @@ function inspectPackage(packageDir, inventory) {
   if (JSON.stringify(paths) !== JSON.stringify(expected)) {
     throw new Error(`${packageDir} tarball inventory changed: ${paths.join(", ")}`);
   }
-  if (packageDir === "packages/cli" && paths.filter((path) => path.startsWith("dist/chunk-")).length !== 1) {
+  if (
+    packageDir === "packages/cli" &&
+    paths.filter((path) => path.startsWith("dist/chunk-")).length !== 1
+  ) {
     throw new Error("@durlo/cli tarball must contain exactly one generated runtime chunk");
   }
 }
 
 async function inspectInstalledPackageManifests(consumerDirectory) {
-  const version = "0.1.0-alpha.0";
   for (const packageName of ["core", "postgres", "cli"]) {
     const manifest = JSON.parse(
       await readFile(
@@ -449,14 +470,20 @@ async function inspectInstalledPackageManifests(consumerDirectory) {
       )
     );
     if (manifest.version !== version) {
-      throw new Error(`packed @durlo/${packageName} version is ${manifest.version}, expected ${version}`);
+      throw new Error(
+        `${source} @durlo/${packageName} version is ${manifest.version}, expected ${version}`
+      );
     }
     for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
       if (dependency.startsWith("@durlo/") && range !== version) {
-        throw new Error(`packed @durlo/${packageName} dependency ${dependency} is not pinned exactly`);
+        throw new Error(
+          `${source} @durlo/${packageName} dependency ${dependency} is not pinned exactly`
+        );
       }
       if (typeof range === "string" && range.startsWith("workspace:")) {
-        throw new Error(`packed @durlo/${packageName} contains workspace-only dependency ${dependency}`);
+        throw new Error(
+          `${source} @durlo/${packageName} contains workspace-only dependency ${dependency}`
+        );
       }
     }
   }

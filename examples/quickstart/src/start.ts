@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { adapter, durlo, orderWorkflow } from "./durlo.js";
+import { adapter, durlo, orderWorkflow, recordOrderCreatedTask } from "./durlo.js";
 
 const orderId = randomUUID();
 
@@ -23,17 +23,30 @@ try {
     );
   `);
 
-  const handle = await durlo.transaction(async (transaction) => {
+  const creation = await durlo.transaction(async (transaction) => {
     await transaction.client.query(
       "insert into quickstart_orders (id, customer_email) values ($1, $2)",
       [orderId, "ada@example.com"]
     );
-    return transaction.start(orderWorkflow, { orderId }, { idempotencyKey: `order:${orderId}` });
+    const task = await transaction.enqueue(
+      recordOrderCreatedTask,
+      { orderId },
+      { idempotencyKey: `order-created:${orderId}` }
+    );
+    const workflow = await transaction.start(
+      orderWorkflow,
+      { orderId },
+      { idempotencyKey: `order:${orderId}` }
+    );
+    return { task, workflow };
   });
 
   process.stdout.write(`ORDER_ID=${orderId}\n`);
-  process.stdout.write(`RUN_ID=${handle.run.id}\n`);
-  process.stdout.write("Business row and workflow run committed in one Postgres transaction.\n");
+  process.stdout.write(`TASK_RUN_ID=${creation.task.run.id}\n`);
+  process.stdout.write(`RUN_ID=${creation.workflow.run.id}\n`);
+  process.stdout.write(
+    "Business row, task run, and workflow run committed in one Postgres transaction.\n"
+  );
 } finally {
   await adapter.close();
 }

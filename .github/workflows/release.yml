@@ -79,6 +79,18 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: node scripts/release.mjs publish --tag "${RELEASE_TAG}"
 
+      - name: Verify exact public-registry consumers
+        if: github.event_name == 'push'
+        run: pnpm test:registry
+
+      - name: Verify exact public-registry quickstart
+        if: github.event_name == 'push'
+        run: pnpm test:registry-quickstart
+
+      - name: Record immutable registry verification
+        if: github.event_name == 'push'
+        run: node scripts/record-release-verification.mjs
+
       - name: Upload release evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -95,7 +107,7 @@ jobs:
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
-            gh release upload "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json --clobber
+            gh release upload "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json release-evidence/verification.json --clobber
           else
-            gh release create "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json --verify-tag --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
+            gh release create "${RELEASE_TAG}" release-evidence/package-inventory.json release-evidence/registry-plan.json release-evidence/publication.json release-evidence/verification.json --verify-tag --prerelease --title "Durlo ${RELEASE_TAG#v}" --notes-file release-evidence/release-notes.md
           fi

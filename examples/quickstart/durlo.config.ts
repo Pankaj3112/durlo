@@ -1,9 +1,9 @@
 import { defineConfig } from "@durlo/cli";
-import { durlo, orderWorkflow } from "./src/durlo.js";
+import { durlo, orderWorkflow, recordOrderCreatedTask } from "./src/durlo.js";
 
 export default defineConfig({
   durlo,
-  tasks: [],
+  tasks: [recordOrderCreatedTask],
   workflows: [orderWorkflow],
   worker: {
     concurrency: 2,
