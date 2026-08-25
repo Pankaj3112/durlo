@@ -232,8 +232,8 @@ assert(
   "roadmap must identify the public contract as complete"
 );
 assert(
-  roadmap.includes("**Current focus:** Prepare the installable alpha"),
-  "roadmap must identify alpha preparation as the current phase"
+  roadmap.includes("**Current focus:** Produce credible operational proof"),
+  "roadmap must identify operational proof as the current phase"
 );
 
 process.stdout.write(

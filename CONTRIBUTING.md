@@ -13,8 +13,8 @@ pnpm test:unit
 pnpm test:local
 ```
 
-`pnpm test:local` creates and removes a disposable PostgreSQL 17 container. See `README.md` and the
-five documents under `docs/` before changing public behavior.
+`pnpm test:local` creates and removes a disposable PostgreSQL 17 container. Start with `README.md`,
+then read the relevant document under `docs/` before changing public behavior.
 
 ## Repository constraints
 
@@ -23,6 +23,8 @@ five documents under `docs/` before changing public behavior.
 - Preserve lease-token fencing, idempotency semantics, and explicit at-least-once limitations.
 - Keep code, public types, package documentation, and the owned documents aligned.
 - Do not infer author, maintainer, personal contact, or support-SLA metadata.
+- Keep the root README focused on installation and first use; put detailed behavior in the owned
+  document under `docs/` rather than copying it into multiple READMEs.
 
 Released migrations are immutable. Add a forward migration and document its schema/code rollout
 order instead of editing any released migration file.

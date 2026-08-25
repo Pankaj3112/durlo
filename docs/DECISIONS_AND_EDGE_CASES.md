@@ -1,7 +1,7 @@
 # Durlo Decisions And Edge Cases
 
 Status: Current
-Updated: 2026-08-24
+Updated: 2026-08-26
 
 This file records decisions that should survive refactors. It explains why Durlo has its current
 boundary; it does not repeat every API rule or track unfinished work.
@@ -45,6 +45,11 @@ arbitrary pool or unverified client as a transaction.
 Pools built from connection configuration are Durlo-owned. Caller-supplied pools are borrowed and
 remain usable after the adapter closes. Task and workflow handlers never execute inside the
 transaction callback.
+
+Raw `pg` is the canonical v1 integration. Future Drizzle and Prisma transaction bridges must use
+the transaction object supplied by the framework's native callback API for Durlo run creation;
+they must not fall back to Durlo's ordinary worker pool or a root ORM client. Workers, migrations,
+and operational reads remain separate from the narrow transaction-scoped creation capability.
 
 ## Execution is at-least-once
 
@@ -190,6 +195,11 @@ private registration instead of `_durlo`; codecs, limits/normalization helpers, 
 internals, adapter/provider contracts, and CLI lifecycle helpers stay out of public entry points.
 The CLI executable owns init, migration, worker, and dev behavior; only `defineConfig` and its
 configuration types are programmatic CLI API.
+
+The raw `pg` transaction design must leave a narrow internal transaction-provider seam for future
+Drizzle and Prisma bridges without publishing a generic adapter contract prematurely. Each bridge
+must prove commit, rollback, callback failure, batch creation, idempotent creation, and borrowed
+resource ownership through the same conformance expectations.
 
 ## Documentation ownership
 

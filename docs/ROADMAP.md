@@ -1,20 +1,20 @@
 # Durlo Roadmap
 
 Status: Active
-Updated: 2026-08-24
+Updated: 2026-08-26
 
-> **Current focus:** Prepare the installable alpha. Do not start production-proof work yet.
+> **Current focus:** Produce credible operational proof for the published alpha.
 
 ## At a glance
 
 | Horizon   | Outcome                            | Stages                                                      |
 | --------- | ---------------------------------- | ----------------------------------------------------------- |
-| **Now**   | Publish a trustworthy alpha        | Safe transactions → integrity → public API → alpha          |
-| **Next**  | Produce credible operational proof | Production-proof laboratory → supported production envelope |
+| **Done**  | Publish a trustworthy alpha        | Safe transactions → integrity → public API → alpha          |
+| **Now**   | Produce credible operational proof | Production-proof laboratory → supported production envelope |
 | **Later** | Earn enough outside trust for v1   | Public beta → independent usage → `1.0`                     |
 
-Only one GitHub issue should be active at a time. The roadmap shows direction; each issue holds the
-implementation detail.
+The roadmap shows direction and release gates; implementation detail belongs in focused issues and
+pull requests.
 
 ## Product direction and v1 boundary
 
@@ -53,12 +53,12 @@ Issue #9 closed the known input, idempotency, timing, control-signal, and worker
 defects. Issue #10 stabilized package entry points, typed result waiting, explicit handler outcomes,
 and the compatibility policy.
 
-The package and governance contract is prepared for the coherent `0.1.0-alpha.1` recovery release.
-The preceding `alpha.0` attempt published only `@durlo/core`; publication and immutable registry
-verification for all three matching `alpha.1` packages remain part of the active alpha stage. Durlo
-is not yet a beta release or a supported production library.
+The coherent `0.1.0-alpha.1` release is published and its package, registry-consumer, quickstart,
+and reference-application checks are part of the repository's release audit. The preceding `alpha.0`
+attempt published only `@durlo/core` and remains immutable and superseded. Durlo is not yet a beta
+release or a supported production library.
 
-## Now — Publish a trustworthy alpha
+## Done — Publish a trustworthy alpha
 
 ### 1. Make the transaction boundary safe — **DONE**
 
@@ -69,9 +69,12 @@ client. Configured pools are owned; caller-supplied pools are borrowed.
 #### Work
 
 - Replace the unsafe transaction API.
-- Make transaction ownership and lifecycle explicit.
+- Make Durlo own the transaction lifecycle through a callback while treating caller-supplied
+  pools and future ORM clients as borrowed resources.
 - Reject pools and non-transactional clients clearly.
 - Prove commit and rollback behavior for tasks, workflows, batches, and idempotent creation.
+- Preserve a narrow internal transaction-provider seam for later Drizzle and Prisma bridges without
+  expanding the v1 raw `pg` boundary.
 
 #### Done when
 
@@ -113,7 +116,7 @@ this gate.
 An outside TypeScript/Postgres developer can create work, wait for its result, handle every terminal
 outcome, and understand the support boundary without reading Durlo internals.
 
-### 4. Publish an installable alpha
+### 4. Publish an installable alpha — **DONE**
 
 #### Work
 
@@ -131,7 +134,7 @@ outcome, and understand the support boundary without reading Durlo internals.
 A stranger can discover Durlo, install the published packages, complete the quickstart, and verify
 that the documented pre-release limitations match the observed behavior.
 
-## Next — Produce credible operational proof
+## Now — Produce credible operational proof
 
 ### 5. Build a production-proof laboratory
 

@@ -1,7 +1,7 @@
 # Durlo Architecture
 
-Status: Current
-Updated: 2026-08-24
+Status: Current for `0.1.0-alpha.1`
+Updated: 2026-08-26
 
 This document describes the implementation that exists today. Public behavior belongs in
 [Execution Semantics](EXECUTION_SEMANTICS.md), deployment guidance in

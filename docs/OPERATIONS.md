@@ -1,11 +1,12 @@
 # Durlo Operations
 
 Status: Current `0.1.0-alpha.1` guidance
-Updated: 2026-08-24
+Updated: 2026-08-26
 
-Durlo has no supported production release yet. This document records the operating behavior that
-exists and the boundaries exercised by the repository. Its installation/runtime matrix is not a
-production-support promise, SLA, or measured operating envelope.
+The current public release is `0.1.0-alpha.1`; Durlo has no supported production release yet. This
+document records the operating behavior that exists and the boundaries exercised by the repository.
+Its installation/runtime matrix is not a production-support promise, SLA, or measured operating
+envelope.
 
 ## Tested environment
 
