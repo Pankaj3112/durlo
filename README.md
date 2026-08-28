@@ -4,56 +4,36 @@
 [![npm](https://img.shields.io/npm/v/@durlo/core?label=%40durlo%2Fcore)](https://www.npmjs.com/package/@durlo/core)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Postgres-native durable tasks and direct workflows for TypeScript applications.
+Durlo is a TypeScript library for durable background tasks and workflows backed by PostgreSQL.
 
-Durlo stores work in the PostgreSQL database your application already uses, runs handlers in
-ordinary Node.js worker processes, and makes the important failure modes inspectable. It is a small
-library rather than a hosted queue or orchestration service.
+Use it when a job must survive a restart, retry later, wait for hours, or be created in the same
+transaction as your application data. Workers are ordinary Node.js processes. Durlo does not need
+Redis, a separate queue, or a hosted orchestration service.
 
-> **Status:** `0.1.0-alpha.1` is an installable preview. It is useful for evaluation and integration
-> work, but is not a production-support promise, SLA, or measured operating envelope.
+> **Alpha:** `0.1.0-alpha.1` is for evaluation and integration. This is not a production-support promise
+> or SLA.
 
-## Why Durlo
+## What it handles
 
-- **Atomic creation:** commit application data and a task or workflow run in one raw `pg`
-  transaction.
-- **Durable workflows:** checkpoint sequential steps and sleeps so a restarted worker can resume.
-- **Honest recovery:** lease-token fencing, retries, cancellation, manual retry, and retained
-  attempt history make at-least-once behavior visible.
-- **Postgres-native:** no queue service, event bus, cron system, or hosted control plane is required.
-- **Local-first operations:** migrations, workers, and a loopback-only inspection dashboard are
-  included in `@durlo/cli`.
+- Background tasks with retries, timeouts, cancellation, and attempt history
+- Sequential workflows with durable steps and sleeps
+- Atomic application writes and run creation in one PostgreSQL transaction
+- Crash recovery through leases, heartbeats, and fenced writes
+- Local inspection through the included CLI and dashboard
 
-Durlo v1 is intentionally narrow: direct tasks, sequential workflows, PostgreSQL, and Node.js.
-Events, cron, framework adapters, hosted orchestration, distributed concurrency, rate limiting,
-fan-out/fan-in, and additional storage engines are out of scope.
+Durlo is a good fit for payment follow-ups, webhook delivery, imports, and other application-owned
+work that cannot disappear after an API process exits.
 
 ## Install
-
-Install the three packages at the same version:
 
 ```bash
 npm install @durlo/core@0.1.0-alpha.1 @durlo/postgres@0.1.0-alpha.1 \
   @durlo/cli@0.1.0-alpha.1 pg
 ```
 
-| Package | What it provides |
-| --- | --- |
-| [`@durlo/core`](packages/core/README.md) | Definitions, run creation, workers, workflow tools, reads, controls, and types |
-| [`@durlo/postgres`](packages/postgres/README.md) | PostgreSQL persistence and ordered schema migrations |
-| [`@durlo/cli`](packages/cli/README.md) | `init`, `migrate`, `worker`, `dev`, and the local dashboard |
+Durlo supports Node.js 22 through 26 and PostgreSQL 14 through 18.
 
-Supported alpha installation/runtime boundaries are:
-
-- Node.js 22 through 26
-- PostgreSQL 14 through 18
-- ESM, CommonJS, and strict TypeScript consumers
-
-These boundaries are compatibility statements, not a production support commitment.
-
-## A small task
-
-Define a task in the application package and register the same definition in a worker process:
+## Tasks
 
 ```ts
 import { Durlo } from "@durlo/core";
@@ -69,30 +49,60 @@ export const sendInvoice = durlo.task({
     await deliverInvoice(input.invoiceId, signal);
   }
 });
+```
 
-// In an application/API process:
-const creation = await sendInvoice.enqueue(
+Enqueue it from your application:
+
+```ts
+await sendInvoice.enqueue(
   { invoiceId: "inv_42" },
   { idempotencyKey: "invoice:inv_42" }
 );
+```
 
-// In a separately running worker process:
-const worker = durlo.worker({ tasks: [sendInvoice] });
+## Workflows
+
+A workflow breaks longer jobs into checkpointed steps. Durlo reuses recorded step results after a
+crash, and sleeps do not hold a worker open.
+
+```ts
+export const fulfillOrder = durlo.workflow<
+  { orderId: string },
+  { trackingId: string }
+>({
+  id: "fulfill-order",
+  version: "1",
+  run: async ({ input, step }) => {
+    const order = await step.run("load-order", () => loadOrder(input.orderId));
+    await step.run("reserve-stock", () => reserveStock(order));
+    await step.sleep("packing-window", "2h");
+    return step.run("book-courier", () => bookCourier(order));
+  }
+});
+
+await fulfillOrder.start({ orderId: "ord_42" });
+```
+
+Register both definitions in a worker process:
+
+```ts
+const worker = durlo.worker({
+  tasks: [sendInvoice],
+  workflows: [fulfillOrder]
+});
 await worker.start();
 ```
 
-Creating a run only persists it. A worker must register the exact task or workflow id and version
-before it can execute the run. Use `await durlo.runs.wait(creation.run)` when the producer needs a
-typed terminal result.
+`enqueue()` and `start()` only persist work. The worker executes it.
 
-## The transaction boundary
+## Commit data and work together
 
-Durlo’s main differentiator is transactional creation. The callback owns one raw `pg` client and
-binds application SQL and durable work to the same `BEGIN`/`COMMIT`:
+Durlo can create a run in the same transaction as your application write:
 
 ```ts
-const creation = await durlo.transaction(async ({ client, enqueue }) => {
+await durlo.transaction(async ({ client, enqueue }) => {
   await client.query("insert into invoices (id) values ($1)", ["inv_42"]);
+
   return enqueue(
     sendInvoice,
     { invoiceId: "inv_42" },
@@ -101,37 +111,31 @@ const creation = await durlo.transaction(async ({ client, enqueue }) => {
 });
 ```
 
-If the callback fails, neither the application row nor the run is committed. Raw `pg` is the only
-transaction integration in v1. A caller-supplied pool is borrowed; a pool created from connection
-configuration is owned by the adapter.
+If the transaction fails, neither the invoice nor the task is committed. This avoids the gap where
+application data is saved but its background work is lost.
 
-## The guarantee to design around
+## Execution model
 
-Durlo is **at-least-once**, not exactly-once. A worker can perform an external effect and crash before
-recording success. Emails, payments, webhooks, and other side effects need a business or provider
-idempotency key. A Durlo idempotency key deduplicates run creation while its row exists; it does not
-deduplicate execution.
+Durlo provides **at-least-once** execution. A handler may complete an external side effect and crash
+before Durlo records success, so payments, emails, and HTTP calls still need a business or provider
+idempotency key. Durlo's idempotency key deduplicates run creation, not execution.
 
-Workflow code re-enters from the top after retry, crash recovery, or sleep. `step.run(...)` reuses a
-completed checkpoint, and `step.sleep(...)` persists a timer. Keep step ids stable and base branching
-on input or stored step results.
+Workflow functions re-enter from the top after recovery. Completed `step.run(...)` calls reuse their
+stored result, while `step.sleep(...)` persists its timer. Keep step ids stable and calls sequential.
 
-## Try it
+V1 focuses on direct tasks and sequential workflows on PostgreSQL. It does not include events, cron,
+framework adapters, distributed concurrency, rate limiting, or other storage engines.
 
-The [clean quickstart](examples/quickstart/README.md) installs the published packages into a new
-directory and demonstrates atomic creation, a separate worker, crash recovery, retry, and dashboard
-inspection. It requires Node.js, npm, Docker, and `curl`.
+## Next steps
 
-The reference applications show larger shapes:
+- Follow the [clean quickstart](examples/quickstart/README.md) to run PostgreSQL, a worker, crash
+  recovery, and the dashboard.
+- See the [webhook relay](examples/webhook-relay/README.md) and
+  [catalog import](examples/catalog-import/README.md) examples.
+- Read the [execution semantics](docs/EXECUTION_SEMANTICS.md),
+  [operations guide](docs/OPERATIONS.md), and [architecture](docs/ARCHITECTURE.md).
 
-| Example | Demonstrates |
-| --- | --- |
-| [Webhook relay](examples/webhook-relay/README.md) | Transactional task creation, HTTP retry, provider idempotency, cancellation, and manual retry |
-| [Catalog import](examples/catalog-import/README.md) | Transactional workflow creation, checkpoints, durable sleep, cancellation, versioning, and recovery |
-
-## Work on the repository
-
-Requirements: Node.js 22–26, pnpm 11, Docker, and PostgreSQL 14–18 for database-backed tests.
+## Development
 
 ```bash
 pnpm install --frozen-lockfile
@@ -139,22 +143,6 @@ pnpm test:unit
 pnpm test:local
 ```
 
-`test:local` creates and removes a disposable PostgreSQL 17 container. Useful checks for a change
-are:
+See [Contributing](CONTRIBUTING.md) before opening a change.
 
-```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm build
-pnpm test:audit
-git diff --check
-```
-
-See [Contributing](CONTRIBUTING.md) for the repository contract and verification expectations.
-
-## Project policies
-
-Durlo is released under the [MIT License](LICENSE). Please read [Contributing](CONTRIBUTING.md)
-before opening a change. The project does not infer maintainer contact details or promise a support
-SLA.
+MIT licensed. See [LICENSE](LICENSE).
